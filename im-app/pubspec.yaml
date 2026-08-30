@@ -1,0 +1,32 @@
+name: im_app
+description: "企业内部即时通讯 - 移动端"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: ^0.20.2
+  dio: ^5.5.0                 # HTTP
+  flutter_secure_storage: ^9.2.2  # token 安全存储
+  provider: ^6.1.2            # 状态管理
+  web_socket_channel: ^3.0.0   # WS 长连接（跨 IO/Web 平台，消息实时收发）
+  url_launcher: ^6.3.0        # 发现页打开网页小程序（H5 新标签 / native 浏览器）
+  qr_flutter: ^4.1.0         # 扫码登录页生成二维码
+  mobile_scanner: ^5.2.3     # 移动端扫一扫（识别 PC 端登录二维码）
+  # 阶段 V2.0：腾讯云实时音视频（官方插件，不自己造轮子）
+  tencent_trtc_cloud: ^2.8.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  generate: true   # 启用 l10n 自动生成

@@ -1,0 +1,193 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+
+	"github.com/yourcompany/im-server/internal/middleware"
+	"github.com/yourcompany/im-server/internal/model"
+	"github.com/yourcompany/im-server/internal/pkg/errs"
+	"github.com/yourcompany/im-server/internal/service"
+	"github.com/yourcompany/im-server/internal/store"
+
+	"github.com/gin-gonic/gin"
+)
+
+// FriendListHandler 好友列表（附带在线状态）
+func FriendListHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		users, err := service.FriendList(c.Request.Context(), uid)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 500, "message": "获取好友失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": attachOnline(c, users)})
+	}
+}
+
+// FriendRequestAddHandler 发起申请
+func FriendRequestAddHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		var body struct {
+			ToID    int64  `json:"toId,string" binding:"required"`
+			Message string `json:"message"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil || body.ToID == 0 {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		if err := service.FriendRequestAdd(c.Request.Context(), uid, body.ToID, body.Message); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// FriendRequestIncomingHandler 我收到的申请
+func FriendRequestIncomingHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		reqs, err := service.FriendRequestIncoming(c.Request.Context(), uid)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 500, "message": "获取失败"})
+			return
+		}
+		// 附加对方信息（昵称/账号/头像）→ 修复 PC"新朋友"脏数据（不显示昵称账号）
+		out := make([]map[string]interface{}, 0, len(reqs))
+		for i := range reqs {
+			b, _ := json.Marshal(reqs[i])
+			var m map[string]interface{}
+			json.Unmarshal(b, &m)
+			var u model.User
+			if err := store.DB.First(&u, reqs[i].FromUser).Error; err == nil {
+				m["fromUserName"] = u.Nickname
+				m["fromUserAccount"] = u.Account
+				m["fromUserAvatar"] = u.Avatar
+				m["online"] = true
+			}
+			out = append(out, m)
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": out})
+	}
+}
+
+// FriendRequestOutgoingHandler 我发出的申请
+func FriendRequestOutgoingHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		reqs, err := service.FriendRequestOutgoing(c.Request.Context(), uid)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 500, "message": "获取失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": reqs})
+	}
+}
+
+// FriendRequestHandleHandler 处理申请
+func FriendRequestHandleHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		agree := c.Query("agree") != "0"
+		if err := service.FriendRequestHandle(c.Request.Context(), uid, id, agree); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// FriendDeleteHandler 删除好友
+func FriendDeleteHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		if err := service.FriendDelete(c.Request.Context(), uid, id); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// FriendSetRemarkHandler 设置备注
+func FriendSetRemarkHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		var body struct {
+			Remark string `json:"remark"`
+		}
+		c.ShouldBindJSON(&body)
+		if err := service.FriendSetRemark(c.Request.Context(), uid, id, body.Remark); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 500, "message": "设置失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// BlacklistAddHandler 拉黑
+func BlacklistAddHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		var body struct {
+			BlockID int64 `json:"blockId,string" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil || body.BlockID == 0 {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		if err := service.BlacklistAdd(c.Request.Context(), uid, body.BlockID); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 500, "message": "拉黑失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// BlacklistRemoveHandler 移出黑名单
+func BlacklistRemoveHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		service.BlacklistRemove(c.Request.Context(), uid, id)
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// BlacklistListHandler 黑名单列表
+func BlacklistListHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		users, err := service.BlacklistList(c.Request.Context(), uid)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 500, "message": "获取失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": users})
+	}
+}
+
+var _ = errs.Forbidden

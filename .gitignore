@@ -1,0 +1,40 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+*.log
+
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+pubspec.lock
+*.iml
+
+# Go
+*.exe
+*.test
+*.out
+
+# 环境与密钥
+.env
+.env.local
+*.pem
+*.key
+*.jks
+!*.example
+
+# 文档不上传（README 除外）
+/docs/
+
+# 设计稿
+/UI/
+/TODO.md
+/tests/
+/scripts/
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
