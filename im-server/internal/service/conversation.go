@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yourcompany/im-server/internal/model"
@@ -70,15 +73,54 @@ func CreateGroup(ctx context.Context, ownerID int64, nameZh, nameEn string, memb
 
 // ConvItem 会话列表项
 type ConvItem struct {
-	Conversation  model.Conversation `json:"conversation"`
-	Unread        int64              `json:"unread"`
-	LastMessage   *model.Message     `json:"lastMessage"`
-	MemberCount   int64              `json:"memberCount"`
-	Mute          bool               `json:"mute"`
-	Pinned        bool               `json:"pinned"`
-	ConversationName string          `json:"conversationName"` // 单聊显示对方昵称
-	PeerOnline    bool               `json:"peerOnline"`       // 单聊对方是否在线
-	PeerOnlineDev []string           `json:"peerOnlineDev"`     // 对方在线设备
+	Conversation     model.Conversation `json:"conversation"`
+	Unread           int64              `json:"unread"`
+	LastMessage      *model.Message     `json:"lastMessage"`
+	MemberCount      int64              `json:"memberCount"`
+	Mute             bool               `json:"mute"`
+	Pinned           bool               `json:"pinned"`
+	ConversationName string             `json:"conversationName"` // 单聊显示对方昵称
+	PeerID           int64              `json:"peerId,string"`     // 单聊对方雪花用户 ID（PC 转账 toUserId 精确识别收款人）
+	PeerOnline       bool               `json:"peerOnline"`       // 单聊对方是否在线
+	PeerOnlineDev    []string           `json:"peerOnlineDev"`    // 对方在线设备
+	PeerOnlineZh     string             `json:"peerOnlineZh"`     // 对方在线类型中文（手机在线/H5在线/电脑在线）
+	PeerOnlineIP     []string           `json:"peerOnlineIp"`     // 对方在线 IP（需求8）
+	PeerShortID      string             `json:"peerShortId"`      // 对方靓号 ID（需求12：小助手固定 10000）
+	PeerRemark       string             `json:"peerRemark"`       // 我对对方设置的备注
+}
+
+// ConvMemberInfo 会话成员（含群内角色与好友备注）
+// 嵌入 model.User 内联用户字段，Role 覆盖为用户表全局角色（群内角色以本字段为准）
+type ConvMemberInfo struct {
+	model.User
+	Role   int    `json:"role"`   // 群内角色：1=群主 2=管理员 3=普通成员
+	Remark string `json:"remark"` // 好友备注（按当前用户视角，非好友为空）
+}
+
+// friendRemark 查询当前用户对某好友设置的备注（无则返回空）
+func friendRemark(ctx context.Context, userID, friendID int64) string {
+	var rel model.FriendRelation
+	if err := store.DB.Where("user_id = ? AND friend_id = ?", userID, friendID).
+		First(&rel).Error; err != nil {
+		return ""
+	}
+	return rel.Remark
+}
+
+// friendRemarkMap 批量查询当前用户对多个好友的备注
+func friendRemarkMap(ctx context.Context, userID int64, friendIDs []int64) map[int64]string {
+	out := make(map[int64]string, len(friendIDs))
+	if len(friendIDs) == 0 {
+		return out
+	}
+	var rels []model.FriendRelation
+	store.DB.Where("user_id = ? AND friend_id IN ?", userID, friendIDs).Find(&rels)
+	for _, r := range rels {
+		if r.Remark != "" {
+			out[r.FriendID] = r.Remark
+		}
+	}
+	return out
 }
 
 // PeerOnline 查询会话中对方的在线状态（单聊返回对方设备，群聊返回空）
@@ -114,19 +156,29 @@ func ConvList(ctx context.Context, userID int64) ([]*ConvItem, error) {
 		// 单聊显示对方昵称 + 在线状态
 		if conv.Type == model.ConvDirect {
 			if otherID := directOtherID(ctx, m.ConversationID, userID); otherID != 0 {
+				item.PeerID = otherID
 				if otherID == -1 {
-					// 小助手虚拟账号（名称固定"小助手"，头像空；后台配置名暂不联动）
+					// 小助手虚拟账号（名称固定"小助手"，靓号 ID 固定 10000——需求12）
 					item.ConversationName = "小助手"
+					item.PeerShortID = "10000"
 				} else {
 					if u, err := GetUserDetail(ctx, otherID); err == nil {
 						item.ConversationName = u.Nickname
+						item.PeerShortID = model.StrVal(u.ShortID)
 						if item.Conversation.Avatar == "" {
 							item.Conversation.Avatar = u.Avatar
 						}
 					}
+					// 需求：设置了备注则优先显示备注名
+					item.PeerRemark = friendRemark(ctx, userID, otherID)
+					if item.PeerRemark != "" {
+						item.ConversationName = item.PeerRemark
+					}
 					online, devs := IsUserOnline(ctx, otherID)
 					item.PeerOnline = online
 					item.PeerOnlineDev = devs
+					item.PeerOnlineZh = OnlineDeviceZh(devs)
+					item.PeerOnlineIP = OnlineIPs(ctx, otherID)
 				}
 			}
 		} else {
@@ -284,7 +336,7 @@ func SetMute(ctx context.Context, userID, convID int64, mute bool) error {
 }
 
 // ConvMembers 会话成员（含用户信息，群设置展示）
-func ConvMembers(ctx context.Context, userID, convID int64) ([]model.User, error) {
+func ConvMembers(ctx context.Context, userID, convID int64) ([]ConvMemberInfo, error) {
 	if !isMember(ctx, convID, userID) {
 		return nil, errs.ConvNotFound
 	}
@@ -293,28 +345,169 @@ func ConvMembers(ctx context.Context, userID, convID int64) ([]model.User, error
 		return nil, err
 	}
 	ids := make([]int64, 0, len(members))
+	roleMap := make(map[int64]int, len(members))
 	for _, m := range members {
 		ids = append(ids, m.UserID)
+		roleMap[m.UserID] = m.Role
 	}
 	if len(ids) == 0 {
-		return []model.User{}, nil
+		return []ConvMemberInfo{}, nil
 	}
 	var users []model.User
 	if err := store.DB.Where("id IN ?", ids).Find(&users).Error; err != nil {
 		return nil, err
 	}
-	return users, nil
+	// 按当前用户视角补好友备注（群聊 @ 昵称等场景可用备注名）
+	remarks := friendRemarkMap(ctx, userID, ids)
+	out := make([]ConvMemberInfo, 0, len(users))
+	for _, u := range users {
+		out = append(out, ConvMemberInfo{
+			User:   u,
+			Role:   roleMap[u.ID],
+			Remark: remarks[u.ID],
+		})
+	}
+	return out, nil
 }
 
-// SetPinMessage 置顶/取消置顶消息（群主/管理员；msgID=0 取消）
-func SetPinMessage(ctx context.Context, userID, convID, msgID int64, content string) error {
-	// 需求8：所有会话成员均可置顶消息（对齐微信：群主/管理员/普通成员都可置顶）
+// SetPinMessage 置顶/取消置顶消息（所有成员可置顶；支持多条 pinnedMsgIDs 列表）
+// pinned=true 追加；pinned=false 或 msgID=0 时移除
+func SetPinMessage(ctx context.Context, userID, convID, msgID int64, content string, pinned bool) error {
 	if !isMember(ctx, convID, userID) {
 		return errs.ConvNotFound
 	}
-	return store.DB.Model(&model.Conversation{}).
-		Where("id = ?", convID).
-		Updates(map[string]interface{}{"pinned_msg_id": msgID, "pinned_msg_content": content}).Error
+	var conv model.Conversation
+	if err := store.DB.First(&conv, convID).Error; err != nil {
+		return errs.ConvNotFound
+	}
+	ids := []string{}
+	if conv.PinnedMsgIDs != "" {
+		_ = json.Unmarshal([]byte(conv.PinnedMsgIDs), &ids)
+	}
+	key := strconv.FormatInt(msgID, 10)
+	if msgID > 0 && pinned {
+		// 追加（去重）
+		found := false
+		for _, v := range ids {
+			if v == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ids = append(ids, key)
+		}
+	} else {
+		// 移除
+		out := ids[:0]
+		for _, v := range ids {
+			if v != key {
+				out = append(out, v)
+			}
+		}
+		ids = out
+	}
+	idsJSON, _ := json.Marshal(ids)
+	updates := map[string]interface{}{
+		"pinned_msg_ids": string(idsJSON),
+	}
+	// 兼容旧单条字段：最新一条作为 pinnedMsgId/Content
+	if len(ids) > 0 {
+		updates["pinned_msg_id"] = msgID
+		updates["pinned_msg_content"] = content
+	} else {
+		updates["pinned_msg_id"] = 0
+		updates["pinned_msg_content"] = ""
+	}
+	return store.DB.Model(&model.Conversation{}).Where("id = ?", convID).Updates(updates).Error
+}
+
+// PinnedMsgBrief 置顶消息简项（按置顶顺序，前端渲染卡片 + 点击跳转）
+type PinnedMsgBrief struct {
+	MsgID      string `json:"msgId,string"`
+	Content    string `json:"content"`
+	SenderName string `json:"senderName"`
+	Type       int    `json:"type"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+// PinnedMessages 置顶消息列表（按置顶顺序返回完整简项，需求：支持多条 + 切换）
+func PinnedMessages(ctx context.Context, userID, convID int64) ([]PinnedMsgBrief, error) {
+	if !isMember(ctx, convID, userID) {
+		return nil, errs.ConvNotFound
+	}
+	var conv model.Conversation
+	if err := store.DB.First(&conv, convID).Error; err != nil {
+		return nil, errs.ConvNotFound
+	}
+	ids := []string{}
+	if conv.PinnedMsgIDs != "" {
+		_ = json.Unmarshal([]byte(conv.PinnedMsgIDs), &ids)
+	}
+	if len(ids) == 0 && conv.PinnedMsgID > 0 {
+		// 兼容旧单条字段
+		ids = []string{strconv.FormatInt(conv.PinnedMsgID, 10)}
+	}
+	if len(ids) == 0 {
+		return []PinnedMsgBrief{}, nil
+	}
+	intIDs := make([]int64, 0, len(ids))
+	for _, v := range ids {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			intIDs = append(intIDs, n)
+		}
+	}
+	if len(intIDs) == 0 {
+		return []PinnedMsgBrief{}, nil
+	}
+	// 消息存 MongoDB，发送者存 MySQL——两个数据源分别查
+	cur, err := msgColl().Find(ctx, bson.M{"msg_id": bson.M{"$in": intIDs}})
+	if err != nil {
+		return nil, err
+	}
+	var msgs []model.Message
+	if err := cur.All(ctx, &msgs); err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return []PinnedMsgBrief{}, nil
+	}
+	msgMap := make(map[int64]model.Message, len(msgs))
+	for _, m := range msgs {
+		msgMap[m.MsgID] = m
+	}
+	// 发送者昵称（MySQL user 表）
+	senderIDs := make([]int64, 0, len(msgs))
+	for _, m := range msgs {
+		senderIDs = append(senderIDs, m.SenderID)
+	}
+	senderMap := make(map[int64]string)
+	if len(senderIDs) > 0 {
+		senders := make([]model.User, 0)
+		sIn := buildInInt64(senderIDs)
+		store.DB.Raw(
+			"SELECT * FROM user WHERE id IN (" + sIn + ")",
+		).Scan(&senders)
+		for _, u := range senders {
+			senderMap[u.ID] = u.Nickname
+		}
+	}
+	// 按置顶顺序组装
+	out := make([]PinnedMsgBrief, 0, len(intIDs))
+	for _, id := range intIDs {
+		m, ok := msgMap[id]
+		if !ok {
+			continue
+		}
+		out = append(out, PinnedMsgBrief{
+			MsgID:      strconv.FormatInt(m.MsgID, 10),
+			Content:    m.Content,
+			SenderName: senderMap[m.SenderID],
+			Type:       m.Type,
+			CreatedAt:  m.CreatedAt.Format("2006-01-02 15:04"),
+		})
+	}
+	return out, nil
 }
 
 // UpdateAnnouncement 更新群公告（群主/管理员）
@@ -334,4 +527,13 @@ func UpdateAnnouncement(ctx context.Context, userID, convID int64, zh, en string
 		return nil
 	}
 	return store.DB.Model(&model.Conversation{}).Where("id = ?", convID).Updates(updates).Error
+}
+
+// buildInInt64 把 int64 列表拼成 SQL IN 子句（绕开 GORM 1.25+ IN ? 大整数 bug）
+func buildInInt64(ids []int64) string {
+	parts := make([]string, 0, len(ids))
+	for _, v := range ids {
+		parts = append(parts, strconv.FormatInt(v, 10))
+	}
+	return strings.Join(parts, ",")
 }

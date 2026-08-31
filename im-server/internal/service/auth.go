@@ -157,7 +157,7 @@ func Register(ctx context.Context, cfg *config.Config, req *RegisterReq) (*model
 		DepartmentID: req.DepartmentID,
 		Status:       model.StatusNormal,
 		Role:         model.RoleUser,
-		ShortID:      genShortID(ctx),
+		ShortID:      model.StrPtr(genShortID(ctx)),
 	}
 	// 需求9：默认头像（后台可配置 default_avatar，新注册用户使用）
 	if av, ok := SysConfigGet(ctx, "default_avatar", "").(string); ok && av != "" {
@@ -174,6 +174,11 @@ func Register(ctx context.Context, cfg *config.Config, req *RegisterReq) (*model
 
 	// 9. 注册成功自动添加小助手（后台开启时）
 	AssistantAddForUser(ctx, cfg, u.ID)
+
+	// 9.1 注册成功按配置自动添加客服好友（失败不阻断注册）
+	if err := KefuAddForUser(ctx, u.ID); err != nil {
+		log.Printf("[kefu] auto add kefu for user %d failed: %v", u.ID, err)
+	}
 
 	// 10. 注册成功即登录，签发 token
 	access, refresh, err := issueTokens(ctx, cfg, &u, req.DeviceID, req.DeviceType)
@@ -241,6 +246,39 @@ func Refresh(ctx context.Context, cfg *config.Config, refreshToken string) (stri
 // Logout 登出：删除 refresh 白名单
 func Logout(ctx context.Context, userID int64) error {
 	return store.RDB.Del(ctx, fmt.Sprintf("refresh:%d", userID)).Err()
+}
+
+// ChangePassword 修改登录密码（需校验旧密码）
+func ChangePassword(ctx context.Context, userID int64, oldPwd, newPwd string) error {
+	if !validPassword(newPwd) {
+		return &errs.Err{Code: 1001, Msg: "新密码需为 8-20 位且包含字母和数字"}
+	}
+	var u model.User
+	if err := store.DB.First(&u, userID).Error; err != nil {
+		return errs.Unauthorized
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(oldPwd)) != nil {
+		return &errs.Err{Code: 1001, Msg: "原密码错误"}
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPwd), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	if err := store.DB.Model(&model.User{}).Where("id = ?", userID).
+		Update("password_hash", string(hash)).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+// DeleteAccount 注销账户：软删除（状态置为禁用，无法再登录），并清除 refresh 白名单使其立即失效
+func DeleteAccount(ctx context.Context, userID int64) error {
+	if err := store.DB.Model(&model.User{}).Where("id = ?", userID).
+		Update("status", model.StatusDisabled).Error; err != nil {
+		return err
+	}
+	store.RDB.Del(ctx, fmt.Sprintf("refresh:%d", userID))
+	return nil
 }
 
 // ============ 验证码 ============
@@ -436,7 +474,8 @@ func defaultNickname(account string) string {
 }
 
 // genShortID 生成用户靓号 ID（需求12：可通过 ID 添加好友）
-// 规则：10 位纯数字（如 8600000001），避开已占用 + 后台保留号段（reserved_short_ids 配置）
+// 需求5：从 10000 开始 5 位短数字（10000-99999），避免雪花长 ID
+// 跳过后台保留号段（reserved_short_ids 配置）
 func genShortID(ctx context.Context) string {
 	reserved := map[string]bool{}
 	if v, ok := SysConfigGet(ctx, "reserved_short_ids", "").(string); ok && v != "" {
@@ -447,9 +486,8 @@ func genShortID(ctx context.Context) string {
 			}
 		}
 	}
-	prefix := "86"
-	for i := int64(1); i < 999999999; i++ {
-		short := prefix + fmt.Sprintf("%08d", i)
+	for i := int64(10000); i < 100000; i++ {
+		short := fmt.Sprintf("%d", i)
 		if reserved[short] {
 			continue
 		}
@@ -459,7 +497,8 @@ func genShortID(ctx context.Context) string {
 			return short
 		}
 	}
-	return fmt.Sprintf("%d", time.Now().UnixNano()%1000000000+8600000000)
+	// 5 位耗尽后（10 万用户）用时间戳末 5 位兜底
+	return fmt.Sprintf("%d", time.Now().UnixNano()%100000+10000)
 }
 
 func validPassword(p string) bool {

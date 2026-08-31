@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/app_locale.dart';
 import '../services/friend_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
 
 /// 个人资料编辑（需求9）：昵称 / 头像 / 签名（后端 PUT /user/profile）
 class EditProfilePage extends StatefulWidget {
@@ -61,10 +63,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
         avatar: _avatar,
       );
       if (mounted) {
-        setState(() => _msg = r ? '已保存' : '保存失败');
+        final t = AppLocalizations.of(context).t;
+        setState(() => _msg = r ? t('editProfileSaved') : t('editProfileSaveFailed'));
         if (r) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('已保存')));
+          AppDialogs.toast(context, t('editProfileSaved'));
           Navigator.of(context).pop(true);
         }
       }
@@ -79,16 +81,18 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('编辑资料'),
-        backgroundColor: AppTheme.background,
+        title: Text(t('editProfileTitle')),
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         elevation: 0,
         actions: [
           TextButton(
             onPressed: _saving ? null : _save,
-            child: Text(_saving ? '保存中…' : '保存',
+            child: Text(
+                _saving ? t('editProfileSaving') : t('editProfileSave'),
                 style: const TextStyle(
                     fontSize: 15,
                     color: AppTheme.primary,
@@ -104,29 +108,32 @@ class _EditProfilePageState extends State<EditProfilePage> {
                 // 头像（点击换头像：MinIO 上传 V2.0）
                 Center(
                   child: GestureDetector(
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('头像上传（V2.0 接入 MinIO）')));
-                    },
+                    onTap: () =>
+                        AppDialogs.toast(
+                            context, t('editProfileAvatarUploadTip')),
                     child: Stack(
                       children: [
                         Container(
-                          width: 88, height: 88,
-                          decoration: BoxDecoration(
+                          width: 88,
+                          height: 88,
+                          decoration: const BoxDecoration(
                             color: AppTheme.primary,
                             shape: BoxShape.circle,
                           ),
                           clipBehavior: Clip.antiAlias,
                           alignment: Alignment.center,
                           child: _avatar.isNotEmpty
-                              ? Image.network(_avatar, fit: BoxFit.cover,
+                              ? Image.network(_avatar,
+                                  fit: BoxFit.cover,
                                   errorBuilder: (_, __, ___) => _initialText())
                               : _initialText(),
                         ),
                         Positioned(
-                          right: 0, bottom: 0,
+                          right: 0,
+                          bottom: 0,
                           child: Container(
-                            width: 28, height: 28,
+                            width: 28,
+                            height: 28,
                             decoration: BoxDecoration(
                               color: AppTheme.primary,
                               shape: BoxShape.circle,
@@ -141,9 +148,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   ),
                 ),
                 const SizedBox(height: 28),
-                _field('昵称', _nickname, icon: Icons.badge_outlined),
+                _field(t('editProfileNickname'), _nickname,
+                    icon: Icons.badge_outlined),
                 const SizedBox(height: 14),
-                _field('个性签名', _bio, icon: Icons.edit_note, maxLines: 3),
+                _field(t('editProfileBio'), _bio,
+                    icon: Icons.edit_note, maxLines: 3),
                 if (_msg.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text(_msg,
@@ -168,16 +177,17 @@ class _EditProfilePageState extends State<EditProfilePage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label,
-            style: const TextStyle(fontSize: 13, color: AppTheme.textTertiary)),
+            style: TextStyle(fontSize: 13, color: context.cs.onSurfaceVariant)),
         const SizedBox(height: 6),
         TextField(
           controller: ctrl,
           maxLines: maxLines,
           maxLength: maxLines > 1 ? 100 : 20,
           decoration: InputDecoration(
-            prefixIcon: Icon(icon, size: 20, color: AppTheme.textTertiary),
+            prefixIcon:
+                Icon(icon, size: 20, color: context.cs.onSurfaceVariant),
             filled: true,
-            fillColor: AppTheme.surface,
+            fillColor: context.cs.surface,
             isDense: true,
             counterText: '',
             contentPadding:

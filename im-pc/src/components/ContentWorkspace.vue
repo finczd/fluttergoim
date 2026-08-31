@@ -7,6 +7,7 @@ import { useMessagesStore } from '../stores/messages';
 import { useMediaPreview } from '../composables/useMediaPreview';
 import { preview as previewText, timeText, formatBytes, asset } from '../utils/format';
 import Avatar from './Avatar.vue';
+import MomentsPage from './MomentsPage.vue';
 import api from '../api/client';
 
 const ui = useUiStore();
@@ -64,6 +65,10 @@ function openConv(id) {
 
 <template>
   <section class="content-workspace" tabindex="-1" @keydown="onKeydown">
+    <!-- 朋友圈：自包含页面（头部 + 时间线 + 发布），整体替换右侧工作区 -->
+    <MomentsPage v-if="ui.view === 'moments'" :owner="ui.momentsOwner" />
+
+    <template v-else>
     <header class="content-header">
       <div>
         <span class="catalog-kicker">{{ (META[ui.view] || {}).kicker }}</span>
@@ -153,5 +158,6 @@ function openConv(id) {
         </div>
       </div>
     </div>
+    </template>
   </section>
 </template>

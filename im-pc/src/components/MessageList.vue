@@ -11,6 +11,7 @@ const messages = useMessagesStore();
 const ui = useUiStore();
 const auth = useAuthStore();
 const inspector = useInspector();
+const emit = defineEmits(['money']);
 const listEl = ref(null);
 
 const rendered = computed(() => {
@@ -135,6 +136,7 @@ function onRetry(id) {
         @avatar="onAvatar"
         @reply-jump="onReplyJump"
         @retry="onRetry"
+        @money="m => emit('money', m)"
       />
     </template>
     <button v-if="showJumpBottom" class="jump-bottom-fab" type="button" @click="goBottom">

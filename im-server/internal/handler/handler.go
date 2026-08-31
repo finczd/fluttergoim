@@ -3,12 +3,16 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/yourcompany/im-server/internal/config"
 	"github.com/yourcompany/im-server/internal/middleware"
+	"github.com/yourcompany/im-server/internal/model"
 	"github.com/yourcompany/im-server/internal/service"
+	"github.com/yourcompany/im-server/internal/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -94,6 +98,242 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 			})
 			user.GET("/user/profile", GetProfileHandler(cfg))
 			user.PUT("/user/profile", UpdateProfileHandler())
+			user.PUT("/user/password", ChangePasswordHandler())
+			user.DELETE("/user", DeleteAccountHandler())
+
+			// ===== 钱包（零钱）=====
+			user.GET("/wallet/me", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				data, err := service.WalletMe(c.Request.Context(), uid)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+			})
+			// 【已废弃 B-21】/wallet/record：金额完全由客户端上报，任何人都能给自己加钱，
+			// 是个"自助充值"漏洞。现改为：
+			//   - 入账类（red_in / tr_in）一律拒绝 → 走 /wallet/transfer/:msgId/accept 或 /wallet/redpacket/:msgId/claim，
+			//     金额由服务端按消息内容核算；
+			//   - 出账类（red_out / tr_out）改幂等 no-op：新版服务端发消息时已原子扣款，
+			//     老客户端再调一次也不能造成**重复扣款**（同 ref_id 已有流水就直接返回当前余额）。
+			user.POST("/wallet/record", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				var body struct {
+					Type   string  `json:"type"`
+					Amount float64 `json:"amount"`
+					RefID  string  `json:"refId"`
+				}
+				c.ShouldBindJSON(&body)
+				if body.Type == "red_in" || body.Type == "tr_in" {
+					c.JSON(http.StatusOK, gin.H{
+						"code":    1001,
+						"message": "该记账接口已停用，请升级客户端后重新收款",
+					})
+					return
+				}
+				if body.Type != "red_out" && body.Type != "tr_out" {
+					c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+					return
+				}
+				// 幂等：同 ref_id 已记过账就不再扣（防老客户端二次扣款）
+				var dup int64
+				store.DB.Model(&model.WalletTransaction{}).
+					Where("user_id = ? AND type = ? AND ref_id = ?", uid, body.Type, body.RefID).
+					Count(&dup)
+				bal := service.CurrentBalance(uid)
+				if dup > 0 {
+					c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"balance": bal}})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"balance": bal}})
+			})
+
+			// 转账收款（服务端交叉校验：金额读消息内容 + 会话成员校验 + 唯一索引幂等）
+			user.POST("/wallet/transfer/:msgId/accept", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				msgID, _ := strconv.ParseInt(c.Param("msgId"), 10, 64)
+				data, err := service.WalletTransferAccept(c.Request.Context(), uid, msgID)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+			})
+
+			// 红包领取 + 详情
+			user.POST("/wallet/redpacket/:msgId/claim", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				msgID, _ := strconv.ParseInt(c.Param("msgId"), 10, 64)
+				data, err := service.WalletRedPacketClaim(c.Request.Context(), uid, msgID)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+			})
+			user.GET("/wallet/redpacket/:msgId", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				msgID, _ := strconv.ParseInt(c.Param("msgId"), 10, 64)
+				data, err := service.WalletRedPacketDetail(c.Request.Context(), uid, msgID)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+			})
+			// 账单：时间筛选 + 分页
+			user.GET("/wallet/records", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+				size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+				data, err := service.WalletRecords(c.Request.Context(), uid,
+					c.Query("start"), c.Query("end"), page, size)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": 500, "message": "查询失败"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+			})
+
+			// ===== 支付：充值通道配置（下发收款码/提示，不需要鉴权以外的权限）=====
+			user.GET("/pay/config", func(c *gin.Context) {
+				cfg := service.PayConfigGet(c.Request.Context())
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": cfg})
+			})
+
+			// ===== 充值订单（用户侧）=====
+			user.POST("/wallet/recharge/submit", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				var body struct {
+					Amount     float64 `json:"amount"`
+					PayMethod  int     `json:"payMethod"` // 1微信 2支付宝 3银行卡
+					ProofImage string  `json:"proofImage"`
+					PayTxNo    string  `json:"payTxNo"`
+					Remark     string  `json:"remark"`
+				}
+				if err := c.ShouldBindJSON(&body); err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+					return
+				}
+				data, err := service.UserRechargeSubmit(c.Request.Context(), uid,
+					body.Amount, body.PayMethod, body.ProofImage, body.PayTxNo, body.Remark)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+			})
+			user.GET("/wallet/recharge/orders", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+				size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+				list, total, err := service.UserRechargeList(c.Request.Context(), uid, page, size)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"list": list, "total": total}})
+			})
+
+			// ===== 提现账户绑定（用户侧）=====
+			user.GET("/wallet/withdraw-account", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				wa, err := service.UserWithdrawAccountGet(c.Request.Context(), uid)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": wa})
+			})
+			user.PUT("/wallet/withdraw-account", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				var wa model.WithdrawAccount
+				// 宽松 bind：兼容前端可能传字符串数值等
+				b, _ := io.ReadAll(c.Request.Body)
+				if err := json.Unmarshal(b, &wa); err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误: " + err.Error()})
+					return
+				}
+				if err := service.UserWithdrawAccountSave(c.Request.Context(), uid, &wa); err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+			})
+
+			// ===== 提现订单（用户侧）=====
+			user.POST("/wallet/withdraw/submit", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				var body struct {
+					Amount       float64 `json:"amount"`
+					WithdrawType int     `json:"withdrawType"` // 1WeChat 2AliPay 3Bank
+				}
+				b, _ := io.ReadAll(c.Request.Body)
+				if err := json.Unmarshal(b, &body); err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+					return
+				}
+				data, err := service.UserWithdrawSubmit(c.Request.Context(), uid, body.Amount, body.WithdrawType)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+			})
+			user.GET("/wallet/withdraw/orders", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+				size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+				list, total, err := service.UserWithdrawList(c.Request.Context(), uid, page, size)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"list": list, "total": total}})
+			})
+
+			// ===== 朋友圈 =====
+			user.GET("/moments", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+				size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+				data, err := service.MomentsList(c.Request.Context(), uid, page, size)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+			})
+			user.GET("/moments/:ownerId", MomentsByUserHandler(cfg))
+			user.POST("/moments", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				var body struct {
+					Content string   `json:"content"`
+					Images  []string `json:"images"`
+				}
+				c.ShouldBindJSON(&body)
+				if body.Content == "" && len(body.Images) == 0 {
+					c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "内容不能为空"})
+					return
+				}
+				post, err := service.MomentsPublish(c.Request.Context(), uid, body.Content, body.Images)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": post})
+			})
+			user.POST("/moments/:id/like", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+				liked, err := service.MomentLike(c.Request.Context(), uid, id)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"liked": liked}})
+			})
 			user.GET("/user/search", SearchUsersHandler())
 			user.GET("/user/:id", GetUserDetailHandler())
 			user.GET("/app/list", AppListHandler())
@@ -117,6 +357,7 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 			user.POST("/conversation/group", CreateGroupHandler())
 			user.GET("/conversation/:id/members", ConvMembersHandler())
 			user.PUT("/conversation/:id/pin-message", SetPinMessageHandler())
+			user.GET("/conversation/:id/pins", PinnedMessagesHandler())
 			user.PUT("/conversation/:id/announcement", UpdateAnnouncementHandler())
 			user.POST("/conversation/:id/invite", GroupInviteHandler())
 			user.DELETE("/conversation/:id/members/:userId", GroupRemoveHandler())
@@ -137,6 +378,26 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 			user.POST("/message/favorite", FavoriteAddHandler())
 			user.GET("/message/favorites", FavoriteListHandler())
 		}
+	}
+}
+
+// MomentsByUserHandler 查看指定用户的朋友圈（好友资料页"朋友圈"入口）
+func MomentsByUserHandler(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		viewer := middleware.CurrentUserID(c)
+		owner, err := strconv.ParseInt(c.Param("ownerId"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+		data, err := service.MomentsListByUser(c.Request.Context(), viewer, owner, page, size)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
 	}
 }
 
@@ -183,7 +444,7 @@ func TRTCUserSigHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusOK, gin.H{"code": 500, "message": "TRTC 未配置", "data": gin.H{}})
 			return
 		}
-		secretKey, _ := service.SysConfigGet(c.Request.Context(), "trtc_secret_key", "").(string)
+		secretKey := service.SysConfigString(c.Request.Context(), "trtc_secret_key", "")
 		userIDStr := fmt.Sprintf("%d", uid)
 		sig, exp, err := service.GenerateUserSig(conf.AppID, secretKey, userIDStr, 7*24*3600)
 		if err != nil {
@@ -191,11 +452,11 @@ func TRTCUserSigHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{
-			"appId":    conf.AppID,
-			"userId":   userIDStr,
-			"userSig":  sig,
-			"expire":   exp,
-			"roomId":   c.Query("room"),
+			"appId":   conf.AppID,
+			"userId":  userIDStr,
+			"userSig": sig,
+			"expire":  exp,
+			"roomId":  c.Query("room"),
 		}})
 	}
 }

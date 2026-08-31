@@ -1,6 +1,5 @@
 import axios from 'axios'
 import { useAuthStore } from '@/stores/auth'
-import router from '@/router'
 
 // 统一 HTTP 客户端：携带 JWT，401/1002 自动刷新后重试
 export const http = axios.create({ baseURL: '/api/v1', timeout: 15000 })
@@ -31,7 +30,7 @@ http.interceptors.response.use(
         /* refresh failed */
       }
       auth.logout()
-      router.push('/login')
+      window.location.href = '/login'
     }
     return Promise.reject(error)
   }

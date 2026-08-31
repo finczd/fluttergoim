@@ -98,5 +98,25 @@ func AssistantPush(ctx context.Context, cfg *config.Config, userID int64, conten
 	return err
 }
 
-func jsonMarshal(v interface{}) ([]byte, error) { return json.Marshal(v) }
+// AssistantNotify 以小助手（uid=-1）身份向指定用户发一条系统提醒（文字）。
+// 与 AssistantPush 的区别：不检查 Enabled 开关——充值/提现审核提醒不应受
+// "小助手自动添加"开关影响。内部 SendMessage 已完成落库、未读计数、
+// PublishEvent WS 广播与离线推送，无需再单独推事件。
+func AssistantNotify(ctx context.Context, userID int64, content string) error {
+	if userID <= 0 {
+		return &errs.Err{Code: 1001, Msg: "用户无效"}
+	}
+	conv, err := CreateDirect(ctx, userID, -1)
+	if err != nil {
+		return err
+	}
+	_, err = SendMessage(ctx, -1, &SendMsgReq{
+		ConversationID: conv.ID,
+		Type:           1,
+		Content:        content,
+	})
+	return err
+}
+
+func jsonMarshal(v interface{}) ([]byte, error)   { return json.Marshal(v) }
 func jsonUnmarshal(b []byte, v interface{}) error { return json.Unmarshal(b, v) }

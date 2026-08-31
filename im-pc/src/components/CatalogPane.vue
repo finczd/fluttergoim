@@ -27,7 +27,8 @@ const META = {
   groups: { kicker: '协作', title: '群聊', placeholder: '搜索群聊', filters: [['all', '全部群聊'], ['unread', '未读']], action: '发起群聊' },
   favorites: { kicker: '个人内容', title: '收藏', placeholder: '搜索收藏内容', filters: [], action: '' },
   files: { kicker: '个人内容', title: '文件', placeholder: '搜索文件', filters: [['all', '全部'], ['image', '图片'], ['video', '视频'], ['file', '文件']], action: '' },
-  settings: { kicker: '偏好', title: '设置', placeholder: '搜索设置', filters: [], action: '' }
+  settings: { kicker: '偏好', title: '设置', placeholder: '搜索设置', filters: [], action: '' },
+  moments: { kicker: '动态', title: '朋友圈', placeholder: '搜索朋友圈', filters: [], action: '' }
 };
 const meta = computed(() => META[ui.view] || META.chats);
 
@@ -76,6 +77,7 @@ const catalogStatus = computed(() => {
   if (ui.view === 'contacts') return ui.filter === 'requests' ? `${contacts.requests.length} 条申请` : `${contacts.friends.length} 位联系人`;
   if (ui.view === 'favorites') return `${content.favorites.length} 条收藏`;
   if (ui.view === 'files') return `${content.media.length} 个文件`;
+  if (ui.view === 'moments') return '我的朋友圈';
   return '';
 });
 
@@ -147,11 +149,14 @@ function openMediaItem(item) {
         v-for="(f, i) in meta.filters"
         :key="f[0]"
         type="button"
+        class="catalog-filter-item"
         :class="{ active: ui.filter === f[0] }"
         :data-filter="f[0]"
         @click="ui.filter = f[0]"
       >
         {{ f[1] }}
+        <!-- 需求11：新的朋友 → 待处理申请红点 -->
+        <span v-if="f[0] === 'requests' && contacts.requestCount > 0" class="filter-badge">{{ contacts.requestCount > 99 ? '99+' : contacts.requestCount }}</span>
       </button>
     </div>
 
@@ -290,6 +295,15 @@ function openMediaItem(item) {
           </span>
           <svg><use href="#i-chevron" /></svg>
         </button>
+      </template>
+
+      <!-- 朋友圈 -->
+      <template v-else-if="ui.view === 'moments'">
+        <div class="moments-catalog">
+          <Avatar :user="auth.user" size="huge" />
+          <strong>{{ auth.user?.nickname || '我' }}</strong>
+          <span class="catalog-kicker">我的朋友圈</span>
+        </div>
       </template>
     </div>
 

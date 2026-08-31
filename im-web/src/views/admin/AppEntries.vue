@@ -10,8 +10,19 @@
 
       <a-table :data="list" row-key="id" :loading="loading" :pagination="false">
         <template #columns>
-          <a-table-column title="名称" :width="160">
-            <template #cell="{ record }">{{ record.nameZh }}<span v-if="record.nameEn" class="sub"> / {{ record.nameEn }}</span></template>
+          <a-table-column title="小程序" :width="220">
+            <template #cell="{ record }">
+              <div class="app-cell">
+                <span class="app-icon">
+                  <img v-if="record.icon" :src="record.icon" alt="" />
+                  <IconApps v-else />
+                </span>
+                <div class="app-info">
+                  <span class="name">{{ record.nameZh }}</span>
+                  <span v-if="record.nameEn" class="sub">/ {{ record.nameEn }}</span>
+                </div>
+              </div>
+            </template>
           </a-table-column>
           <a-table-column title="地址" data-index="url">
             <template #cell="{ record }">
@@ -39,6 +50,9 @@
 
     <a-modal v-model:visible="showEdit" :title="editId ? '编辑小程序' : '上架小程序'" @ok="save">
       <a-form :model="form" layout="vertical">
+        <a-form-item label="图标">
+          <ImageUpload v-model="form.icon" dir="app/" hint="建议尺寸 64×64，PNG/SVG" />
+        </a-form-item>
         <a-form-item label="名称（中文）" required><a-input v-model="form.nameZh" /></a-form-item>
         <a-form-item label="名称（英文）"><a-input v-model="form.nameEn" /></a-form-item>
         <a-form-item label="网页地址" required>
@@ -57,13 +71,15 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import { IconApps } from '@arco-design/web-vue/es/icon'
 import { adminApi } from '@/api/admin'
+import ImageUpload from './ImageUpload.vue'
 
 const list = ref<Array<Record<string, any>>>([])
 const loading = ref(false)
 const showEdit = ref(false)
 const editId = ref(0)
-const form = reactive({ nameZh: '', nameEn: '', url: '', category: '', sort: 0, enabled: true })
+const form = reactive({ nameZh: '', nameEn: '', url: '', icon: '', category: '', sort: 0, enabled: true })
 
 onMounted(load)
 
@@ -81,7 +97,8 @@ function openEdit(record?: Record<string, any>) {
   editId.value = record?.id || 0
   Object.assign(form, {
     nameZh: record?.nameZh || '', nameEn: record?.nameEn || '', url: record?.url || '',
-    category: record?.category || '', sort: record?.sort || 0, enabled: record ? record.enabled === 1 : true
+    icon: record?.icon || '', category: record?.category || '', sort: record?.sort || 0,
+    enabled: record ? record.enabled === 1 : true
   })
   showEdit.value = true
 }
@@ -118,4 +135,18 @@ async function del(record: Record<string, any>) {
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
 .sub { color: var(--color-text-3); font-size: 12px; }
+
+.app-cell { display: flex; align-items: center; gap: 10px; }
+.app-icon {
+  width: 36px; height: 36px;
+  border-radius: var(--app-radius-md);
+  background: var(--app-primary-bg);
+  color: var(--app-primary);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; flex-shrink: 0;
+}
+.app-icon :deep(svg) { width: 20px; height: 20px; }
+.app-icon img { width: 100%; height: 100%; object-fit: cover; }
+.app-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.name { font-size: var(--app-font-size-base); color: var(--app-text-1); font-weight: var(--app-font-weight-medium); }
 </style>

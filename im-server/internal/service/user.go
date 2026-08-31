@@ -57,9 +57,10 @@ func SearchUsers(ctx context.Context, kw string) ([]model.User, error) {
 			return []model.User{byShort}, nil
 		}
 	}
+	// 注意：short_id 也要 LIKE（比如搜 "1888" 能命中 short_id=18888 的用户）
 	like := "%" + kw + "%"
-	err := store.DB.Where("status = ? AND (nickname LIKE ? OR account LIKE ? OR phone LIKE ? OR email LIKE ?)",
-		model.StatusNormal, like, like, like, like).
+	err := store.DB.Where("status = ? AND (short_id LIKE ? OR nickname LIKE ? OR account LIKE ? OR phone LIKE ? OR email LIKE ?)",
+		model.StatusNormal, like, like, like, like, like).
 		Limit(50).Find(&users).Error
 	return users, err
 }

@@ -23,6 +23,12 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // 极光推送 SDK 必需占位符（jpush_flutter 插件 manifest 合并时读取）：
+        // TODO: 替换成极光控制台（包名必须与本 applicationId 一致）创建应用的 AppKey
+        // 注意：AGP 9 的 Kotlin DSL 里 applicationId 是 String?，必须 toString() 转 Any
+        manifestPlaceholders["JPUSH_PKGNAME"] = applicationId.toString()
+        manifestPlaceholders["JPUSH_APPKEY"] = "REPLACE_WITH_JPUSH_APPKEY"
+        manifestPlaceholders["JPUSH_CHANNEL"] = "default"
     }
 
     buildTypes {

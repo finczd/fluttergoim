@@ -1,0 +1,20 @@
+{
+  "_说明": "APP 打包总配置——只改这个文件，然后执行: dart run tool/apply_config.dart",
+  "_字段说明": {
+    "appName": "APK 安装后显示的应用名称（桌面图标下的名字）",
+    "packageName": "Android 包名（应用唯一标识，上架后不可随意改，改了等于换应用）",
+    "versionName": "版本名，展示给用户，如 1.0.0",
+    "versionCode": "版本号，整数，每次发版必须 +1（应用商店判断是否更新）",
+    "apiBase": "后端接口地址（局域网测试填电脑 IP，如 http://192.168.1.11:8080）",
+    "wsBase": "WebSocket 地址（端口一般是 9090）",
+    "icon": "APP 图标源图，建议 1024x1024 PNG，放在 assets/icon/ 下"
+  },
+
+  "appName": "青鸟IM",
+  "packageName": "com.yourcompany.im_app",
+  "versionName": "0.1.0",
+  "versionCode": 1,
+  "apiBase": "http://192.168.1.11:8080",
+  "wsBase": "ws://192.168.1.11:9090/ws",
+  "icon": "assets/icon/app_icon.png"
+}

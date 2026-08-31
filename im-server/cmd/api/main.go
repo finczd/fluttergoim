@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 
@@ -44,6 +45,9 @@ func main() {
 
 	r := gin.Default()
 	handler.RegisterRoutes(r, cfg)
+
+	// 红包 / 转账的 24 小时到期退回任务（启动时先补跑一次，之后每分钟扫描）
+	service.StartMoneyPacketExpiryWorker(context.Background())
 
 	port := cfg.HTTPPort
 	if p := os.Getenv("PORT"); p != "" {

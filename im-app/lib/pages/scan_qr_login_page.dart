@@ -1,8 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
-import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
 import 'scan_camera_io.dart' if (dart.library.html) 'scan_camera_web.dart';
 
 /// 移动端扫一扫（需求1）：扫 PC 端二维码 → 解析 ticket → 确认登录
@@ -42,18 +43,22 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
       _msg = '';
     });
     try {
-      final r = await _api.post('/api/v1/auth/qr/confirm', data: {'ticket': ticket});
+      final r =
+          await _api.post('/api/v1/auth/qr/confirm', data: {'ticket': ticket});
       final code = (r.data as Map<String, dynamic>)['code'];
       if (mounted) {
+        final t = AppLocalizations.of(context).t;
         setState(() {
-          _msg = code == 0 ? '已确认登录，请回到电脑端查看' : '确认失败，请重试';
+          _msg =
+              code == 0 ? t('scanQrLoginConfirmed') : t('scanQrLoginFailed');
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_msg)));
+        AppDialogs.toast(context, _msg);
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _msg = '确认失败：${e.toString().replaceFirst('Exception: ', '')}');
+        final t = AppLocalizations.of(context).t;
+        setState(() => _msg = t('scanQrLoginError',
+            {'error': e.toString().replaceFirst('Exception: ', '')}));
       }
     } finally {
       if (mounted) setState(() => _processing = false);
@@ -62,13 +67,15 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
-        title: const Text('扫一扫', style: TextStyle(color: Colors.white)),
+        title: Text(t('scanQrLoginTitle'),
+            style: const TextStyle(color: Colors.white)),
       ),
       body: kIsWeb ? _buildWebFallback() : _buildCamera(),
     );
@@ -81,6 +88,7 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
 
   /// H5：输入框粘贴 ticket（浏览器无摄像头权限时兜底）
   Widget _buildWebFallback() {
+    final t = AppLocalizations.of(context).t;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       child: Column(
@@ -91,15 +99,15 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
               color: const Color(0xFF1E1E1E),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Column(
+            child: Column(
               children: [
-                Icon(Icons.qr_code_scanner, size: 64, color: Colors.white54),
-                SizedBox(height: 12),
-                Text('浏览器环境不支持调起摄像头',
-                    style: TextStyle(color: Colors.white70, fontSize: 13)),
-                Text('请用手机 App 扫电脑端二维码，或手动粘贴 ticket',
+                const Icon(Icons.qr_code_scanner, size: 64, color: Colors.white54),
+                const SizedBox(height: 12),
+                Text(t('scanQrLoginNoCamera'),
+                    style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text(t('scanQrLoginManualHint'),
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white38, fontSize: 12)),
+                    style: const TextStyle(color: Colors.white38, fontSize: 12)),
               ],
             ),
           ),
@@ -108,7 +116,7 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
             controller: _ticketCtrl,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              hintText: '粘贴二维码中的 ticket',
+              hintText: t('scanQrLoginPasteTicket'),
               hintStyle: const TextStyle(color: Colors.white38),
               filled: true,
               fillColor: const Color(0xFF2A2A2A),
@@ -122,10 +130,11 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
             width: double.infinity,
             height: 48,
             child: FilledButton(
-              onPressed: _processing
-                  ? null
-                  : () => _confirm(_ticketCtrl.text.trim()),
-              child: Text(_processing ? '确认中…' : '确认登录'),
+              onPressed:
+                  _processing ? null : () => _confirm(_ticketCtrl.text.trim()),
+              child: Text(_processing
+                  ? t('scanQrLoginConfirming')
+                  : t('scanQrLoginConfirmBtn')),
             ),
           ),
         ],

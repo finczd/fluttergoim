@@ -1,7 +1,16 @@
+import 'package:flutter/material.dart';
+
+import '../l10n/app_locale.dart';
 import 'trtc_engine.dart';
 
 /// Web/H5 实现：TRTC 原生插件不可用，返回模拟（UI 正常显示，提示真实通话需 App 端）
 class TrtcEngineImpl implements TrtcEngine {
+  @override
+  ValueChanged<String>? onRemoteUserEntered;
+
+  @override
+  ValueChanged<String>? onRemoteUserLeft;
+
   @override
   bool get isReal => false;
 
@@ -29,4 +38,26 @@ class TrtcEngineImpl implements TrtcEngine {
 
   @override
   Future<void> setCameraOn(bool on) async {}
+
+  @override
+  Future<void> switchCamera() async {}
+
+  @override
+  Widget localVideoView({required ValueChanged<int> onViewCreated}) {
+    return Container(color: Colors.black);
+  }
+
+  @override
+  Widget remoteVideoView({required ValueChanged<int> onViewCreated}) {
+    return Container(color: Colors.black);
+  }
+
+  @override
+  Future<void> startLocalPreview(int viewId) async {}
+
+  @override
+  Future<void> startRemoteView(String userId, int viewId) async {}
+
+  @override
+  Future<void> stopRemoteView(String userId) async {}
 }

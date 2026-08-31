@@ -1,7 +1,7 @@
-
 import 'package:dio/dio.dart';
 
 import 'api_client.dart';
+import '../l10n/app_locale.dart';
 
 class AuthConfig {
   final String authMode; // none / sms / email
@@ -19,8 +19,11 @@ class AuthConfig {
         registerOn = j['registerOn'] ?? true,
         appName = (j['appName'] ?? j['app_name'] ?? 'ChatPulse').toString(),
         appLogo = (j['appLogo'] ?? j['app_logo'] ?? '').toString(),
-        brandName = (j['brandName'] ?? j['brand_name'] ?? j['appName'] ?? 'ChatPulse').toString(),
-        brandLogo = (j['brandLogo'] ?? j['brand_logo'] ?? j['appLogo'] ?? '').toString();
+        brandName =
+            (j['brandName'] ?? j['brand_name'] ?? j['appName'] ?? 'ChatPulse')
+                .toString(),
+        brandLogo = (j['brandLogo'] ?? j['brand_logo'] ?? j['appLogo'] ?? '')
+            .toString();
 }
 
 class Captcha {
@@ -59,24 +62,22 @@ class AuthService {
 
   Future<void> sendCode(String account, String captchaId, String captchaCode,
       {String countryCode = '+86'}) async {
-    await _dio.post('/api/v1/auth/send-code',
-        data: {
-          'account': account,
-          'countryCode': countryCode,
-          'captchaId': captchaId,
-          'captchaCode': captchaCode,
-        });
+    await _dio.post('/api/v1/auth/send-code', data: {
+      'account': account,
+      'countryCode': countryCode,
+      'captchaId': captchaId,
+      'captchaCode': captchaCode,
+    });
   }
 
   Future<AuthResult> login(String account, String password,
       {String deviceId = ''}) async {
-    final r = await _dio.post('/api/v1/auth/login',
-        data: {
-          'account': account,
-          'password': password,
-          'deviceType': 1,
-          'deviceId': deviceId,
-        });
+    final r = await _dio.post('/api/v1/auth/login', data: {
+      'account': account,
+      'password': password,
+      'deviceType': 1,
+      'deviceId': deviceId,
+    });
     _check(r);
     return AuthResult.fromJson(r.data['data']);
   }
@@ -111,7 +112,8 @@ class AuthService {
   void _check(Response r) {
     final code = r.data['code'];
     if (code != 0) {
-      throw Exception(r.data['message'] ?? '请求失败');
+      throw Exception(r.data['message'] ??
+          AppLocalizations.instance.t('svcRequestFailed'));
     }
   }
 }

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../services/conversation_service.dart';
 import '../services/friend_service.dart';
+import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
 import 'chat_page.dart';
 
 /// 新建会话/建群：
@@ -54,8 +56,14 @@ class _NewConversationPageState extends State<NewConversationPage> {
     }
   }
 
-  String _name(Map<String, dynamic> u) =>
-      (u['nickname'] ?? u['account'] ?? '用户').toString();
+  String _name(Map<String, dynamic> u) {
+    final r = u['remark']?.toString() ?? '';
+    if (r.isNotEmpty) return r;
+    return (u['nickname'] ?? u['account'] ??
+            AppLocalizations.of(context).t('newConvUser'))
+        .toString();
+  }
+
   String _sub(Map<String, dynamic> u) =>
       (u['account'] ?? u['email'] ?? u['phone'] ?? '').toString();
 
@@ -68,7 +76,10 @@ class _NewConversationPageState extends State<NewConversationPage> {
         final conv = await _convSvc.createDirect(_selected.first);
         _openChat(conv, _name(friend));
       } catch (e) {
-        if (mounted) _toast('创建失败：${e.toString().replaceFirst('Exception: ', '')}');
+        if (mounted) {
+          _toast(AppLocalizations.of(context).t('newConvCreateFailed',
+              {'reason': e.toString().replaceFirst('Exception: ', '')}));
+        }
       }
     } else {
       setState(() => _showGroupName = true);
@@ -78,27 +89,29 @@ class _NewConversationPageState extends State<NewConversationPage> {
   Future<void> _createGroup() async {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
-      _toast('请输入群名称');
+      _toast(AppLocalizations.of(context).t('newConvGroupNameRequired'));
       return;
     }
     try {
       final conv = await _convSvc.createGroup(name, _selected.toList());
       _openChat(conv, name);
     } catch (e) {
-      if (mounted) _toast('创建失败：${e.toString().replaceFirst('Exception: ', '')}');
+      if (mounted) {
+        _toast(AppLocalizations.of(context).t('newConvCreateFailed',
+            {'reason': e.toString().replaceFirst('Exception: ', '')}));
+      }
     }
   }
 
   void _openChat(Map<String, dynamic> conv, String title) {
     if (!mounted) return;
-    final item = ConvItem.fromJson({'conversation': conv, 'conversationName': title});
-    Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => ChatPage(conv: item, myId: widget.myId)));
+    final item =
+        ConvItem.fromJson({'conversation': conv, 'conversationName': title});
+    Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => ChatPage(conv: item, myId: widget.myId)));
   }
 
-  void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+  void _toast(String msg) => AppDialogs.toast(context, msg);
 
   @override
   Widget build(BuildContext context) {
@@ -107,23 +120,25 @@ class _NewConversationPageState extends State<NewConversationPage> {
   }
 
   Widget _buildPickPage() {
+    final t = AppLocalizations.of(context).t;
     final q = _searchCtrl.text.toLowerCase();
     final filtered = q.isEmpty
         ? _friends
-        : _friends.where((u) =>
-            (_name(u) + ' ' + _sub(u)).toLowerCase().contains(q)).toList();
+        : _friends
+            .where((u) => ('${_name(u)} ${_sub(u)}').toLowerCase().contains(q))
+            .toList();
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('选择联系人'),
+        title: Text(t('newConvSelectContacts')),
         actions: [
           TextButton(
             onPressed: _selected.isEmpty ? null : _next,
-            child: Text('确定(${_selected.length})',
+            child: Text(t('newConvConfirm', {'count': '${_selected.length}'}),
                 style: TextStyle(
                     fontSize: 15,
                     color: _selected.isEmpty
-                        ? AppTheme.textTertiary
+                        ? context.cs.onSurfaceVariant
                         : AppTheme.primary,
                     fontWeight: FontWeight.w600)),
           ),
@@ -136,7 +151,8 @@ class _NewConversationPageState extends State<NewConversationPage> {
             child: TextField(
               controller: _searchCtrl,
               onChanged: (_) => setState(() {}),
-              decoration: AppTheme.authInput(hint: '搜索联系人', icon: Icons.search),
+              decoration:
+                  AppTheme.authInput(hint: t('newConvSearchHint'), icon: Icons.search),
             ),
           ),
           if (_loading)
@@ -144,13 +160,16 @@ class _NewConversationPageState extends State<NewConversationPage> {
           else
             Expanded(
               child: filtered.isEmpty
-                  ? const Center(
-                      child: Text('暂无联系人',
-                          style: TextStyle(color: AppTheme.textTertiary)))
+                  ? Center(
+                      child: Text(t('newConvNoContacts'),
+                          style: TextStyle(color: context.cs.onSurfaceVariant)))
                   : ListView.separated(
                       itemCount: filtered.length,
-                      separatorBuilder: (_, __) => const Divider(
-                          height: 1, indent: 68, endIndent: 16, color: AppTheme.divider),
+                      separatorBuilder: (_, __) => Divider(
+                          height: 1,
+                          indent: 68,
+                          endIndent: 16,
+                          color: context.cs.outlineVariant),
                       itemBuilder: (_, i) {
                         final u = filtered[i];
                         final id = (u['id'] ?? '').toString();
@@ -172,15 +191,16 @@ class _NewConversationPageState extends State<NewConversationPage> {
                           subtitle: _sub(u).isEmpty
                               ? null
                               : Text(_sub(u),
-                                  style: const TextStyle(
-                                      fontSize: 12, color: AppTheme.textTertiary)),
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: context.cs.onSurfaceVariant)),
                           trailing: Icon(
                             selected
                                 ? Icons.check_circle
                                 : Icons.radio_button_unchecked,
                             color: selected
                                 ? AppTheme.primary
-                                : AppTheme.textTertiary,
+                                : context.cs.onSurfaceVariant,
                             size: 22,
                           ),
                         );
@@ -193,10 +213,11 @@ class _NewConversationPageState extends State<NewConversationPage> {
   }
 
   Widget _buildGroupNamePage() {
+    final t = AppLocalizations.of(context).t;
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('群信息'),
+        title: Text(t('newConvGroupInfo')),
         leading: IconButton(
           onPressed: () => setState(() => _showGroupName = false),
           icon: const Icon(Icons.arrow_back),
@@ -204,8 +225,8 @@ class _NewConversationPageState extends State<NewConversationPage> {
         actions: [
           TextButton(
             onPressed: _createGroup,
-            child: const Text('创建',
-                style: TextStyle(
+            child: Text(t('newConvCreate'),
+                style: const TextStyle(
                     fontSize: 15,
                     color: AppTheme.primary,
                     fontWeight: FontWeight.w600)),
@@ -221,12 +242,13 @@ class _NewConversationPageState extends State<NewConversationPage> {
               controller: _nameCtrl,
               autofocus: true,
               maxLength: 30,
-              decoration: AppTheme.authInput(hint: '群名称', icon: Icons.group),
+              decoration:
+                  AppTheme.authInput(hint: t('newConvGroupNameHint'), icon: Icons.group),
             ),
             const SizedBox(height: 12),
-            Text('已选 ${_selected.length} 位成员',
-                style:
-                    const TextStyle(fontSize: 13, color: AppTheme.textTertiary)),
+            Text(t('newConvSelectedCount', {'count': '${_selected.length}'}),
+                style: TextStyle(
+                    fontSize: 13, color: context.cs.onSurfaceVariant)),
           ],
         ),
       ),

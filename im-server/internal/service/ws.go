@@ -138,6 +138,12 @@ func handleWS(c *gin.Context, cfg *config.Config) {
 	deviceName := deviceNameOf(dt)
 	onlineKey := "online:" + stringInt64(uid)
 	markOnline(c.Request.Context(), onlineKey, deviceName, cfg.NodeID)
+	// 需求8：记录客户端 IP（带设备前缀，多端各自一个 IP；格式 device:ip）
+	clientIP := c.ClientIP()
+	if clientIP == "" {
+		clientIP = "unknown"
+	}
+	store.RDB.Set(c.Request.Context(), onlineKey+":ip:"+deviceName, clientIP, 90*time.Second)
 	connMgr.add(uid, conn)
 	defer func() {
 		connMgr.remove(uid, conn)
@@ -220,7 +226,24 @@ func IsUserOnline(ctx context.Context, uid int64) (bool, []string) {
 	return true, devices
 }
 
-// OnlineDeviceZh 设备名 → 中文展示（手机在线/电脑在线等）
+// OnlineIPs 查询用户在线设备的 IP（key online:{uid}:ip:{device}，device 为设备名）
+func OnlineIPs(ctx context.Context, uid int64) []string {
+	key := "online:" + stringInt64(uid)
+	devices, err := store.RDB.SMembers(ctx, key).Result()
+	if err != nil || len(devices) == 0 {
+		return nil
+	}
+	ips := []string{}
+	for _, d := range devices {
+		ip, err := store.RDB.Get(ctx, key+":ip:"+d).Result()
+		if err == nil && ip != "" {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
+
+// OnlineDeviceZh 设备名 → 中文展示（手机在线/H5在线/电脑在线等）
 func OnlineDeviceZh(devices []string) string {
 	if len(devices) == 0 {
 		return ""
@@ -229,7 +252,9 @@ func OnlineDeviceZh(devices []string) string {
 		switch d {
 		case "ios", "android":
 			return "手机在线"
-		case "web", "windows", "macos":
+		case "web":
+			return "H5在线"
+		case "windows", "macos":
 			return "电脑在线"
 		}
 	}

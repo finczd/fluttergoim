@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_locale.dart';
 import '../services/friend_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
 import 'edit_profile_page.dart';
 import 'my_qr_page.dart';
 
@@ -33,32 +35,45 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     final p = _profile;
-    final name = p?['nickname']?.toString() ?? '未登录';
+    final name = p?['nickname']?.toString() ?? t('profileNotLoggedIn');
     final account = p?['account']?.toString() ?? '';
     final phone = p?['phone']?.toString() ?? '';
     final email = p?['email']?.toString() ?? '';
     final id = p?['id']?.toString() ?? '';
+    final shortId = p?['shortId']?.toString() ?? '';
     final avatar = p?['avatar']?.toString() ?? '';
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: Column(
           children: [
-            // 顶栏
+            // 顶栏：返回 + 标题 + 更多
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
               child: Row(
                 children: [
                   IconButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.arrow_back_ios_new, size: 22),
+                    icon: Icon(Icons.arrow_back_ios_new,
+                        size: 20, color: context.cs.onSurface),
                   ),
-                  const Spacer(),
+                  Expanded(
+                    child: Center(
+                      child: Text(t('profileTitle'),
+                          style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              color: context.cs.onSurface)),
+                    ),
+                  ),
                   IconButton(
                     onPressed: () {},
-                    icon: const Icon(Icons.more_horiz, size: 24),
+                    icon: Icon(Icons.more_horiz,
+                        size: 22, color: context.cs.onSurface),
                   ),
                 ],
               ),
@@ -72,13 +87,23 @@ class _ProfilePageState extends State<ProfilePage> {
                   Column(
                     children: [
                       Container(
-                        width: 120, height: 120,
+                        width: 100,
+                        height: 100,
                         decoration: BoxDecoration(
-                          color: AppTheme.primary,
                           shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: avatar.isNotEmpty
+                                ? [context.cs.surface, context.cs.surface]
+                                : [
+                                    AppTheme.primary,
+                                    AppTheme.primary.withValues(alpha: 0.7)
+                                  ],
+                          ),
                           boxShadow: [
                             BoxShadow(
-                                color: Colors.black.withOpacity(0.1),
+                                color: AppTheme.primary.withValues(alpha: 0.18),
                                 blurRadius: 24,
                                 offset: const Offset(0, 8)),
                           ],
@@ -86,19 +111,23 @@ class _ProfilePageState extends State<ProfilePage> {
                         clipBehavior: Clip.antiAlias,
                         alignment: Alignment.center,
                         child: avatar.isNotEmpty
-                            ? Image.network(avatar, fit: BoxFit.cover,
+                            ? Image.network(avatar,
+                                fit: BoxFit.cover,
                                 errorBuilder: (_, __, ___) => _avatarText(name))
                             : _avatarText(name),
                       ),
                       const SizedBox(height: 16),
                       Text(name,
-                          style: const TextStyle(
-                              fontSize: 22, fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 4),
+                          style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                              color: context.cs.onSurface)),
+                      const SizedBox(height: 5),
                       if (account.isNotEmpty)
-                        Text('账号：$account',
-                            style: const TextStyle(
-                                fontSize: 14, color: AppTheme.textTertiary)),
+                        Text(t('profileAccountWith', {'account': account}),
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: context.cs.onSurfaceVariant)),
                     ],
                   ),
                   const SizedBox(height: 24),
@@ -106,22 +135,40 @@ class _ProfilePageState extends State<ProfilePage> {
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 16),
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: AppTheme.divider),
+                      color: context.cs.surface,
+                      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                     ),
-                    child: Column(
-                      children: [
-                        _infoRow('账号', account),
-                        if (id.isNotEmpty) _infoRow('ID', id),
+                    child: Builder(builder: (context) {
+                      final rows = <Widget>[
+                        _infoRow(t('profileAccount'), account, copy: account),
+                        // 需求：ID 优先显示短 ID（靓号）
+                        if (shortId.isNotEmpty)
+                          _infoRow('ID', shortId, copy: shortId)
+                        else if (id.isNotEmpty)
+                          _infoRow('ID', id, copy: id),
                         if (phone.isNotEmpty)
-                          _infoRow('手机', phone, copy: phone),
+                          _infoRow(t('profilePhone'), phone, copy: phone),
                         if (email.isNotEmpty)
-                          _infoRow('邮箱', email, copy: email),
-                        _infoRow('二维码', '点击查看我的二维码', chevron: true,
-                            onTap: () {}),
-                      ],
-                    ),
+                          _infoRow(t('profileEmail'), email, copy: email),
+                        _infoRow(t('profileMyQr'), '',
+                            chevron: true, icon: Icons.qr_code_2, onTap: () {
+                          Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => const MyQrPage()));
+                        }),
+                      ];
+                      final children = <Widget>[];
+                      for (var i = 0; i < rows.length; i++) {
+                        children.add(rows[i]);
+                        if (i != rows.length - 1) {
+                          children.add(Divider(
+                              height: 1,
+                              indent: 16,
+                              endIndent: 16,
+                              color: context.cs.outlineVariant));
+                        }
+                      }
+                      return Column(children: children);
+                    }),
                   ),
                   const SizedBox(height: 16),
                   // 操作按钮
@@ -130,14 +177,15 @@ class _ProfilePageState extends State<ProfilePage> {
                     child: Row(
                       children: [
                         Expanded(
-                          child: _bigAction(Icons.qr_code, '我的二维码', () {
+                          child: _bigAction(Icons.qr_code, t('profileMyQr'), () {
                             Navigator.of(context).push(MaterialPageRoute(
                                 builder: (_) => const MyQrPage()));
                           }),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: _bigAction(Icons.edit_outlined, '编辑资料', () async {
+                          child:
+                              _bigAction(Icons.edit_outlined, t('profileEditProfile'), () async {
                             final changed = await Navigator.of(context)
                                 .push<bool>(MaterialPageRoute(
                                     builder: (_) => const EditProfilePage()));
@@ -159,39 +207,53 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget _avatarText(String name) => Text(
         name.isEmpty ? '?' : name.characters.first,
         style: const TextStyle(
-            fontSize: 44, color: Colors.white, fontWeight: FontWeight.w600),
+            fontSize: 38, color: Colors.white, fontWeight: FontWeight.w600),
       );
 
   Widget _infoRow(String label, String value,
-      {bool chevron = false, VoidCallback? onTap, String? copy}) {
+      {bool chevron = false,
+      VoidCallback? onTap,
+      String? copy,
+      IconData? icon}) {
     return InkWell(
+      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         child: Row(
           children: [
             SizedBox(
-              width: 64,
+              width: 72,
               child: Text(label,
-                  style: const TextStyle(
-                      fontSize: 14, color: AppTheme.textTertiary)),
+                  style: TextStyle(
+                      fontSize: 14, color: context.cs.onSurfaceVariant)),
             ),
+            if (icon != null) ...[
+              Icon(icon, size: 18, color: AppTheme.primary),
+              const SizedBox(width: 10),
+            ],
             Expanded(
               child: Text(value,
-                  style: const TextStyle(
-                      fontSize: 14, color: AppTheme.textPrimary)),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 14, color: context.cs.onSurface)),
             ),
-            if (copy != null)
-              IconButton(
-                onPressed: () {
+            if (copy != null && copy.isNotEmpty)
+              InkWell(
+                onTap: () {
                   Clipboard.setData(ClipboardData(text: copy));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制')));
+                  AppDialogs.toast(
+                      context, AppLocalizations.of(context).t('profileCopied'));
                 },
-                icon: const Icon(Icons.content_copy, size: 18, color: AppTheme.textTertiary),
+                child: Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.content_copy,
+                      size: 17, color: context.cs.onSurfaceVariant),
+                ),
               )
             else if (chevron)
-              const Icon(Icons.chevron_right, color: AppTheme.textTertiary, size: 18),
+              Icon(Icons.chevron_right,
+                  color: context.cs.onSurfaceVariant, size: 18),
           ],
         ),
       ),
@@ -200,21 +262,31 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Widget _bigAction(IconData icon, String label, VoidCallback onTap) {
     return InkWell(
+      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.symmetric(vertical: 16),
         decoration: BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.circular(12),
+          color: context.cs.surface,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
         ),
         child: Column(
           children: [
-            Icon(icon, color: AppTheme.primary, size: 24),
-            const SizedBox(height: 6),
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Icon(icon, color: AppTheme.primary, size: 20),
+            ),
+            const SizedBox(height: 8),
             Text(label,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 13,
-                    color: AppTheme.textPrimary,
+                    color: context.cs.onSurface,
                     fontWeight: FontWeight.w500)),
           ],
         ),

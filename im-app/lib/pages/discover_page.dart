@@ -2,8 +2,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
+import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
-import 'qr_login_page.dart';
+import 'moments_page.dart';
 import 'scan_qr_login_page.dart';
 import 'web_browser_page.dart';
 
@@ -22,8 +23,12 @@ class _DiscoverPageState extends State<DiscoverPage> {
   bool _loading = true;
 
   static const _icons = [
-    Icons.web, Icons.help_outline, Icons.folder_special_outlined,
-    Icons.build_outlined, Icons.dashboard_outlined, Icons.widgets_outlined,
+    Icons.web,
+    Icons.help_outline,
+    Icons.folder_special_outlined,
+    Icons.build_outlined,
+    Icons.dashboard_outlined,
+    Icons.widgets_outlined,
   ];
 
   @override
@@ -35,8 +40,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
   Future<void> _load() async {
     try {
       final r = await _dio.get('/api/v1/app/list',
-          options: Options(headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
-      final data = (r.data as Map<String, dynamic>)['data'] as List<dynamic>? ?? [];
+          options: Options(
+              headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
+      final data =
+          (r.data as Map<String, dynamic>)['data'] as List<dynamic>? ?? [];
       if (mounted) {
         setState(() {
           _apps = data.map((e) => e as Map<String, dynamic>).toList();
@@ -52,7 +59,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
     final loc = Localizations.localeOf(context).languageCode;
     return (loc == 'zh' ? a['nameZh']?.toString() : a['nameEn']?.toString()) ??
         a['nameZh']?.toString() ??
-        '小程序';
+        AppLocalizations.of(context).t('discoverMiniApp');
   }
 
   Future<void> _open(Map<String, dynamic> a) async {
@@ -65,8 +72,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: _loading
             ? const Center(child: CircularProgressIndicator())
@@ -75,48 +84,76 @@ class _DiscoverPageState extends State<DiscoverPage> {
                 children: [
                   // 顶栏：标题 + 扫一扫入口（扫码登录）
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
                     child: Row(
                       children: [
-                        const Text('发现',
+                        Text(t('discover'),
                             style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w700,
-                                color: AppTheme.primary)),
+                                fontSize: 26,
+                                fontWeight: FontWeight.w800,
+                                color: scheme.onSurface)),
                         const Spacer(),
                         IconButton(
                           onPressed: _openQrScanner,
-                          icon: const Icon(Icons.qr_code_scanner,
-                              size: 24, color: AppTheme.textPrimary),
-                          tooltip: '扫一扫',
+                          icon: Icon(Icons.qr_code_scanner,
+                              size: 24, color: scheme.onSurface),
+                          splashRadius: 22,
+                          tooltip: t('discoverScan'),
                         ),
                       ],
                     ),
                   ),
-                  // 快捷入口（扫一扫 / 朋友圈，占位后续接功能）
+                  // 快捷入口（扫一扫 / 朋友圈）
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                     child: Row(
                       children: [
-                        _quickEntry(Icons.qr_code_scanner, '扫一扫', _openQrScanner),
+                        Expanded(
+                          child: _quickEntry(
+                              scheme,
+                              Icons.qr_code_scanner,
+                              t('discoverScan'),
+                              t('discoverScanSubtitle'),
+                              AppTheme.cyan,
+                              _openQrScanner),
+                        ),
                         const SizedBox(width: 12),
-                        _quickEntry(Icons.camera_alt_outlined, '朋友圈', () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('朋友圈（V2.0 上线）')));
-                        }),
+                        Expanded(
+                          child: _quickEntry(scheme, Icons.camera_alt_outlined,
+                              t('discoverMoments'), t('discoverMomentsSubtitle'),
+                              AppTheme.orange, () {
+                            Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => const MomentsPage()));
+                          }),
+                        ),
                       ],
                     ),
                   ),
                   Expanded(
                     child: _apps.isEmpty
-                        ? const Center(
-                            child: Text('暂无应用，请在后台「小程序管理」上架',
-                                style: TextStyle(color: AppTheme.textTertiary)))
+                        ? Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.apps_outage_outlined,
+                                    size: 56,
+                                    color: scheme.onSurfaceVariant
+                                        .withValues(alpha: 0.5)),
+                                const SizedBox(height: 12),
+                                Text(t('discoverNoApps'),
+                                    style: TextStyle(
+                                        color: scheme.onSurfaceVariant,
+                                        fontSize: 14)),
+                              ],
+                            ),
+                          )
                         : ListView.separated(
-                            padding: const EdgeInsets.all(16),
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                             itemCount: _apps.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 10),
-                            itemBuilder: (_, i) => _appTile(_apps[i], i),
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 8),
+                            itemBuilder: (_, i) =>
+                                _appTile(scheme, _apps[i], i),
                           ),
                   ),
                 ],
@@ -125,24 +162,50 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  Widget _quickEntry(IconData icon, String label, VoidCallback onTap) {
+  Widget _quickEntry(ColorScheme scheme, IconData icon, String label,
+      String subtitle, Color color, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
         decoration: BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.circular(12),
+          color: scheme.surface,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
         ),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 20, color: AppTheme.primary),
-            const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w500, color: AppTheme.textPrimary)),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              ),
+              alignment: Alignment.center,
+              child: Icon(icon, size: 22, color: color),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSurface)),
+                  const SizedBox(height: 2),
+                  Text(subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 11, color: scheme.onSurfaceVariant)),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -151,31 +214,35 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
   /// 扫一扫：手机端扫 PC 端二维码登录
   void _openQrScanner() {
-    Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const ScanQrLoginPage()));
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const ScanQrLoginPage()));
   }
 
-  Widget _appTile(Map<String, dynamic> a, int i) {
+  Widget _appTile(ColorScheme scheme, Map<String, dynamic> a, int i) {
     final cat = a['category']?.toString() ?? '';
+    final icon = a['icon']?.toString() ?? '';
+    final tone = AppTheme.avatarColors[i % AppTheme.avatarColors.length];
     return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(12),
+      color: scheme.surface,
+      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       child: InkWell(
         onTap: () => _open(a),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: i.isEven ? const Color(0xFFEAF1FF) : const Color(0xFFE8F7EE),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(_icons[i % _icons.length], size: 22,
-                    color: i.isEven ? AppTheme.primary : AppTheme.success),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                child: icon.isNotEmpty
+                    ? Image.network(
+                        icon,
+                        width: 44,
+                        height: 44,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _appIconBlock(i, tone),
+                      )
+                    : _appIconBlock(i, tone),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -183,17 +250,43 @@ class _DiscoverPageState extends State<DiscoverPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(_name(a),
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: AppTheme.textPrimary)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: scheme.onSurface)),
                     if (cat.isNotEmpty)
-                      Text(cat, style: const TextStyle(fontSize: 12, color: AppTheme.textTertiary)),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(cat,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 12, color: scheme.onSurfaceVariant)),
+                      ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, size: 18, color: AppTheme.textTertiary),
+              Icon(Icons.chevron_right,
+                  size: 18, color: scheme.onSurfaceVariant),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _appIconBlock(int i, Color tone) {
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: tone.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+      ),
+      alignment: Alignment.center,
+      child: Icon(_icons[i % _icons.length], size: 22, color: tone),
     );
   }
 }

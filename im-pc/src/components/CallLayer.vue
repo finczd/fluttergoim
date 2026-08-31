@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useUiStore } from '../stores/ui';
 import { useAuthStore } from '../stores/auth';
 import { useMessagesStore } from '../stores/messages';
@@ -19,9 +19,20 @@ const busy = ref(true);
 const muted = ref(false);
 const cameraOff = ref(false);
 const isVideo = computed(() => ui.call.type === 'video');
+// 主叫 / 被叫：被叫要先显示"接听/拒绝"，不自动进房
+const isCallee = computed(() => ui.call.role === 'callee');
+const accepted = computed(() => ui.call.accepted === true);
 
 let client = null;
 let localStream = null;
+let connectedAt = 0;
+let ringTimer = null;
+let trtcOk = false;
+// initCall 是否正在进行中。被叫点「接听」时会先 markCallAccepted()、后 initCall()，
+// watcher 触发时 TRTC 还没初始化完，必须区分「正在接通」和「真的没启用 TRTC」，
+// 否则会误显示「通话中（模拟）」。
+let trtcStarting = false;
+const RING_TIMEOUT_MS = 45000;
 
 function loadSdk() {
   return new Promise((resolve, reject) => {
@@ -49,6 +60,7 @@ function loadSdk() {
 }
 
 async function initCall() {
+  trtcStarting = true;
   busy.value = true;
   try {
     TRTC = await loadSdk();
@@ -65,6 +77,7 @@ async function initCall() {
       busy.value = false;
       return;
     }
+    trtcOk = true;
     // 房间号：会话 ID 取后 8 位数字（TRTC roomId 为 number）
     const roomId = Number(String(ui.call.id).slice(-8)) || 1;
     client = TRTC.createClient({ mode: 'rtc', sdkAppId: sig.appId, userId: sig.userId, userSig: sig.userSig });
@@ -77,10 +90,11 @@ async function initCall() {
       stream.play(remoteVideoRef.value);
       statusText.value = '通话中';
       busy.value = false;
+      connectedAt = Date.now(); // 接通时刻（通话记录时长基准）
     });
     client.on('peer-leave', () => {
       statusText.value = '对方已挂断';
-      setTimeout(close, 1200);
+      setTimeout(() => close(true), 1200);
     });
     client.on('error', err => {
       statusText.value = '通话异常：' + (err.message || '未知错误');
@@ -90,13 +104,42 @@ async function initCall() {
     await localStream.initialize();
     if (isVideo.value && localVideoRef.value) localStream.play(localVideoRef.value);
     await client.publish(localStream);
-    statusText.value = '等待对方接听…';
+    // 是否已接通由上层状态决定（主叫等 accept，被叫点接听时已 accept）
+    applyConnectedState();
     busy.value = false;
   } catch (e) {
     statusText.value = '通话启动失败：' + (e?.message || e || '未知');
     busy.value = false;
+  } finally {
+    trtcStarting = false;
   }
 }
+
+/// 根据"对方是否已接听"设置状态与计时起点
+function applyConnectedState() {
+  if (!accepted.value) {
+    statusText.value = '等待对方接听…';
+    return;
+  }
+  connectedAt = Date.now();
+  if (trtcOk) {
+    statusText.value = '通话中';
+  } else if (trtcStarting) {
+    // 已接听但 TRTC 还在初始化 → 不是"模拟"，别误导
+    statusText.value = '正在接通…';
+  } else {
+    // 兜底：其余情况一律当作"正在接通"，绝不误报"模拟"
+    // （只有 initCall 里明确 conf.enabled===false 才会显示"模拟"）
+    statusText.value = '正在接通…';
+  }
+}
+
+// 对方接听 → 主叫侧切到"通话中"并开始计时
+watch(accepted, (v) => {
+  if (!v || !ui.call.open) return;
+  clearTimeout(ringTimer);
+  applyConnectedState();
+});
 
 async function toggleMute() {
   if (!localStream) return;
@@ -110,15 +153,66 @@ async function toggleCamera() {
   localStream.setVideoEnabled(!cameraOff.value);
 }
 
-async function close() {
+async function close(writeRecord = false) {
+  clearTimeout(ringTimer);
+  const convId = ui.call.convId;
+  const wasAccepted = connectedAt > 0;
+  const duration = wasAccepted ? Math.max(0, Math.round((Date.now() - connectedAt) / 1000)) : 0;
   try {
+    // 通话记录：挂断时发一条 type=7 信令（含通话时长），双方会话都可见
+    //  - 已接通 → hangup；未接通 → cancel
+    if (writeRecord && convId) {
+      messages.sendCallSignal(convId, wasAccepted ? 'hangup' : 'cancel', isVideo.value ? 'video' : 'voice', {
+        roomId: String(ui.call.id),
+        duration
+      });
+    }
     if (localStream) { localStream.close(); localStream = null; }
     if (client) { await client.leave(); client = null; }
   } catch (_) {}
   ui.closeCall();
 }
 
-onMounted(() => { if (ui.call.open) initCall(); });
+/// 被叫点"接听"：发 accept 信令 → 置已接听 → 进房
+async function acceptIncoming() {
+  if (!ui.call.convId) return;
+  busy.value = true;
+  statusText.value = '正在接通…';
+  await messages.sendCallSignal(ui.call.convId, 'accept', ui.call.type);
+  ui.markCallAccepted();
+  await initCall();
+}
+
+/// 被叫点"拒绝"：发 reject 信令 → 关闭
+async function rejectIncoming() {
+  if (ui.call.convId) messages.sendCallSignal(ui.call.convId, 'reject', ui.call.type);
+  clearTimeout(ringTimer);
+  ui.closeCall();
+}
+
+/// 主叫振铃超时：45s 无人接听 → 发 cancel 后收起
+function startRingTimeout() {
+  clearTimeout(ringTimer);
+  ringTimer = setTimeout(() => {
+    if (!ui.call.open || accepted.value) return;
+    if (ui.call.convId) messages.sendCallSignal(ui.call.convId, 'cancel', ui.call.type);
+    close(false);
+    ui.toast('对方无应答', '', 'info');
+  }, RING_TIMEOUT_MS);
+}
+
+onMounted(() => {
+  if (!ui.call.open) return;
+  if (isCallee.value) {
+    // 被叫：等用户点接听，不自动进房
+    statusText.value = '来电';
+    busy.value = false;
+    return;
+  }
+  startRingTimeout();
+  initCall();
+});
+
 onBeforeUnmount(() => { close(); });
 </script>
 
@@ -135,14 +229,24 @@ onBeforeUnmount(() => { close(); });
           <span>{{ statusText }}</span>
         </div>
       </div>
-      <div class="call-controls">
+      <!-- 被叫未接听：显示拒绝 / 接听 -->
+      <div v-if="isCallee && !accepted" class="call-controls">
+        <button class="call-btn danger" type="button" @click="rejectIncoming" title="拒绝">
+          <svg><use href="#i-phone-off" /></svg>
+        </button>
+        <button class="call-btn accept" type="button" @click="acceptIncoming" title="接听">
+          <svg><use :href="isVideo ? '#i-video' : '#i-phone'" /></svg>
+        </button>
+      </div>
+      <!-- 已接通 / 主叫：静音 · 摄像头 · 挂断 -->
+      <div v-else class="call-controls">
         <button class="call-btn" type="button" :class="{ active: muted }" @click="toggleMute" title="静音">
           <svg><use :href="muted ? '#i-mic-off' : '#i-mic'" /></svg>
         </button>
         <button v-if="isVideo" class="call-btn" type="button" :class="{ active: cameraOff }" @click="toggleCamera" title="摄像头">
           <svg><use :href="cameraOff ? '#i-camera-off' : '#i-camera'" /></svg>
         </button>
-        <button class="call-btn danger" type="button" @click="close" title="挂断">
+        <button class="call-btn danger" type="button" @click="close(true)" title="挂断">
           <svg><use href="#i-phone-off" /></svg>
         </button>
       </div>
@@ -168,5 +272,6 @@ onBeforeUnmount(() => { close(); });
 .call-btn:hover { background: rgba(255,255,255,.3); }
 .call-btn.active { background: rgba(255, 193, 7, .8); }
 .call-btn.danger { background: #e02f2f; }
+.call-btn.accept { background: #34c759; }
 .call-btn svg { width: 22px; height: 22px; }
 </style>

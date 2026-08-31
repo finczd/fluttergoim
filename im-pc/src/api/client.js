@@ -13,12 +13,12 @@ const WS = import.meta.env.VITE_WS_BASE || '/ws';
 
 /** 消息类型映射：Go 数字类型 → 青鸟字符串类型 */
 function goTypeToStr(t) {
-  return ({ 1: 'text', 2: 'image', 3: 'file', 4: 'voice', 5: 'video', 6: 'card', 7: 'location', 8: 'redpacket', 9: 'transfer' })[Number(t)] || 'text';
+  return ({ 1: 'text', 2: 'image', 3: 'file', 4: 'voice', 5: 'video', 6: 'card', 7: 'call', 8: 'redpacket', 9: 'transfer' })[Number(t)] || 'text';
 }
 
 /** 青鸟字符串类型 → Go 数字类型 */
 function strTypeToGo(t) {
-  return ({ text: 1, image: 2, file: 3, voice: 4, video: 5, card: 6, location: 7, redpacket: 8, transfer: 9 })[t] || 1;
+  return ({ text: 1, image: 2, file: 3, voice: 4, video: 5, card: 6, call: 7, redpacket: 8, transfer: 9 })[t] || 1;
 }
 
 /** Go 消息对象 → 青鸟消息字段（组件/Store 期望的契约） */
@@ -70,6 +70,9 @@ function goConvToQm(item, myId = '') {
   const peerOnline = !!item.peerOnline;
   const peerDev = Array.isArray(item.peerOnlineDev) ? item.peerOnlineDev : [];
   const isPhoneOnline = peerDev.some(d => d === 'ios' || d === 'android');
+  // 后端透传的设备中文类型（手机在线/H5在线/电脑在线），前端兜底再算一次
+  const onlineZh = item.peerOnlineZh || (peerOnline ? (isPhoneOnline ? '手机在线' : '电脑在线') : '离线');
+  const onlineIps = Array.isArray(item.peerOnlineIp) ? item.peerOnlineIp : [];
   return {
     id: String(conv.id ?? ''),
     title: item.conversationName || conv.nameZh || (isGroup ? '群聊' : '会话'),
@@ -80,12 +83,14 @@ function goConvToQm(item, myId = '') {
     mute: !!item.mute,
     pinned: !!item.pinned,
     peer: {
-      id: '',
-      nickname: '',
+      id: String(item.peerId ?? ''),
+      nickname: isGroup ? '' : (item.conversationName || ''),
       avatar: conv.avatar || '',
       is_online: peerOnline,
       online_device: peerDev,
-      online_text: peerOnline ? (isPhoneOnline ? '手机在线' : '电脑在线') : '离线'
+      online_text: peerOnline ? onlineZh : '离线',
+      online_zh: onlineZh,
+      online_ip: onlineIps
     },
     avatar: conv.avatar || '',
     owner_id: conv.ownerId ? String(conv.ownerId) : '',
@@ -108,7 +113,9 @@ function goUserToQm(u) {
     region: u.region || '',
     online_text: u.onlineText || (u.isOnline ? '在线' : '离线'),
     is_online: !!u.isOnline,
-    is_agent: u.isAgent ? 1 : 0
+    is_agent: u.isAgent ? 1 : 0,
+    // 需求5修复：群成员 role（1=群主 2=管理员 3=成员）必须透传，否则前端无法判断管理权限
+    role: (u.role !== undefined && u.role !== null) ? Number(u.role) : 3
   };
 }
 
@@ -127,6 +134,45 @@ function goRequestToQm(r) {
     message: r.message || '',
     status: Number(r.status ?? 0),
     created_at: (r.createdAt || '').replace('T', ' ').slice(0, 19)
+  };
+}
+
+/** Go 朋友圈对象 → 前端朋友圈字段（兼容 list 的 momentOut 结构 与 publish 返回的原始模型） */
+function momentOut(m, myId = '') {
+  if (!m) return null;
+  let images = [];
+  if (Array.isArray(m.images)) images = m.images;
+  else if (typeof m.images === 'string' && m.images) {
+    try { images = JSON.parse(m.images); } catch (_) { images = []; }
+  }
+  const senderId = String(m.userId ?? m.user_id ?? '');
+  const auth = useAuthStore();
+  const isMine = !!m.mine || (myId && senderId && String(senderId) === String(myId));
+  return {
+    id: String(m.id ?? ''),
+    user_id: senderId,
+    sender_name: m.senderName || m.sender_name ||
+      (senderId === '-1' ? '小助手' : (isMine ? (auth.user?.nickname || '') : '')),
+    sender_avatar: m.senderAvatar || m.sender_avatar ||
+      (isMine ? (auth.user?.avatar || '') : ''),
+    assistant: !!m.assistant || senderId === '-1',
+    content: m.content || '',
+    images: Array.isArray(images) ? images : [],
+    like_count: Number(m.likeCount ?? m.like_count ?? 0),
+    liked: !!m.liked,
+    hidden: !!m.hidden,
+    mine: isMine,
+    created_at: (m.createdAt || m.created_at || '').replace('T', ' ').slice(0, 19)
+  };
+}
+
+/** 朋友圈列表响应 → {total, list} */
+function momentListOut(r, myId = '') {
+  if (!r) return { total: 0, list: [] };
+  const list = Array.isArray(r.list) ? r.list : (Array.isArray(r) ? r : []);
+  return {
+    total: Number(r.total ?? list.length ?? 0),
+    list: list.map(m => momentOut(m, myId)).filter(Boolean)
   };
 }
 
@@ -245,7 +291,7 @@ async function api(path, data = {}, method = 'GET', auth = true, options = {}) {
     }
     case 'conversations/direct': {
       const r = await http('/conversation/direct', { userId: String(data.user_id) }, 'POST', auth, options);
-      return goConvToQm({ conversation: r, unread: 0, memberCount: 2 }, myId);
+      return goConvToQm({ conversation: r, unread: 0, memberCount: 2, peerId: String(data.user_id) }, myId);
     }
     case 'conversations/bootstrap': {
       const id = String(data.conversation_id ?? '');
@@ -271,10 +317,18 @@ async function api(path, data = {}, method = 'GET', auth = true, options = {}) {
           detail = { ...detail, members };
         }
       } catch (_) {}
+      // 4) 置顶消息列表（多条）
+      let pins = [];
+      try {
+        const ids = await http(`/conversation/${id}/pins`, {}, 'GET', auth, options);
+        if (Array.isArray(ids) && ids.length) {
+          pins = messages.filter(m => ids.includes(String(m.id)) || ids.includes(String(m.message_id)));
+        }
+      } catch (_) {}
       return {
         conversation: detail || { id, title: '会话', type: 'direct' },
         messages,
-        pins: [],
+        pins,
         has_more: messages.length >= 50,
         read_state: {}
       };
@@ -352,13 +406,16 @@ async function api(path, data = {}, method = 'GET', auth = true, options = {}) {
       const id = String(data.conversation_id ?? '');
       await http(`/conversation/${id}/pin-message`, {
         msgId: String(data.message_id ?? ''),
-        content: data.content || ''
+        content: data.content || '',
+        pinned: !!data.pinned
       }, 'PUT', auth, options);
       return { ok: true };
     }
     case 'messages/pins': {
-      // Go 后端暂无置顶列表接口：返回空（会话详情里可另带 pinnedMsgContent）
-      return [];
+      // 置顶消息列表（多条）：GET /conversation/:id/pins → [msgId,...]
+      const id = String(data.conversation_id ?? '');
+      const ids = await http(`/conversation/${id}/pins`, {}, 'GET', auth, options);
+      return Array.isArray(ids) ? ids.map(v => String(v)) : [];
     }
     case 'messages/edit':
       // 后端暂无编辑接口：直接返回成功（内容不变）
@@ -425,18 +482,76 @@ async function api(path, data = {}, method = 'GET', auth = true, options = {}) {
       // 后端无公告已读接口
       return { ok: true };
 
-    // ---------- 扫码登录（Go 后端暂未实现） ----------
-    case 'pc/qr/create':
+    // ---------- 扫码登录（Go 后端：/auth/qr/ticket + /auth/qr/status） ----------
+    case 'pc/qr/create': {
+      const info = await http('/auth/qr/ticket', {}, 'POST', null, options);
+      // http() 已解包 body.data → info 即 ticket 信息；兼容极端情况再兜底
+      return {
+        ticket: info?.ticket, secret: info?.secret, payload: info?.payload,
+        expires: info?.expires, status: info?.status
+      };
+    }
     case 'pc/qr/status': {
-      const e = new Error('扫码登录暂未接入，请使用账号密码登录');
-      e.status = 501;
-      throw e;
+      const st = await http(`/auth/qr/status?ticket=${encodeURIComponent(data.ticket || '')}&secret=${encodeURIComponent(data.secret || '')}`, {}, 'GET', null, options);
+      // http() 已解包 body.data → st 即 {status, accessToken, refreshToken, user}
+      if (st?.status === 'confirmed' && st?.accessToken) {
+        return { status: 'confirmed', token: st.accessToken, refresh: st.refreshToken, user: st.user };
+      }
+      return { status: st?.status || 'pending', message: st?.message || '' };
     }
 
     // ---------- 同步（长轮询 → 由 useSync 走 WebSocket，这里兜底空包） ----------
     case 'sync/bootstrap':
     case 'sync/poll':
       return { conversations: [], messages: [], events: [], drafts: [], read_state: {}, signature: '', message_cursor: 0, event_cursor: 0, message_has_more: false };
+
+    // ---------- 红包 / 转账（钱包）----------
+    case 'wallet/redpacket/detail': {
+      const r = await http(`/wallet/redpacket/${encodeURIComponent(String(data.msg_id ?? ''))}`, {}, 'GET', auth, options);
+      return r || {};
+    }
+    case 'wallet/redpacket/claim': {
+      const r = await http(`/wallet/redpacket/${encodeURIComponent(String(data.msg_id ?? ''))}/claim`, {}, 'POST', auth, options);
+      return r || {};
+    }
+    case 'wallet/record': {
+      // 【已废弃】服务端已停止该接口的记账能力（B-21）：入账类直接拒绝，
+      // 出账类改为幂等 no-op（发红包/转账的扣款已在发消息时由服务端原子完成）。
+      // 仅保留调用以兼容未刷新的老页面，新代码一律不要用。
+      const r = await http('/wallet/record', {
+        type: data.type || '',
+        amount: Number(data.amount || 0),
+        refId: String(data.ref_id ?? '')
+      }, 'POST', auth, options);
+      return r || {};
+    }
+    case 'wallet/transfer/accept': {
+      // 转账收款：只传消息 ID，金额由服务端按转账消息内容核算 + 会话成员校验 + 幂等去重
+      const r = await http(`/wallet/transfer/${encodeURIComponent(String(data.msg_id ?? ''))}/accept`, {}, 'POST', auth, options);
+      return r || {};
+    }
+
+    // ---------- 朋友圈 ----------
+    case 'moments': {
+      const r = await http('/moments', { page: data.page || 1, size: data.size || 20 }, 'GET', auth, options);
+      return momentListOut(r, myId);
+    }
+    case 'moments/user': {
+      const r = await http(`/moments/${encodeURIComponent(String(data.owner_id ?? ''))}`, { page: data.page || 1, size: data.size || 20 }, 'GET', auth, options);
+      return momentListOut(r, myId);
+    }
+    case 'moments/publish': {
+      const r = await http('/moments', {
+        content: data.content || '',
+        images: Array.isArray(data.images) ? data.images : []
+      }, 'POST', auth, options);
+      return momentOut(r, myId);
+    }
+    case 'moments/like': {
+      // 后端返回 { liked: bool }（toggle 后状态）
+      const r = await http(`/moments/${encodeURIComponent(String(data.id ?? ''))}/like`, {}, 'POST', auth, options);
+      return { liked: !!(r && r.liked) };
+    }
 
     // ---------- 未映射路径 ----------
     default:

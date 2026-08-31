@@ -17,16 +17,38 @@ dependencies:
   provider: ^6.1.2            # 状态管理
   web_socket_channel: ^3.0.0   # WS 长连接（跨 IO/Web 平台，消息实时收发）
   url_launcher: ^6.3.0        # 发现页打开网页小程序（H5 新标签 / native 浏览器）
+  webview_flutter: ^4.10.0    # 发现页网页小程序 App 内打开（Android/iOS WebView）
   qr_flutter: ^4.1.0         # 扫码登录页生成二维码
-  mobile_scanner: ^5.2.3     # 移动端扫一扫（识别 PC 端登录二维码）
+  mobile_scanner: ^6.0.0     # 移动端扫一扫（升级 6.x 修复 Android 摄像头 NPE）
+  image_picker: ^1.1.2       # 相册选图发送（需求3：图片发送）
+  permission_handler: ^11.3.1 # 运行时权限申请（音视频通话的麦克风/摄像头）
+  jpush_flutter: 3.5.6       # 极光推送（离线消息系统通知，Android 厂商通道 + iOS APNs）
+  flutter_foreground_task: ^11.0.1 # Android 前台服务保活（防进程被杀，配合 WS 长连接）
+  audioplayers: ^6.0.0       # 铃声/提示音播放（新消息/来电/加好友）
   # 阶段 V2.0：腾讯云实时音视频（官方插件，不自己造轮子）
-  tencent_trtc_cloud: ^2.8.0
+  # 本地化（packages/）：移除 web 平台声明，web 端用模拟实现（trtc_engine_web.dart），
+  # 避免 flutter build web 编译插件 web 实现报 platformViewRegistry 未定义
+  tencent_trtc_cloud:
+    path: packages/tencent_trtc_cloud
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.13.1   # 一键生成各密度 APP 图标
 
 flutter:
   uses-material-design: true
   generate: true   # 启用 l10n 自动生成
+  assets:
+    - assets/config/app_config.json   # 接口地址配置文件（需求5）
+    - assets/sounds/                  # 铃声/提示音（新消息/来电/加好友）
+    - assets/images/beijing.jpg       # 朋友圈封面系统指定背景图（需求7-1 写死）
+
+# APP 图标：源图放 assets/icon/app_icon.png（1024x1024 PNG）
+# 换图标后执行：dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android: 21

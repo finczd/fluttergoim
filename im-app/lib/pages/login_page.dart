@@ -3,10 +3,14 @@ import 'package:flutter/material.dart';
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/call_service.dart';
+import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
 import 'home_shell.dart';
 import 'qr_login_page.dart';
 import 'register_page.dart';
+
 /// 登录页（Aura Messaging 设计稿图 1 + 需求调整）
 /// - 顶部无品牌行（用户需求）
 /// - 右上角语言 pill：点击切换中/英（AppLocalizations 实时刷新）
@@ -39,7 +43,7 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _loadBrand() async {
     try {
       final cfg = await _svc.getConfig();
-      if (mounted && cfg != null) {
+      if (mounted) {
         setState(() {
           _logoUrl = (cfg.appLogo ?? cfg.brandLogo ?? '').toString();
           _brandName = (cfg.appName ?? cfg.brandName ?? 'ChatPulse').toString();
@@ -57,6 +61,13 @@ class _LoginPageState extends State<LoginPage> {
       final r = await _svc.login(_account.text.trim(), _password.text);
       await _api.saveToken(r.accessToken);
       await _api.saveRefresh(r.refreshToken);
+      // 换号登录兜底：清掉上一个账号残留的通话态 / 旧 WS 连接，
+      // 保证 HomeShell 里 ensureConnected 是用新 token 建的连。
+      // 套一层 3s 超时兜底（B-18）：任何一步意外卡住都不能让按钮停在"登录中"。
+      await CallService.instance
+          .resetSession()
+          .timeout(const Duration(seconds: 3), onTimeout: () {});
+      GlobalWs.instance.close();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const HomeShell()));
@@ -68,13 +79,12 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   void _forgotPassword() {
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AppLocalizations.of(context).t('contactAdmin'))));
+    AppDialogs.toast(context, AppLocalizations.of(context).t('contactAdmin'));
   }
 
   void _goRegister() {
-    Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const RegisterPage()));
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const RegisterPage()));
   }
 
   @override
@@ -82,7 +92,7 @@ class _LoginPageState extends State<LoginPage> {
     final t = AppLocalizations.of(context).t;
     final isZh = Localizations.localeOf(context).languageCode == 'zh';
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: Column(
           children: [
@@ -96,15 +106,18 @@ class _LoginPageState extends State<LoginPage> {
                     onTap: () => LocaleProvider.of(context)?.toggle(),
                     borderRadius: BorderRadius.circular(AppTheme.radiusFull),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: AppTheme.surfaceContainerLow,
-                        borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                        color: context.cs.surfaceContainer,
+                        borderRadius:
+                            BorderRadius.circular(AppTheme.radiusFull),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.language, size: 16, color: AppTheme.primary),
+                          const Icon(Icons.language,
+                              size: 16, color: AppTheme.primary),
                           const SizedBox(width: 4),
                           Text(isZh ? t('langZh') : t('langEn'),
                               style: const TextStyle(
@@ -121,7 +134,8 @@ class _LoginPageState extends State<LoginPage> {
             // ===== 主区 =====
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -132,29 +146,30 @@ class _LoginPageState extends State<LoginPage> {
                       Center(
                         child: Text(_brandName,
                             textAlign: TextAlign.center,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,
-                                color: AppTheme.textPrimary)),
+                                color: context.cs.onSurface)),
                       ),
                     ],
                     const SizedBox(height: 12),
                     Text(t('welcomeBack'),
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 32,
                             fontWeight: FontWeight.w700,
-                            color: AppTheme.textPrimary,
+                            color: context.cs.onSurface,
                             height: 1.2)),
                     const SizedBox(height: 8),
                     Text(t('signInContinue'),
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            fontSize: 15, color: AppTheme.textSecondary)),
+                        style: TextStyle(
+                            fontSize: 15, color: context.cs.onSurfaceVariant)),
                     const SizedBox(height: 40),
                     TextField(
                       controller: _account,
-                      style: const TextStyle(fontSize: 15, color: AppTheme.textPrimary),
+                      style:
+                          TextStyle(fontSize: 15, color: context.cs.onSurface),
                       decoration: AppTheme.authInput(
                           hint: t('account'), icon: Icons.person_outline),
                     ),
@@ -162,16 +177,19 @@ class _LoginPageState extends State<LoginPage> {
                     TextField(
                       controller: _password,
                       obscureText: _obscure,
-                      style: const TextStyle(fontSize: 15, color: AppTheme.textPrimary),
+                      style:
+                          TextStyle(fontSize: 15, color: context.cs.onSurface),
                       decoration: AppTheme.authInput(
                         hint: t('password'),
                         icon: Icons.lock_outline,
                         suffix: IconButton(
                           onPressed: () => setState(() => _obscure = !_obscure),
                           icon: Icon(
-                              _obscure ? Icons.visibility_off : Icons.visibility,
+                              _obscure
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
                               size: 20,
-                              color: AppTheme.textTertiary),
+                              color: context.cs.onSurfaceVariant),
                         ),
                       ),
                       onSubmitted: (_) => _login(),
@@ -238,7 +256,10 @@ class _LoginPageState extends State<LoginPage> {
   Widget _brandLogo() {
     if (_logoUrl.isNotEmpty) {
       return ClipOval(
-        child: Image.network(_logoUrl, width: 80, height: 80, fit: BoxFit.cover,
+        child: Image.network(_logoUrl,
+            width: 80,
+            height: 80,
+            fit: BoxFit.cover,
             errorBuilder: (_, __, ___) => AppTheme.brandAvatar(size: 80)),
       );
     }
@@ -271,8 +292,17 @@ class _SplashPageState extends State<SplashPage> {
   Future<void> _check() async {
     final token = await ApiClient.instance.readToken();
     if (!mounted) return;
+    if (token == null) {
+      Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const LoginPage()));
+      return;
+    }
+    // 有登录态：先尝试用 refreshToken 续期（长期保持登录），
+    // 续期失败（refresh 也过期）才视为未登录跳登录页
+    final ok = await ApiClient.instance.refreshAccess();
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(
-        builder: (_) => token == null ? const LoginPage() : const HomeShell()));
+        builder: (_) => ok ? const HomeShell() : const LoginPage()));
   }
 
   @override

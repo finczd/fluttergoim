@@ -13,7 +13,7 @@ const ui = useUiStore();
 const messages = useMessagesStore();
 
 const showChat = computed(() => (ui.view === 'chats' || ui.view === 'groups') && messages.current);
-const showContent = computed(() => ['favorites', 'files', 'settings'].includes(ui.view));
+const showContent = computed(() => ['favorites', 'files', 'settings', 'moments'].includes(ui.view));
 const showContacts = computed(() => ui.view === 'contacts');
 </script>
 

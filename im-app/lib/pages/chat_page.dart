@@ -1,23 +1,43 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
+import '../services/call_service.dart';
 import '../services/conversation_service.dart';
+import '../services/moment_service.dart';
+import '../services/wallet_store.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
 import 'conv_settings_page.dart';
+import 'group_member_picker_page.dart';
+import 'red_packet_detail_page.dart';
+import 'red_packet_page.dart';
+import 'transfer_page.dart';
 import 'video_call_page.dart';
 import 'voice_call_page.dart';
 
 /// 消息本地状态
 enum MsgStatus { sending, sent, read, failed }
 
+/// 取异常里的**后端原始提示**（去掉 Dart 的 "Exception: " 前缀），失败时兜底用 fallback。
+/// 资金类操作（领红包 / 收转账）必须把真实原因告诉用户，不能笼统说"失败了"。
+String _errMsg(Object e, String fallback) {
+  var s = e.toString().trim();
+  if (s.startsWith('Exception:')) s = s.substring('Exception:'.length).trim();
+  if (s.startsWith('DioException')) s = fallback; // 网络层错误换成用户能看懂的文案
+  return s.isEmpty ? fallback : s;
+}
+
 class ChatMsg {
-  final String? msgId;
+  String? msgId; // 非 final：本地发送成功后由响应回填
   final String clientMsgId;
   final String senderId;
   final int type; // 1 文本 / 2 图片 / 3 文件 / 8 红包 / 9 转账
@@ -68,7 +88,9 @@ class ChatMsg {
 class ChatPage extends StatefulWidget {
   final ConvItem conv;
   final String myId;
-  const ChatPage({super.key, required this.conv, required this.myId});
+  final String? scrollToMsgId; // 群置顶消息点击跳转：滚动到该消息
+  const ChatPage(
+      {super.key, required this.conv, required this.myId, this.scrollToMsgId});
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -90,11 +112,31 @@ class _ChatPageState extends State<ChatPage> {
   List<Map<String, dynamic>> _members = [];
   final Set<String> _mentionIds = {};
   ChatMsg? _quoteMsg;
+  // 零钱：已领取的红包/转账 msgId（本地状态）
+  final Set<String> _claimedMoneyIds = {};
 
   // 长按全屏遮罩状态
   ChatMsg? _longPressedMsg;
 
   bool get isGroup => (widget.conv.conversation['type'] as num?)?.toInt() == 2;
+
+  String _t(String key, [Map<String, String>? params]) =>
+      AppLocalizations.of(context).t(key, params);
+
+  /// 群聊：按 senderId 查成员昵称（小助手固定名；查不到回落短 ID）
+  String _senderName(String senderId) {
+    if (senderId == '-1') return '小助手';
+    for (final m in _members) {
+      final uid = m['userId']?.toString() ?? m['id']?.toString() ?? '';
+      if (uid == senderId) {
+        final n = m['nickname']?.toString() ?? m['remark']?.toString() ?? '';
+        if (n.isNotEmpty) return n;
+      }
+    }
+    return senderId.length > 6
+        ? '...${senderId.substring(senderId.length - 4)}'
+        : senderId;
+  }
 
   @override
   void initState() {
@@ -150,7 +192,13 @@ class _ChatPageState extends State<ChatPage> {
           }
           _loading = false;
         });
-        _scrollToBottom();
+        // 群置顶点击跳转：先滚到底（默认），再滚到目标消息
+        final to = widget.scrollToMsgId;
+        if (to != null && to.isNotEmpty) {
+          _scrollToMsg(to);
+        } else {
+          _scrollToBottom();
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _loading = false);
@@ -212,7 +260,10 @@ class _ChatPageState extends State<ChatPage> {
     if (mounted) {
       setState(() {
         // 幂等去重
-        if (_msgs.any((x) => x.clientMsgId.isNotEmpty && x.clientMsgId == msg.clientMsgId)) return;
+        if (_msgs.any((x) =>
+            x.clientMsgId.isNotEmpty && x.clientMsgId == msg.clientMsgId)) {
+          return;
+        }
         _msgs.add(msg);
         _msgs.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
       });
@@ -241,7 +292,8 @@ class _ChatPageState extends State<ChatPage> {
     _scrollToBottom();
 
     try {
-      final resp = await _svc.send(widget.conv.id, text, clientMsgId: clientMsgId);
+      final resp =
+          await _svc.send(widget.conv.id, text, clientMsgId: clientMsgId);
       setState(() {
         final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
         if (idx >= 0) {
@@ -264,7 +316,8 @@ class _ChatPageState extends State<ChatPage> {
     if (i < 0) return;
     setState(() => _msgs[i].status = MsgStatus.sending);
     try {
-      final resp = await _svc.send(widget.conv.id, m.content, clientMsgId: m.clientMsgId);
+      final resp = await _svc.send(widget.conv.id, m.content,
+          clientMsgId: m.clientMsgId);
       if (!mounted) return;
       setState(() {
         if (i >= 0) _msgs[i] = ChatMsg.fromServer(resp);
@@ -277,6 +330,230 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  /// 领取红包（拆红包动画）/ 确认收款 → 记入零钱（微信交互对齐）
+  Future<void> _claimMoney(ChatMsg m) async {
+    final id = m.msgId;
+    // 红包：先查后端详情——已领取过（含重启后状态）或已领完 → 直接进领取详情页
+    if (m.type == 8 && id != null && id.isNotEmpty) {
+      if (_claimedMoneyIds.contains(id)) {
+        if (mounted) {
+          Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => RedPacketDetailPage(msgId: id)));
+        }
+        return;
+      }
+      try {
+        final d = await MomentService.instance.redPacketDetail(id);
+        final list = ((d['list'] as List<dynamic>?) ?? []);
+        final claimedCnt = (d['claimedCnt'] as num?)?.toInt() ?? 0;
+        final count = (d['count'] as num?)?.toInt() ?? 1;
+        final claimedByMe =
+            list.any((c) => c['userId']?.toString() == widget.myId);
+        if (claimedByMe || claimedCnt >= count) {
+          _claimedMoneyIds.add(id);
+          if (mounted) {
+            Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => RedPacketDetailPage(msgId: id)));
+          }
+          return;
+        }
+      } catch (_) {}
+    }
+    if (id != null && _claimedMoneyIds.contains(id)) {
+      AppDialogs.toast(context, _t('chatAlreadyClaimed'));
+      return;
+    }
+    Map<String, dynamic> data = {};
+    try {
+      final j = jsonDecode(m.content);
+      if (j is Map) data = j.cast<String, dynamic>();
+    } catch (_) {}
+    final amount = (data['amount'] as num?)?.toDouble() ??
+        (double.tryParse(m.content) ?? 0);
+    if (amount <= 0) {
+      AppDialogs.toast(context, _t('chatInvalidAmount'));
+      return;
+    }
+    final isRed = m.type == 8;
+    if (isRed) {
+      // 微信拆红包：封面 → 开（后端分配并入账）→ 金额结果 + 领取详情入口
+      final detail = await showDialog<Map<String, dynamic>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _RedPacketOpenDialog(msgId: id ?? ''),
+      );
+      if (detail == null || !mounted) return;
+      if (id != null) _claimedMoneyIds.add(id);
+      WalletStore.instance.refresh();
+      setState(() {});
+      return;
+    } else {
+      // 转账：仅收款人可领
+      final toId = (data['toUserId'] ?? '').toString();
+      if (toId.isNotEmpty && toId != widget.myId) {
+        AppDialogs.toast(context, _t('chatWaitingAccept'));
+        return;
+      }
+      if (toId.isEmpty && m.senderId == widget.myId) {
+        AppDialogs.toast(context, _t('chatWaitingAccept'));
+        return;
+      }
+      final claimed = await showDialog<bool>(
+        context: context,
+        builder: (_) => _TransferConfirmDialog(amount: amount),
+      );
+      if (claimed != true || !mounted) return;
+    }
+    if (id != null) _claimedMoneyIds.add(id);
+    // 收款改走服务端交叉校验接口（B-21）：金额由服务端按转账消息内容核算，
+    // 客户端不再上报金额，也不能靠清缓存反复领同一笔转账。
+    final res = await WalletStore.instance.acceptTransfer(id ?? '');
+    if (!mounted) return;
+    if (res == null) {
+      if (id != null) _claimedMoneyIds.remove(id); // 允许重试
+      // 用后端真实原因：可能是「超过 24 小时未领取已退回」「已被他人领取」等
+      AppDialogs.toast(
+          context,
+          WalletStore.instance.lastError.isNotEmpty
+              ? WalletStore.instance.lastError
+              : _t('chatAcceptFailedRetry'));
+      return;
+    }
+    final got = (res['amount'] as num?)?.toDouble() ?? amount;
+    final already = res['already'] == true;
+    AppDialogs.toast(
+        context,
+        already
+            ? _t('chatTransferClaimedBefore')
+            : _t('chatSavedToWalletAmount',
+                {'amount': WalletStore.instance.fmt(got)}));
+    await WalletStore.instance.refresh();
+    setState(() {});
+  }
+
+  /// 红包/转账：独立页面（微信群流程对齐）→ 发送 type=8/9
+  Future<void> _openMoneyPage(String kind) async {
+    final isRed = kind == 'redpacket';
+    Map<String, dynamic>? payload;
+    if (isRed) {
+      payload = await Navigator.of(context).push<Map<String, dynamic>>(
+        MaterialPageRoute(builder: (_) => RedPacketPage(isGroup: isGroup)),
+      );
+    } else {
+      String peerName = widget.conv.conversationName;
+      String? peerId;
+      if (isGroup) {
+        // 群聊：先选收款人
+        if (_members.isEmpty) {
+          try {
+            _members = await _svc.members(widget.conv.id);
+          } catch (_) {}
+        }
+        final picked = await Navigator.of(context).push<Map<String, dynamic>>(
+          MaterialPageRoute(
+              builder: (_) =>
+                  GroupMemberPickerPage(members: _members, myId: widget.myId)),
+        );
+        if (picked == null || !mounted) return;
+        peerId = picked['id']?.toString();
+        peerName = (picked['nickname'] ?? picked['name'] ?? _t('chatMember'))
+            .toString();
+      }
+      payload = await Navigator.of(context).push<Map<String, dynamic>>(
+        MaterialPageRoute(
+            builder: (_) => TransferPage(peerName: peerName, peerId: peerId)),
+      );
+    }
+    if (payload == null || !mounted) return;
+    final amount = (payload['amount'] as num?)?.toDouble() ?? 0;
+    if (amount <= 0) return;
+
+    // 组装消息负载
+    final contentData = <String, dynamic>{
+      'kind': isRed ? 'redpacket' : 'transfer',
+      'amount': amount,
+      'note': payload['note'] ?? '',
+    };
+    if (isRed) {
+      contentData['mode'] = payload['mode'] ?? 'normal';
+      contentData['count'] = payload['count'] ?? 1;
+    } else {
+      contentData['toUserId'] = payload['toUserId'] ?? '';
+      contentData['toName'] = payload['toName'] ?? '';
+    }
+
+    // ===== 交叉验证第一道：发出去之前再查一次真实余额 =====
+    // 页面里填金额时看到的余额可能是几十秒前的（后台刚调整过、或刚领了个红包），
+    // 所以这里必须重新拉一次再比一次。后端发消息时还会再校验一次（第二道）。
+    await WalletStore.instance.refresh();
+    if (!mounted) return;
+    final need = isRed
+        ? ((payload['mode'] == 'lucky')
+            ? amount
+            : amount * ((payload['count'] as num?)?.toInt() ?? 1))
+        : amount;
+    final bal = WalletStore.instance.balance;
+    if (need > bal) {
+      AppDialogs.toast(
+          context,
+          _t('chatInsufficientBalanceNeed', {
+            'need': WalletStore.instance.fmt(need),
+            'bal': WalletStore.instance.fmt(bal),
+          }));
+      return;
+    }
+    // 发送（本地乐观插入）
+    final clientMsgId = _uuid();
+    setState(() {
+      _msgs.add(ChatMsg(
+        clientMsgId: clientMsgId,
+        senderId: widget.myId,
+        type: isRed ? 8 : 9,
+        content: jsonEncode(contentData),
+        status: MsgStatus.sending,
+      ));
+    });
+    _scrollToBottom();
+    try {
+      final resp = await _svc.sendMoney(
+          widget.conv.id, isRed ? 8 : 9, contentData,
+          clientMsgId: clientMsgId);
+      if (!mounted) return;
+      setState(() {
+        final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
+        if (idx >= 0) {
+          _msgs[idx] = ChatMsg.fromServer(resp);
+          final seqNow = (resp['seq'] as num?)?.toInt() ?? 0;
+          if (seqNow > 0) _lastSeq = max(_lastSeq, seqNow);
+          _msgs.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
+        }
+      });
+      // 扣款已由**后端**在消息落库前原子完成（service.SendMoneyCharge），
+      // 前端绝不能再调 debit() 记一次，否则扣两次钱（B-19）。这里只刷新余额。
+      WalletStore.instance.refresh();
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString();
+      final insufficient = msg.contains('余额不足') || msg.contains('4101');
+      // 余额不足 / 参数错误：消息根本没发出去，直接撤掉乐观插入的气泡，别留个"失败"在会话里
+      setState(() {
+        final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
+        if (idx >= 0) {
+          if (insufficient) {
+            _msgs.removeAt(idx);
+          } else {
+            _msgs[idx].status = MsgStatus.failed;
+          }
+        }
+      });
+      if (insufficient) {
+        AppDialogs.toast(context, _t('chatInsufficientSendFailed'));
+      }
+      // 兜底：把后端的最新余额拉回来，避免本地还是旧值
+      WalletStore.instance.refresh();
+    }
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
@@ -285,8 +562,22 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
-  String _uuid() => DateTime.now().microsecondsSinceEpoch.toString() +
-      '-' + Random().nextInt(99999).toString();
+  /// 群置顶消息点击跳转：滚动到指定 msgId
+  void _scrollToMsg(String msgId) {
+    if (_msgs.isEmpty) return;
+    final i = _msgs.indexWhere((m) => m.msgId == msgId);
+    if (i < 0) return;
+    // 简单估算偏移（按消息条目均高 72 像素），需要精确可改 SliverList/Builder + extent
+    final est = (i * 72.0).clamp(0.0, _scroll.position.maxScrollExtent);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.animateTo(est,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    });
+  }
+
+  String _uuid() =>
+      '${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(99999)}';
 
   String _time(String? iso) {
     if (iso == null) return '';
@@ -296,7 +587,6 @@ class _ChatPageState extends State<ChatPage> {
     } catch (_) {
       return '';
     }
-    if (dt == null) return '';
     final now = DateTime.now();
     final h = dt.hour.toString().padLeft(2, '0');
     final m = dt.minute.toString().padLeft(2, '0');
@@ -304,6 +594,51 @@ class _ChatPageState extends State<ChatPage> {
       return '$h:$m';
     }
     return '${dt.month}/${dt.day} $h:$m';
+  }
+
+  /// 完整时间（消息之间的时间分隔条用）
+  String _fullTime(String? iso) {
+    if (iso == null) return '';
+    DateTime? dt;
+    try {
+      dt = DateTime.parse(iso).toLocal();
+    } catch (_) {
+      return '';
+    }
+    final now = DateTime.now();
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+      return '$h:$m';
+    }
+    final yesterday = now.subtract(const Duration(days: 1));
+    if (dt.year == yesterday.year &&
+        dt.month == yesterday.month &&
+        dt.day == yesterday.day) {
+      return _t('chatYesterdayAt', {'time': '$h:$m'});
+    }
+    if (dt.year == now.year) {
+      return _t('chatDateThisYear',
+          {'month': '${dt.month}', 'day': '${dt.day}', 'time': '$h:$m'});
+    }
+    return _t('chatDateFull', {
+      'year': '${dt.year}',
+      'month': '${dt.month}',
+      'day': '${dt.day}',
+      'time': '$h:$m',
+    });
+  }
+
+  /// 与上一条间隔超过 5 分钟才显示时间分隔条
+  bool _needTimeDivider(int i) {
+    if (i == 0) return true;
+    final prev = _msgs[i - 1].createdAt;
+    final cur = _msgs[i].createdAt;
+    if (prev == null || cur == null) return false;
+    final a = DateTime.tryParse(prev);
+    final b = DateTime.tryParse(cur);
+    if (a == null || b == null) return false;
+    return b.difference(a).inMinutes.abs() >= 5;
   }
 
   @override
@@ -316,28 +651,53 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _openSettings() async {
-    final changed = await Navigator.of(context).push<bool>(MaterialPageRoute(
-        builder: (_) => ConvSettingsPage(conv: widget.conv)));
+    final changed = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => ConvSettingsPage(conv: widget.conv)));
     if (changed == true && mounted) {
       Navigator.of(context).pop(true);
     }
   }
 
   /// 需求11：发起语音/视频通话（TRTC，单聊）
-  void _openCall(String type) {
+  /// 先发 invite 信令，再打开通话页（页面会等对方 accept 才进房）
+  Future<void> _openCall(String type) async {
     if (isGroup) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('暂仅支持单聊通话')));
+      AppDialogs.toast(context, _t('chatCallSingleOnly'));
       return;
     }
+    if (CallService.instance.state.value != null) {
+      AppDialogs.toast(context, _t('chatCallInProgress'));
+      return;
+    }
+    await CallService.instance.startCall(
+      convId: widget.conv.id,
+      callType: type,
+      peerName: widget.conv.conversationName,
+      peerAvatar: widget.conv.avatarUrl,
+    );
+    if (!mounted) return;
     Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => type == 'video'
             ? VideoCallPage(
-                peerName: widget.conv.conversationName,
-                convId: widget.conv.id)
+                peerName: widget.conv.conversationName, convId: widget.conv.id)
             : VoiceCallPage(
                 peerName: widget.conv.conversationName,
                 convId: widget.conv.id)));
+  }
+
+  /// 点击通话气泡：只有 invite 才重新进入通话，hangup/reject 只是历史记录
+  void _openCallFromSignal(String content) {
+    String action = 'invite';
+    var type = 'voice';
+    try {
+      final map = jsonDecode(content);
+      if (map is Map) {
+        action = map['action']?.toString() ?? 'invite';
+        if (map['callType'] == 'video') type = 'video';
+      }
+    } catch (_) {}
+    if (action != 'invite') return; // 通话记录气泡点击无动作
+    _openCall(type);
   }
 
   void _pickMention() async {
@@ -349,26 +709,30 @@ class _ChatPageState extends State<ChatPage> {
         child: ListView(
           shrinkWrap: true,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text('选择@成员',
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(AppLocalizations.of(context).t('chatPickMention'),
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             ),
             ListTile(
-              leading: const CircleAvatar(
-                  backgroundColor: AppTheme.surface, child: Icon(Icons.group)),
-              title: const Text('@所有人', style: TextStyle(fontSize: 15)),
+              leading: CircleAvatar(
+                  backgroundColor: context.cs.surface,
+                  child: Icon(Icons.group)),
+              title: Text(_t('chatMentionAll'),
+                  style: const TextStyle(fontSize: 15)),
+              // pop 出的 '@所有人' 会拼进消息内容发送给服务端，保持原样不做翻译
               onTap: () => Navigator.of(context).pop('@所有人'),
             ),
             ..._members.map((m) => ListTile(
                   leading: CircleAvatar(
-                      backgroundColor: AppTheme.surface,
+                      backgroundColor: context.cs.surface,
                       child: Text(
                           (m['nickname']?.toString().characters.first ?? '?'),
                           style: const TextStyle(color: AppTheme.primary))),
                   title: Text(m['nickname']?.toString() ?? '',
                       style: const TextStyle(fontSize: 15)),
-                  onTap: () => Navigator.of(context).pop(m['nickname']?.toString() ?? ''),
+                  onTap: () => Navigator.of(context)
+                      .pop(m['nickname']?.toString() ?? ''),
                 )),
           ],
         ),
@@ -401,9 +765,9 @@ class _ChatPageState extends State<ChatPage> {
     if (!mounted) return;
     if (ok) {
       setState(() => m.recalled = true);
-      _toast('已撤回');
+      _toast(_t('chatRecalled'));
     } else {
-      _toast('撤回失败（超过2分钟或无权限）');
+      _toast(_t('chatRecallFailed'));
     }
   }
 
@@ -411,7 +775,7 @@ class _ChatPageState extends State<ChatPage> {
   void _copy(ChatMsg m) {
     _closeLongPressOverlay();
     Clipboard.setData(ClipboardData(text: m.content));
-    _toast('已复制');
+    _toast(_t('chatCopied'));
   }
 
   /// 收藏
@@ -419,7 +783,7 @@ class _ChatPageState extends State<ChatPage> {
     _closeLongPressOverlay();
     if (m.msgId == null) return;
     final ok = await _svc.favoriteAdd(widget.conv.id, m.msgId!);
-    _toast(ok ? '已收藏' : '收藏失败');
+    _toast(ok ? _t('chatFavorited') : _t('chatFavoriteFailed'));
   }
 
   /// 引用
@@ -431,11 +795,65 @@ class _ChatPageState extends State<ChatPage> {
   /// 转发（占位：以后接好友选择器）
   void _forward(ChatMsg m) {
     _closeLongPressOverlay();
-    _toast('选择转发对象（V2.0 上线）');
+    _toast(_t('chatForwardComingSoon'));
   }
 
-  void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  /// 置顶/取消置顶消息（群主/管理员；后端已放开所有成员可置顶）
+  Future<void> _pinMsg(ChatMsg m) async {
+    _closeLongPressOverlay();
+    final ok =
+        await _svc.setPinMessage(widget.conv.id, m.msgId ?? '0', m.content);
+    _toast(ok ? _t('chatPinned') : _t('chatPinFailed'));
+    if (ok) {
+      setState(() {
+        widget.conv.conversation['pinnedMsgContent'] = m.content;
+      });
+    }
+  }
+
+  void _toast(String msg) => AppDialogs.toast(context, msg);
+
+  /// 需求3：从相册选图发送（上传 MinIO → type=2 图片消息）
+  Future<void> _pickImage() async {
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final up = await ApiClient.instance.uploadFile(
+        picked.path,
+        picked.name.isEmpty ? 'image.jpg' : picked.name,
+      );
+      final url = (up['url'] ?? '').toString();
+      final clientMsgId = _uuid();
+      final local = ChatMsg(
+        clientMsgId: clientMsgId,
+        senderId: widget.myId,
+        type: 2,
+        content: url, // 图片 bubble 用 content 存 URL
+        status: MsgStatus.sending,
+      );
+      setState(() {
+        _msgs.add(local);
+        _scrollToBottom();
+      });
+      // 发送图片消息（type=2, content=URL）
+      final resp =
+          await _svc.sendImage(widget.conv.id, url, clientMsgId: clientMsgId);
+      if (!mounted) return;
+      setState(() {
+        final idx = _msgs.indexWhere((m) => m.clientMsgId == clientMsgId);
+        if (idx >= 0) {
+          _msgs[idx].status = MsgStatus.sent;
+          _msgs[idx].msgId = resp['msgId']?.toString();
+        }
+      });
+    } catch (e) {
+      _toast(_t('chatImageSendFailed', {'error': e.toString()}));
+    }
   }
 
   @override
@@ -444,7 +862,7 @@ class _ChatPageState extends State<ChatPage> {
         widget.conv.conversation['pinnedMsgContent']?.toString() ?? '';
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: Column(
           children: [
@@ -460,21 +878,59 @@ class _ChatPageState extends State<ChatPage> {
                       ? const Center(child: CircularProgressIndicator())
                       : ListView.builder(
                           controller: _scroll,
-                          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 0, vertical: 8),
                           itemCount: _msgs.length,
                           itemBuilder: (_, i) {
                             final m = _msgs[i];
-                            return _MsgRow(
-                              msg: m,
-                              colors: _bubbleColors,
-                              myId: widget.myId,
-                              isMine: m.senderId == widget.myId,
-                              highlighted: _longPressedMsg?.clientMsgId == m.clientMsgId,
-                              onLongPress: () => _showLongPressOverlay(m),
-                              timeText: _time(m.createdAt),
-                              onRetry: m.status == MsgStatus.failed
-                                  ? () => _retry(m)
-                                  : null,
+                            return Column(
+                              children: [
+                                // 距上一条超过 5 分钟 → 居中时间分隔条
+                                if (_needTimeDivider(i))
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 16, vertical: 10),
+                                    child: Center(
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: context.cs.onSurfaceVariant
+                                              .withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(
+                                              AppTheme.radiusSm),
+                                        ),
+                                        child: Text(
+                                          _fullTime(m.createdAt),
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color:
+                                                  context.cs.onSurfaceVariant),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                _MsgRow(
+                                  msg: m,
+                                  colors: _bubbleColors,
+                                  myId: widget.myId,
+                                  isMine: m.senderId == widget.myId,
+                                  senderName: _senderName(m.senderId),
+                                  showSenderName: isGroup,
+                                  highlighted: _longPressedMsg?.clientMsgId ==
+                                      m.clientMsgId,
+                                  onLongPress: () => _showLongPressOverlay(m),
+                                  timeText: _time(m.createdAt),
+                                  onRetry: m.status == MsgStatus.failed
+                                      ? () => _retry(m)
+                                      : null,
+                                  onCallTap: () =>
+                                      _openCallFromSignal(m.content),
+                                  moneyClaimed:
+                                      _claimedMoneyIds.contains(m.msgId),
+                                  onMoneyTap: () => _claimMoney(m),
+                                ),
+                              ],
                             );
                           },
                         ),
@@ -498,6 +954,8 @@ class _ChatPageState extends State<ChatPage> {
               onSend: _send,
               onMention: isGroup ? _pickMention : null,
               onCall: (type) => _openCall(type),
+              onPickImage: _pickImage,
+              onMoney: (kind) => _openMoneyPage(kind),
             ),
           ],
         ),
@@ -516,6 +974,7 @@ class _ChatPageState extends State<ChatPage> {
               onRecall: () => _recall(_longPressedMsg!),
               onFavorite: () => _favorite(_longPressedMsg!),
               onForward: () => _forward(_longPressedMsg!),
+              onPin: () => _pinMsg(_longPressedMsg!),
               onSend: (text) {
                 // 回复：直接复用普通 send，replyTo 携带
                 _sendReply(text, _longPressedMsg!);
@@ -538,7 +997,8 @@ class _ChatPageState extends State<ChatPage> {
     setState(() => _msgs.add(local));
     _scrollToBottom();
     try {
-      final resp = await _svc.send(widget.conv.id, text, clientMsgId: clientMsgId);
+      final resp =
+          await _svc.send(widget.conv.id, text, clientMsgId: clientMsgId);
       setState(() {
         final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
         if (idx >= 0) {
@@ -563,40 +1023,49 @@ class _ChatPageState extends State<ChatPage> {
     final hasMobile = peerDev.any((d) => d == 'ios' || d == 'android');
     final statusText = isGroupType
         ? ''
-        : (peerOnline ? (hasMobile ? '手机在线' : '电脑在线') : '离线');
+        : (peerOnline
+            ? (hasMobile
+                ? _t('chatStatusMobileOnline')
+                : _t('chatStatusDesktopOnline'))
+            : _t('chatStatusOffline'));
     return Container(
-      decoration: const BoxDecoration(
-          color: AppTheme.background,
-          border: Border(bottom: BorderSide(color: AppTheme.divider, width: 0.5))),
+      decoration: BoxDecoration(
+          color: context.cs.surface,
+          border: Border(
+              bottom:
+                  BorderSide(color: context.cs.outlineVariant, width: 0.5))),
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
       child: Row(
         children: [
           IconButton(
             onPressed: () => Navigator.of(context).maybePop(),
-            icon: const Icon(Icons.chevron_left, size: 28, color: AppTheme.textPrimary),
+            icon:
+                Icon(Icons.chevron_left, size: 28, color: context.cs.onSurface),
           ),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Text(widget.conv.conversationName,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w600,
-                        color: AppTheme.textPrimary)),
+                        color: context.cs.onSurface)),
                 if (statusText.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(statusText,
                       style: TextStyle(
                           fontSize: 11,
-                          color: peerOnline ? AppTheme.primary : AppTheme.textTertiary)),
+                          color: peerOnline
+                              ? AppTheme.primary
+                              : context.cs.onSurfaceVariant)),
                 ],
               ],
             ),
           ),
           IconButton(
             onPressed: _openSettings,
-            icon: const Icon(Icons.more_horiz, size: 24, color: AppTheme.textPrimary),
+            icon: Icon(Icons.more_horiz, size: 24, color: context.cs.onSurface),
           ),
         ],
       ),
@@ -608,17 +1077,17 @@ class _ChatPageState extends State<ChatPage> {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      color: AppTheme.pinnedBar,
+      color: context.cs.surfaceContainer,
       child: Row(
         children: [
           const Icon(Icons.push_pin, size: 14, color: AppTheme.primary),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              '置顶消息：$content',
+              _t('chatPinnedMsg', {'content': content}),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+              style: TextStyle(fontSize: 13, color: context.cs.onSurface),
             ),
           ),
         ],
@@ -626,10 +1095,8 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  static const _bubbleColors = [
-    Color(0xFF0088CC), Color(0xFF6ACCFF), Color(0xFF7B61FF),
-    Color(0xFF00B42A), Color(0xFFFF7D00), Color(0xFFBA1A1A),
-  ];
+  // 头像色板统一走主题，保证与其它页面一致
+  static const _bubbleColors = AppTheme.avatarColors;
 }
 
 // ======================= 消息行（支持多种类型气泡 + 长按高亮） =======================
@@ -643,6 +1110,11 @@ class _MsgRow extends StatelessWidget {
   final VoidCallback onLongPress;
   final String timeText;
   final VoidCallback? onRetry;
+  final VoidCallback? onCallTap; // 通话邀请气泡点击（接听）
+  final String senderName; // 群聊显示发送者昵称
+  final bool showSenderName;
+  final bool moneyClaimed; // 红包/转账已领取
+  final VoidCallback? onMoneyTap; // 红包/转账点击领取
 
   const _MsgRow({
     required this.msg,
@@ -653,10 +1125,16 @@ class _MsgRow extends StatelessWidget {
     required this.onLongPress,
     required this.timeText,
     this.onRetry,
+    this.onCallTap,
+    this.senderName = '',
+    this.showSenderName = false,
+    this.moneyClaimed = false,
+    this.onMoneyTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     final colorIdx = msg.senderId.hashCode.abs() % colors.length;
     final senderColor = colors[colorIdx];
     // 小助手（虚拟 uid -1）头像显示"助"
@@ -674,30 +1152,47 @@ class _MsgRow extends StatelessWidget {
       case 3: // 文件
         bubble = _FileBubble(name: msg.content);
         break;
-      case 8: // 红包
-        bubble = const _RedPacketBubble();
+      case 8: // 红包（content=JSON {kind,amount,note}）
+        bubble = _MoneyBubble(
+          content: msg.content,
+          isRed: true,
+          claimed: moneyClaimed,
+          onTap: onMoneyTap ?? () {},
+        );
         break;
       case 9: // 转账
-        bubble = _TransferBubble(amount: msg.content);
+        bubble = _MoneyBubble(
+          content: msg.content,
+          isRed: false,
+          claimed: moneyClaimed,
+          onTap: onMoneyTap ?? () {},
+        );
+        break;
+      case 7: // 通话邀请（TRTC 信令）
+        bubble = _CallBubble(
+          content: msg.content,
+          onTap: onCallTap ?? () {},
+        );
         break;
       default:
         if (msg.recalled) {
           bubble = Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: const Text('消息已撤回',
-                style: TextStyle(fontSize: 13, color: AppTheme.textTertiary)),
+            child: Text(t('chatMsgRecalled'),
+                style: TextStyle(
+                    fontSize: 13, color: context.cs.onSurfaceVariant)),
           );
         } else {
           bubble = Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
-              color: isMine ? AppTheme.primary : Colors.white,
+              color: isMine ? AppTheme.primary : context.cs.surface,
               borderRadius: BorderRadius.circular(AppTheme.radiusBubble),
-              border: isMine ? null : Border.all(color: AppTheme.divider, width: 0.5),
+              border: null,
               boxShadow: [
                 if (highlighted)
                   BoxShadow(
-                    color: AppTheme.primary.withOpacity(0.18),
+                    color: AppTheme.primary.withValues(alpha: 0.18),
                     blurRadius: 16,
                     offset: const Offset(0, 0),
                   ),
@@ -711,18 +1206,21 @@ class _MsgRow extends StatelessWidget {
                 if (msg.hasReply)
                   Container(
                     margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: isMine ? Colors.white24 : const Color(0xFFF5F7FA),
+                      color:
+                          isMine ? Colors.white24 : context.cs.surfaceContainer,
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Text('引用了一条消息',
-                        style: TextStyle(fontSize: 12, color: AppTheme.textTertiary)),
+                    child: Text(t('chatQuotedMsg'),
+                        style: TextStyle(
+                            fontSize: 12, color: context.cs.onSurfaceVariant)),
                   ),
                 Text(msg.content,
                     style: TextStyle(
                         fontSize: 15,
-                        color: isMine ? Colors.white : AppTheme.textPrimary)),
+                        color: isMine ? Colors.white : context.cs.onSurface)),
               ],
             ),
           );
@@ -737,7 +1235,8 @@ class _MsgRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Row(
-        mainAxisAlignment: isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment:
+            isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isMine) ...[
@@ -749,6 +1248,16 @@ class _MsgRow extends StatelessWidget {
               crossAxisAlignment:
                   isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
+                // 群聊：显示发送者昵称
+                if (showSenderName && !isMine && !msg.recalled)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, bottom: 4),
+                    child: Text(senderName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12, color: context.cs.onSurfaceVariant)),
+                  ),
                 bubbleWidget,
                 const SizedBox(height: 4),
                 Row(
@@ -756,21 +1265,27 @@ class _MsgRow extends StatelessWidget {
                   children: [
                     if (timeText.isNotEmpty)
                       Text(timeText,
-                          style: const TextStyle(
-                              fontSize: 11, color: AppTheme.textTertiary)),
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: context.cs.onSurfaceVariant)),
                     if (isMine) ...[
                       const SizedBox(width: 6),
                       if (msg.status == MsgStatus.sending)
-                        const SizedBox(
-                          width: 12, height: 12,
-                          child: CircularProgressIndicator(strokeWidth: 1.5, color: AppTheme.textTertiary),
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: context.cs.onSurfaceVariant),
                         )
                       else if (msg.status == MsgStatus.read)
-                        const Text('已读',
+                        Text(t('chatRead'),
                             style: TextStyle(
-                                fontSize: 11, color: AppTheme.textTertiary))
+                                fontSize: 11,
+                                color: context.cs.onSurfaceVariant))
                       else if (msg.status == MsgStatus.sent)
-                        const Icon(Icons.check, size: 13, color: AppTheme.textTertiary)
+                        Icon(Icons.check,
+                            size: 13, color: context.cs.onSurfaceVariant)
                       else if (msg.status == MsgStatus.failed)
                         InkWell(
                           onTap: onRetry,
@@ -818,162 +1333,497 @@ class _MsgRow extends StatelessWidget {
 
 // ============================== 各种消息气泡 widget ==============================
 
-class _RedPacketBubble extends StatelessWidget {
-  const _RedPacketBubble();
+/// 拆红包弹窗（微信交互：封面 → 点击"開" → 后端分配并入账 → 金额结果 + 详情入口）
+class _RedPacketOpenDialog extends StatefulWidget {
+  final String msgId;
+  const _RedPacketOpenDialog({required this.msgId});
+
+  @override
+  State<_RedPacketOpenDialog> createState() => _RedPacketOpenDialogState();
+}
+
+class _RedPacketOpenDialogState extends State<_RedPacketOpenDialog>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  bool _opening = false; // 请求中
+  bool _opened = false; // 动画播放
+  double _myAmount = 0;
+  String _note = '';
+  final _svc = MomentService.instance;
+
+  String _t(String key, [Map<String, String>? params]) =>
+      AppLocalizations.of(context).t(key, params);
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 650));
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _open() async {
+    if (_opening || _opened || widget.msgId.isEmpty) return;
+    setState(() => _opening = true);
+    try {
+      final detail = await _svc.redPacketClaim(widget.msgId);
+      _myAmount = (detail['myAmount'] as num?)?.toDouble() ?? 0;
+      _note = (detail['note'] ?? '').toString();
+      if (!mounted) return;
+      setState(() {
+        _opening = false;
+        _opened = true;
+      });
+      _ctrl.forward().whenComplete(() {
+        if (mounted) setState(() {});
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _opening = false);
+      // 领取失败必须把**后端原因**原样告诉用户（已领完 / 已过期退回 / 旧版本数据…），
+      // 不能笼统说一句"已被领完"，更不能假装拆到 ¥0
+      AppDialogs.toast(context, _errMsg(e, _t('chatRedPacketGone')));
+      Navigator.pop(context, null);
+    }
+  }
+
+  void _openDetail() {
+    Navigator.pop(context, {'claimed': true});
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => RedPacketDetailPage(msgId: widget.msgId)));
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 280,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppTheme.radiusBubble),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+    final t = AppLocalizations.of(context).t;
+    final fmt = WalletStore.instance.fmt(_myAmount);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 300,
+        padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFE9564E), Color(0xFFD6453F)],
           ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppTheme.redPacket, AppTheme.redPacketDark],
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35), blurRadius: 24),
+          ],
+        ),
+        child: !_opened || !_ctrl.isCompleted
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.card_giftcard,
+                        color: Color(0xFFFFE08A), size: 30),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(t('chatAppRedPacket'),
+                      style: const TextStyle(
+                          color: Color(0xFFFFE08A),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Text(_note.isEmpty ? t('chatRedPacketGreeting') : _note,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 13)),
+                  const SizedBox(height: 26),
+                  _opening
+                      ? const SizedBox(
+                          width: 84,
+                          height: 84,
+                          child: Center(
+                              child: CircularProgressIndicator(
+                                  color: Color(0xFFFFE08A))),
+                        )
+                      : AnimatedBuilder(
+                          animation: _ctrl,
+                          builder: (ctx, _) {
+                            final v = _ctrl.value;
+                            return Transform.rotate(
+                              angle: v * 6.283,
+                              child: Transform.scale(
+                                scale: _opened ? 1.0 - v * 0.9 : 1.0,
+                                child: Opacity(
+                                  opacity: _opened ? 1.0 - v : 1.0,
+                                  child: GestureDetector(
+                                    onTap: _open,
+                                    child: Container(
+                                      width: 84,
+                                      height: 84,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: const Color(0xFFFFE08A),
+                                        boxShadow: [
+                                          BoxShadow(
+                                              color: Colors.black
+                                                  .withValues(alpha: 0.25),
+                                              blurRadius: 12,
+                                              offset: const Offset(0, 4)),
+                                        ],
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text(t('chatOpen'),
+                                          style: const TextStyle(
+                                              fontSize: 34,
+                                              fontWeight: FontWeight.w700,
+                                              color: Color(0xFFD6453F))),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                  const SizedBox(height: 22),
+                  Text(_opening ? t('chatClaiming') : t('chatTapToOpen'),
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          fontSize: 12)),
+                ],
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 8),
+                  Text(t('chatSavedToWallet'),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 13)),
+                  const SizedBox(height: 12),
+                  Text('¥$fmt',
+                      style: const TextStyle(
+                          color: Color(0xFFFFE08A),
+                          fontSize: 44,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 18),
+                  // 领取详情入口（微信：查看领取详情）
+                  InkWell(
+                    onTap: _openDetail,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(t('chatViewClaimDetail'),
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.white.withValues(alpha: 0.85))),
+                          const SizedBox(width: 4),
+                          Icon(Icons.chevron_right,
+                              size: 16,
+                              color: Colors.white.withValues(alpha: 0.85)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  // 「知道了」关闭弹窗（已领取，返回 claimed 让会话刷新状态）
+                  InkWell(
+                    onTap: () => Navigator.pop(context, {'claimed': true}),
+                    child: Container(
+                      width: double.infinity,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFE08A),
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(t('chatOK'),
+                          style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFFD6453F))),
+                    ),
+                  ),
+                ],
               ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.18),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.card_giftcard, color: Colors.white, size: 28),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
-                      Text('恭喜发财，大吉大利',
-                          style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                      SizedBox(height: 4),
-                      Row(children: [
-                        Icon(Icons.check_circle, size: 14, color: Colors.white),
-                        SizedBox(width: 4),
-                        Text('已领取',
-                            style: TextStyle(fontSize: 12, color: Colors.white)),
-                      ]),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            color: const Color(0xFFFEEAEA),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: const Text('微信红包',
-                style: TextStyle(fontSize: 12, color: Color(0xFFB23B3B))),
-          ),
-        ],
       ),
     );
   }
 }
 
-class _TransferBubble extends StatelessWidget {
-  final String amount;
-  const _TransferBubble({required this.amount});
+/// 转账收款确认弹窗
+class _TransferConfirmDialog extends StatelessWidget {
+  final double amount;
+  const _TransferConfirmDialog({required this.amount});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 280,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppTheme.radiusBubble),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppTheme.transfer, AppTheme.transferDark],
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
+    final t = AppLocalizations.of(context).t;
+    final fmt = WalletStore.instance.fmt(amount);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 280,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: context.cs.surface,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: const BoxDecoration(
+                  color: Color(0xFFF5A623), shape: BoxShape.circle),
+              child:
+                  const Icon(Icons.currency_yen, color: Colors.white, size: 28),
+            ),
+            const SizedBox(height: 12),
+            Text(t('chatFriendTransfer'),
+                style: TextStyle(
+                    fontSize: 13, color: context.cs.onSurfaceVariant)),
+            const SizedBox(height: 8),
+            Text('¥$fmt',
+                style: TextStyle(
+                    fontSize: 34,
+                    fontWeight: FontWeight.w700,
+                    color: context.cs.onSurface)),
+            const SizedBox(height: 22),
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFFA9D3B)),
+                child: Text(t('chatConfirmAccept'),
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600)),
               ),
             ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.5),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.currency_yen, color: Colors.white, size: 28),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('转账给您',
-                          style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500)),
-                      const SizedBox(height: 4),
-                      Text(
-                        amount.isEmpty ? '¥ 500.00' : '¥ $amount',
-                        style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 红包/转账气泡（type=8/9，content=JSON {kind,amount,note}）
+/// 微信风格：橙黄底白字 + 左侧白色图标块 + 右侧箭头；已领取整体灰化降饱和
+/// - 红包：主文案=祝福语，小字=拼手气红包·N个 / 领取红包 / 已领取
+/// - 转账：主文案=¥金额，小字=微信转账 / 已收款
+class _MoneyBubble extends StatelessWidget {
+  final String content;
+  final bool isRed;
+  final bool claimed;
+  final VoidCallback onTap;
+  const _MoneyBubble({
+    required this.content,
+    required this.isRed,
+    required this.claimed,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
+    double amount = 0;
+    String note = isRed ? t('chatRedPacketGreeting') : '';
+    int count = 0;
+    String mode = '';
+    try {
+      final j = jsonDecode(content);
+      if (j is Map) {
+        amount = (j['amount'] as num?)?.toDouble() ?? 0;
+        final n = j['note']?.toString() ?? '';
+        if (n.isNotEmpty) note = n;
+        count = (j['count'] as num?)?.toInt() ?? 0;
+        mode = j['mode']?.toString() ?? '';
+      }
+    } catch (_) {
+      // 兼容旧格式：content 直接是金额
+      amount = double.tryParse(content) ?? 0;
+    }
+    // 微信配色：红包/转账均为橙黄底；已领取灰化（降饱和）
+    final bg = claimed
+        ? const Color(0xFFD5D2CD)
+        : (isRed ? const Color(0xFFFA9D3B) : const Color(0xFFF5A623));
+    final iconTint = claimed
+        ? const Color(0xFF9E9B96)
+        : (isRed ? const Color(0xFFFA9D3B) : const Color(0xFFF5A623));
+    // 红包副标题：拼手气红包 · N 个 / 普通红包
+    final subtitle = isRed
+        ? (count > 1
+            ? t('chatRedPacketCount', {
+                'type': t(mode == 'lucky'
+                    ? 'chatLuckyRedPacket'
+                    : 'chatNormalRedPacket'),
+                'count': '$count',
+              })
+            : t('chatNormalRedPacket'))
+        : '';
+    // 主文案：红包=祝福语（微信不显示金额），转账=金额大字
+    final mainText = isRed ? note : '¥${WalletStore.instance.fmt(amount)}';
+    // 小字：已领状态 > 副标题 > 操作提示
+    final subText = claimed
+        ? (isRed ? t('chatClaimed') : t('chatAccepted'))
+        : isRed
+            ? (subtitle.isNotEmpty ? subtitle : t('chatTapToClaim'))
+            : t('chatAppTransfer');
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 220,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
+        child: Row(
+          children: [
+            // 左侧白色图标块：红包=方形信封，转账=圆形 ¥
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: isRed ? BoxShape.rectangle : BoxShape.circle,
+                borderRadius: isRed
+                    ? BorderRadius.circular(8)
+                    : BorderRadius.circular(20),
+              ),
+              alignment: Alignment.center,
+              child: Icon(isRed ? Icons.card_giftcard : Icons.currency_yen,
+                  color: iconTint, size: 24),
             ),
-          ),
-          Container(
-            color: const Color(0xFFFFE9CE),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('微信转账',
-                    style: TextStyle(fontSize: 12, color: Color(0xFFB57017))),
-                Text('已被接收',
-                    style: TextStyle(fontSize: 12, color: Color(0xFFB57017))),
-              ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(mainText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: isRed ? 15 : 18,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white)),
+                  const SizedBox(height: 4),
+                  Text(subText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withValues(alpha: 0.85))),
+                ],
+              ),
             ),
-          ),
-        ],
+            Icon(Icons.chevron_right,
+                size: 18, color: Colors.white.withValues(alpha: 0.9)),
+            const SizedBox(width: 2),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 通话邀请气泡（TRTC 信令 type=7）
+class _CallBubble extends StatelessWidget {
+  final String content;
+  final VoidCallback onTap;
+  const _CallBubble({required this.content, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
+    // 解析信令：invite=通话邀请，hangup=通话记录（含时长）
+    var isVideo = false;
+    var action = 'invite';
+    var duration = 0;
+    try {
+      final map = jsonDecode(content);
+      if (map is Map) {
+        if (map['callType'] == 'video') isVideo = true;
+        action = map['action']?.toString() ?? 'invite';
+        duration = int.tryParse((map['duration'] ?? 0).toString()) ?? 0;
+      }
+    } catch (_) {}
+    final callType = t(isVideo ? 'chatCallVideo' : 'chatCallVoice');
+    final isRecord = action == 'hangup';
+    final durText =
+        '${(duration ~/ 60).toString().padLeft(2, '0')}:${(duration % 60).toString().padLeft(2, '0')}';
+    final Map<String, String> titles = {
+      'invite': t('chatCallMissed', {'type': callType}),
+      'cancel': t('chatCallCanceled', {'type': callType}),
+      'reject': t('chatCallRejected', {'type': callType}),
+      'accept': t('chatCallAccepted', {'type': callType}),
+      'hangup':
+          t('chatCallWithDuration', {'type': callType, 'duration': durText}),
+    };
+    final title = titles[action] ?? t('chatCallDefault', {'type': callType});
+    final Map<String, String> subs = {
+      'invite': t('chatTapToAnswer'),
+      'cancel': t('chatPeerCanceled'),
+      'reject': t('chatPeerRejected'),
+      'accept': t('chatCallOngoing'),
+      'hangup': t('chatCallLog'),
+    };
+    final sub = subs[action] ?? t('chatCallFallback');
+    final bool isClickable = action == 'invite';
+    return InkWell(
+      onTap: isClickable ? onTap : null,
+      child: Container(
+        width: 220,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: isRecord ? context.cs.surfaceContainer : context.cs.surface,
+          borderRadius: BorderRadius.circular(AppTheme.radiusBubble),
+        ),
+        child: Row(
+          children: [
+            Icon(
+                isClickable
+                    ? (isVideo ? Icons.videocam : Icons.call)
+                    : (isVideo ? Icons.videocam_outlined : Icons.call_outlined),
+                size: 20,
+                color: isClickable
+                    ? AppTheme.primary
+                    : context.cs.onSurfaceVariant),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: isRecord
+                              ? context.cs.onSurfaceVariant
+                              : context.cs.onSurface)),
+                  const SizedBox(height: 2),
+                  Text(sub,
+                      style: TextStyle(
+                          fontSize: 12, color: context.cs.onSurfaceVariant)),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -983,16 +1833,30 @@ class _ImageGridBubble extends StatelessWidget {
   final List<String> urls;
   const _ImageGridBubble({required this.urls});
 
+  /// localhost/127.0.0.1 的 MinIO URL 换成当前访问主机（需求2：PC 发的图手机可见）
+  static String _fixUrl(String u) {
+    if (u.contains('localhost') || u.contains('127.0.0.1')) {
+      try {
+        final base = Uri.base;
+        final host = base.host.isNotEmpty ? base.host : 'localhost';
+        return u.replaceAll('localhost', host).replaceAll('127.0.0.1', host);
+      } catch (_) {
+        return u;
+      }
+    }
+    return u;
+  }
+
   @override
   Widget build(BuildContext context) {
     // 设计稿：4 张缩略图网格 + 第 5 张角标 +N
-    final shown = (urls.isEmpty ? List.generate(5, (_) => '') : urls).take(5).toList();
+    final shown =
+        (urls.isEmpty ? List.generate(5, (_) => '') : urls).take(5).toList();
     return Container(
       width: 240,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: context.cs.surface,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.divider, width: 0.5),
       ),
       clipBehavior: Clip.antiAlias,
       child: GridView.count(
@@ -1007,17 +1871,39 @@ class _ImageGridBubble extends StatelessWidget {
           return Stack(
             fit: StackFit.expand,
             children: [
-              // 缩略图（真实接 MinIO 时改为 Image.network；当前没数据，使用占位）
-              Container(
-                color: const Color(0xFFE9ECEF),
-                alignment: Alignment.center,
-                child: url.isEmpty
-                    ? const Icon(Icons.photo, color: AppTheme.textTertiary, size: 28)
-                    : null,
-              ),
+              // 需求2+3：真实加载图片（MinIO URL；localhost 换当前主机兜底）
+              url.isEmpty
+                  ? Container(
+                      color: const Color(0xFFE9ECEF),
+                      alignment: Alignment.center,
+                      child: Icon(Icons.photo,
+                          color: context.cs.onSurfaceVariant, size: 28),
+                    )
+                  : Image.network(
+                      _fixUrl(url),
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: const Color(0xFFE9ECEF),
+                        alignment: Alignment.center,
+                        child: Icon(Icons.broken_image_outlined,
+                            color: context.cs.onSurfaceVariant, size: 24),
+                      ),
+                      loadingBuilder: (_, child, progress) => progress == null
+                          ? child
+                          : Container(
+                              color: const Color(0xFFE9ECEF),
+                              alignment: Alignment.center,
+                              child: const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            ),
+                    ),
               if (i == 3 && shown.length > 4)
                 Container(
-                  color: Colors.black.withOpacity(0.45),
+                  color: Colors.black.withValues(alpha: 0.45),
                   alignment: Alignment.center,
                   child: Text(
                     '+${shown.length - 4}',
@@ -1044,9 +1930,8 @@ class _FileBubble extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: context.cs.surface,
         borderRadius: BorderRadius.circular(AppTheme.radiusBubble),
-        border: Border.all(color: AppTheme.divider, width: 0.5),
       ),
       constraints: const BoxConstraints(maxWidth: 240),
       child: Row(
@@ -1055,10 +1940,12 @@ class _FileBubble extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              name.isEmpty ? '文件' : name,
+              name.isEmpty
+                  ? AppLocalizations.of(context).t('chatFileFallback')
+                  : name,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, color: AppTheme.textPrimary),
+              style: TextStyle(fontSize: 14, color: context.cs.onSurface),
             ),
           ),
         ],
@@ -1080,18 +1967,18 @@ class _JumpToBottomBtn extends StatelessWidget {
         width: 44,
         height: 44,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: context.cs.surface,
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.12),
+              color: Colors.black.withValues(alpha: 0.12),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),
           ],
         ),
-        child: const Icon(Icons.keyboard_arrow_down,
-            size: 28, color: AppTheme.textSecondary),
+        child: Icon(Icons.keyboard_arrow_down,
+            size: 28, color: context.cs.onSurfaceVariant),
       ),
     );
   }
@@ -1106,6 +1993,8 @@ class _InputBar extends StatefulWidget {
   final VoidCallback onSend;
   final VoidCallback? onMention;
   final ValueChanged<String>? onCall; // 需求11：语音/视频通话（TRTC）
+  final VoidCallback? onPickImage; // 需求3：相册选图发送
+  final ValueChanged<String>? onMoney; // 红包/转账（redpacket / transfer）
 
   const _InputBar({
     required this.controller,
@@ -1114,6 +2003,8 @@ class _InputBar extends StatefulWidget {
     required this.onSend,
     this.onMention,
     this.onCall,
+    this.onPickImage,
+    this.onMoney,
   });
 
   @override
@@ -1126,7 +2017,40 @@ class _InputBarState extends State<_InputBar> {
   bool _hasText = false;
   bool _voiceMode = false; // 语音模式：输入框变"按住说话"
 
-  static const _emojis = ['😀','😄','😁','😂','😊','😍','🥰','😘','😎','🤔','😅','😭','😡','👍','👏','🙏','💪','🎉','❤️','💙','🔥','✨','✅','👀','🙌','🤝','🌹','🎁','🍵','☕','📌','💡'];
+  static const _emojis = [
+    '😀',
+    '😄',
+    '😁',
+    '😂',
+    '😊',
+    '😍',
+    '🥰',
+    '😘',
+    '😎',
+    '🤔',
+    '😅',
+    '😭',
+    '😡',
+    '👍',
+    '👏',
+    '🙏',
+    '💪',
+    '🎉',
+    '❤️',
+    '💙',
+    '🔥',
+    '✨',
+    '✅',
+    '👀',
+    '🙌',
+    '🤝',
+    '🌹',
+    '🎁',
+    '🍵',
+    '☕',
+    '📌',
+    '💡'
+  ];
 
   @override
   void initState() {
@@ -1163,10 +2087,12 @@ class _InputBarState extends State<_InputBar> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     return Container(
-      decoration: const BoxDecoration(
-        color: AppTheme.background,
-        border: Border(top: BorderSide(color: AppTheme.divider, width: 0.5)),
+      decoration: BoxDecoration(
+        color: context.cs.surface,
+        border: Border(
+            top: BorderSide(color: context.cs.outlineVariant, width: 0.5)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1177,26 +2103,28 @@ class _InputBarState extends State<_InputBar> {
               margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
-                color: AppTheme.surface,
+                color: context.cs.surface,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.format_quote, size: 16, color: AppTheme.primary),
+                  const Icon(Icons.format_quote,
+                      size: 16, color: AppTheme.primary),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      '引用：${widget.quoteMsg!.content}',
+                      t('chatQuotePrefix',
+                          {'content': widget.quoteMsg!.content}),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 13, color: AppTheme.textSecondary),
+                      style: TextStyle(
+                          fontSize: 13, color: context.cs.onSurfaceVariant),
                     ),
                   ),
                   InkWell(
                     onTap: widget.onClearQuote,
-                    child: const Icon(Icons.close,
-                        size: 16, color: AppTheme.textTertiary),
+                    child: Icon(Icons.close,
+                        size: 16, color: context.cs.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -1208,37 +2136,39 @@ class _InputBarState extends State<_InputBar> {
                 // 语音模式切换：mic → 键盘（需求2：切换后按钮本身也要变）
                 IconButton(
                   onPressed: () => setState(() => _voiceMode = !_voiceMode),
-                  icon: Icon(_voiceMode ? Icons.keyboard_alt_outlined : Icons.mic_none,
+                  icon: Icon(
+                      _voiceMode ? Icons.keyboard_alt_outlined : Icons.mic_none,
                       size: 24,
-                      color: _voiceMode ? AppTheme.primary : AppTheme.textSecondary),
+                      color: _voiceMode
+                          ? AppTheme.primary
+                          : context.cs.onSurfaceVariant),
                 ),
                 // 语音模式：输入框变"按住说话"按钮
                 if (_voiceMode)
                   Expanded(
                     child: GestureDetector(
-                      onTapDown: (_) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('正在录音…（语音消息 V2.0 上线）')));
-                      },
+                      onTapDown: (_) =>
+                          AppDialogs.toast(context, t('chatVoiceComingSoon')),
                       child: Container(
                         height: 42,
                         decoration: BoxDecoration(
-                          color: AppTheme.surface,
+                          color: context.cs.surfaceContainer,
                           borderRadius: BorderRadius.circular(21),
                         ),
                         alignment: Alignment.center,
-                        child: const Text('按住说话',
+                        child: Text(t('chatHoldToTalk'),
                             style: TextStyle(
-                                fontSize: 14, color: AppTheme.textSecondary)),
+                                fontSize: 14,
+                                color: context.cs.onSurfaceVariant)),
                       ),
                     ),
                   )
                 else
                   Expanded(
-                // 输入框
+                    // 输入框
                     child: Container(
                       decoration: BoxDecoration(
-                        color: AppTheme.surface,
+                        color: context.cs.surfaceContainer,
                         borderRadius: BorderRadius.circular(20),
                       ),
                       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -1246,10 +2176,10 @@ class _InputBarState extends State<_InputBar> {
                         controller: widget.controller,
                         minLines: 1,
                         maxLines: 4,
-                        decoration: const InputDecoration(
-                          hintText: '发消息...',
+                        decoration: InputDecoration(
+                          hintText: t('chatMessageHint'),
                           hintStyle: TextStyle(
-                              color: AppTheme.textTertiary, fontSize: 14),
+                              color: context.cs.onSurfaceVariant, fontSize: 14),
                           isDense: true,
                           border: InputBorder.none,
                           contentPadding:
@@ -1274,14 +2204,16 @@ class _InputBarState extends State<_InputBar> {
                             ? Icons.keyboard_alt_outlined
                             : Icons.emoji_emotions_outlined,
                         size: 24,
-                        color: AppTheme.textSecondary),
+                        color: context.cs.onSurfaceVariant),
                   ),
                   IconButton(
                     onPressed: _toggleDrawer,
                     icon: Icon(
-                        _drawerOpen ? Icons.add_circle : Icons.add_circle_outline,
+                        _drawerOpen
+                            ? Icons.add_circle
+                            : Icons.add_circle_outline,
                         size: 26,
-                        color: AppTheme.textSecondary),
+                        color: context.cs.onSurfaceVariant),
                   ),
                 ],
               ],
@@ -1297,14 +2229,17 @@ class _InputBarState extends State<_InputBar> {
                     padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
                     child: GridView.count(
                       crossAxisCount: 8,
-                      children: _emojis.map((e) => InkWell(
-                        onTap: () {
-                          widget.controller.text += e;
-                          _onTextChanged();
-                        },
-                        child: Center(
-                            child: Text(e, style: const TextStyle(fontSize: 22))),
-                      )).toList(),
+                      children: _emojis
+                          .map((e) => InkWell(
+                                onTap: () {
+                                  widget.controller.text += e;
+                                  _onTextChanged();
+                                },
+                                child: Center(
+                                    child: Text(e,
+                                        style: const TextStyle(fontSize: 22))),
+                              ))
+                          .toList(),
                     ),
                   )
                 : const SizedBox.shrink(),
@@ -1313,21 +2248,31 @@ class _InputBarState extends State<_InputBar> {
           AnimatedSize(
             duration: const Duration(milliseconds: 220),
             curve: Curves.easeOut,
-            child: _drawerOpen ? _PlusDrawer(
-              onMention: widget.onMention,
-              onItem: (name) {
-                setState(() => _drawerOpen = false);
-                // 需求11：语音/视频通话入口（TRTC）→ 交由 ChatPage 导航
-                if (name == '语音通话') {
-                  widget.onCall?.call('voice');
-                } else if (name == '视频通话') {
-                  widget.onCall?.call('video');
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('$name（V2.0 上线）')));
-                }
-              },
-            ) : const SizedBox.shrink(),
+            child: _drawerOpen
+                ? _PlusDrawer(
+                    onMention: widget.onMention,
+                    onItem: (name) {
+                      setState(() => _drawerOpen = false);
+                      // 需求11：语音/视频通话入口（TRTC）→ 交由 ChatPage 导航
+                      // 抽屉项按词典 key 匹配（name 为 key，显示文案由 _PlusDrawer 翻译）
+                      if (name == 'chatDrawerVoiceCall') {
+                        widget.onCall?.call('voice');
+                      } else if (name == 'chatDrawerVideoCall') {
+                        widget.onCall?.call('video');
+                      } else if (name == 'chatDrawerAlbum') {
+                        // 需求3：相册选图发送（回调到 ChatPage 统一处理）
+                        widget.onPickImage?.call();
+                      } else if (name == 'chatDrawerRedPacket') {
+                        widget.onMoney?.call('redpacket');
+                      } else if (name == 'chatDrawerTransfer') {
+                        widget.onMoney?.call('transfer');
+                      } else {
+                        AppDialogs.toast(
+                            context, t('chatComingSoon', {'name': t(name)}));
+                      }
+                    },
+                  )
+                : const SizedBox.shrink(),
           ),
         ],
       ),
@@ -1342,18 +2287,20 @@ class _PlusDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
+    // label 存词典 key，显示时翻译；onItem 回传 key 供逻辑匹配
     final items = <_DrawerItem>[
-      _DrawerItem('相册', Icons.photo_outlined),
-      _DrawerItem('文件', Icons.folder_outlined),
-      _DrawerItem('红包', Icons.card_giftcard),
-      _DrawerItem('转账', Icons.currency_yen),
-      _DrawerItem('语音通话', Icons.phone_outlined),
-      _DrawerItem('视频通话', Icons.videocam_outlined),
-      _DrawerItem('名片', Icons.person_outline),
-      _DrawerItem('收藏', Icons.star_outline),
+      const _DrawerItem('chatDrawerAlbum', Icons.photo_outlined),
+      const _DrawerItem('chatDrawerFile', Icons.folder_outlined),
+      const _DrawerItem('chatDrawerRedPacket', Icons.card_giftcard),
+      const _DrawerItem('chatDrawerTransfer', Icons.currency_yen),
+      const _DrawerItem('chatDrawerVoiceCall', Icons.phone_outlined),
+      const _DrawerItem('chatDrawerVideoCall', Icons.videocam_outlined),
+      const _DrawerItem('chatDrawerCard', Icons.person_outline),
+      const _DrawerItem('chatDrawerFavorite', Icons.star_outline),
     ];
     return Container(
-      color: AppTheme.background,
+      color: Theme.of(context).scaffoldBackgroundColor,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
       child: GridView.count(
         crossAxisCount: 4,
@@ -1362,40 +2309,45 @@ class _PlusDrawer extends StatelessWidget {
         mainAxisSpacing: 18,
         crossAxisSpacing: 14,
         childAspectRatio: 0.95,
-        children: items.map((it) => InkWell(
-          onTap: () => onItem(it.label),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: AppTheme.surface,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                alignment: Alignment.center,
-                child: Icon(it.icon,
-                    size: 28,
-                    color: it.label == '红包' || it.label == '转账'
-                        ? AppTheme.primary
-                        : AppTheme.textSecondary),
-              ),
-              const SizedBox(height: 8),
-              Text(it.label,
-                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-            ],
-          ),
-        )).toList(),
+        children: items
+            .map((it) => InkWell(
+                  onTap: () => onItem(it.key),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: context.cs.surface,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(it.icon,
+                            size: 28,
+                            color: it.key == 'chatDrawerRedPacket' ||
+                                    it.key == 'chatDrawerTransfer'
+                                ? AppTheme.primary
+                                : context.cs.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(t(it.key),
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: context.cs.onSurfaceVariant)),
+                    ],
+                  ),
+                ))
+            .toList(),
       ),
     );
   }
 }
 
 class _DrawerItem {
-  final String label;
+  final String key; // 词典 key（显示时翻译，逻辑匹配用 key）
   final IconData icon;
-  const _DrawerItem(this.label, this.icon);
+  const _DrawerItem(this.key, this.icon);
 }
 
 // ===================== 长按消息全屏遮罩（图 7：模糊 + 高亮 + 回复输入） =====================
@@ -1411,6 +2363,7 @@ class _LongPressOverlay extends StatefulWidget {
   final VoidCallback onRecall;
   final VoidCallback onFavorite;
   final VoidCallback onForward;
+  final VoidCallback onPin;
   final ValueChanged<String> onSend;
 
   const _LongPressOverlay({
@@ -1424,6 +2377,7 @@ class _LongPressOverlay extends StatefulWidget {
     required this.onRecall,
     required this.onFavorite,
     required this.onForward,
+    required this.onPin,
     required this.onSend,
   });
 
@@ -1442,9 +2396,11 @@ class _LongPressOverlayState extends State<_LongPressOverlay> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     final m = widget.msg;
     final isMine = m.senderId == widget.myId;
-    final color = widget.colors[m.senderId.hashCode.abs() % widget.colors.length];
+    final color =
+        widget.colors[m.senderId.hashCode.abs() % widget.colors.length];
 
     return Stack(
       fit: StackFit.expand,
@@ -1455,114 +2411,118 @@ class _LongPressOverlayState extends State<_LongPressOverlay> {
             onTap: widget.onClose,
             child: BackdropFilter(
               filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-              child: Container(color: Colors.black.withOpacity(0.55)),
+              child: Container(color: Colors.black.withValues(alpha: 0.55)),
             ),
           ),
         ),
-        // 高亮气泡（居中偏上）
+        // 简洁标题（替代高亮气泡：长按直接显示操作菜单）
         Center(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 60, 24, 0),
+            padding: const EdgeInsets.fromLTRB(24, 80, 24, 0),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  width: 44,
+                  height: 44,
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(AppTheme.radiusBubble),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.white.withOpacity(0.3),
-                        blurRadius: 24,
-                        spreadRadius: 4,
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.3),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
+                    color: Colors.white.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (m.hasReply)
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 6),
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5F7FA),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Text('引用了一条消息',
-                              style: TextStyle(
-                                  fontSize: 12, color: AppTheme.textTertiary)),
-                        ),
-                      Text(m.content.isEmpty ? '[消息]' : m.content,
-                          style: const TextStyle(
-                              fontSize: 15, color: AppTheme.textPrimary)),
-                    ],
+                  child: Icon(
+                    m.type == 7
+                        ? Icons.call_outlined
+                        : Icons.mark_chat_unread_outlined,
+                    color: Colors.white,
+                    size: 22,
                   ),
                 ),
-                const SizedBox(height: 8),
-                if (m.createdAt != null)
-                  const SizedBox.shrink(),
+                const SizedBox(height: 12),
+                Text(t('chatChooseAction'),
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.white.withValues(alpha: 0.85),
+                        fontWeight: FontWeight.w500)),
               ],
             ),
           ),
         ),
-        // 顶部操作：复制 / 引用 / 收藏 / 撤回 / 转发（紧贴高亮气泡上方/下方）
+        // 顶部关闭按钮
         Positioned(
           top: 60,
           right: 20,
           child: _overlayAction(Icons.close, widget.onClose),
         ),
-        // 操作行（在气泡上下方一排）
+        // 操作行：3×2 卡片网格（复制/引用/收藏/撤回/转发/置顶）
         Positioned(
-          top: MediaQuery.of(context).size.height * 0.55,
+          top: MediaQuery.of(context).size.height * 0.42,
           left: 0,
           right: 0,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 14,
-              runSpacing: 12,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
               children: [
-                _actionChip(Icons.copy, '复制', widget.onCopy),
-                _actionChip(Icons.format_quote, '引用', widget.onQuote),
-                _actionChip(Icons.star_outline, '收藏', widget.onFavorite),
-                if (isMine || true)
-                  _actionChip(Icons.undo, '撤回', widget.onRecall),
-                _actionChip(Icons.forward, '转发', widget.onForward),
+                Row(
+                  children: [
+                    Expanded(
+                        child: _actionChip(
+                            Icons.copy, t('chatActionCopy'), widget.onCopy)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        child: _actionChip(Icons.format_quote,
+                            t('chatActionQuote'), widget.onQuote)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        child: _actionChip(Icons.star_outline,
+                            t('chatActionFavorite'), widget.onFavorite)),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                        child: _actionChip(Icons.undo, t('chatActionRecall'),
+                            widget.onRecall)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        child: _actionChip(Icons.forward,
+                            t('chatActionForward'), widget.onForward)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        child: _actionChip(Icons.push_pin_outlined,
+                            t('chatActionPin'), widget.onPin)),
+                  ],
+                ),
               ],
             ),
           ),
         ),
         // 底部：回复输入栏
         Positioned(
-          left: 0, right: 0, bottom: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
           child: SafeArea(
             top: false,
             child: Container(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(top: BorderSide(color: AppTheme.divider, width: 0.5)),
+              decoration: BoxDecoration(
+                color: context.cs.surface,
+                border: Border(
+                    top: BorderSide(
+                        color: context.cs.outlineVariant, width: 0.5)),
               ),
               child: Row(
                 children: [
                   IconButton(
                     onPressed: () {},
-                    icon: const Icon(Icons.add_circle_outline,
-                        size: 26, color: AppTheme.textSecondary),
+                    icon: Icon(Icons.add_circle_outline,
+                        size: 26, color: context.cs.onSurfaceVariant),
                   ),
                   Expanded(
                     child: Container(
                       decoration: BoxDecoration(
-                        color: AppTheme.surface,
+                        color: context.cs.surfaceContainer,
                         borderRadius: BorderRadius.circular(20),
                       ),
                       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -1570,13 +2530,14 @@ class _LongPressOverlayState extends State<_LongPressOverlay> {
                         controller: _input,
                         autofocus: true,
                         decoration: InputDecoration(
-                          hintText: '回复 ${widget.convName}...',
-                          hintStyle: const TextStyle(
-                              fontSize: 14, color: AppTheme.textTertiary),
+                          hintText:
+                              t('chatReplyHint', {'name': widget.convName}),
+                          hintStyle: TextStyle(
+                              fontSize: 14, color: context.cs.onSurfaceVariant),
                           border: InputBorder.none,
                           isDense: true,
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 10, horizontal: 0),
+                          contentPadding: const EdgeInsets.symmetric(
+                              vertical: 10, horizontal: 0),
                         ),
                         onSubmitted: (v) {
                           if (v.trim().isEmpty) return;
@@ -1587,8 +2548,8 @@ class _LongPressOverlayState extends State<_LongPressOverlay> {
                   ),
                   IconButton(
                     onPressed: () {},
-                    icon: const Icon(Icons.emoji_emotions_outlined,
-                        size: 24, color: AppTheme.textSecondary),
+                    icon: Icon(Icons.emoji_emotions_outlined,
+                        size: 24, color: context.cs.onSurfaceVariant),
                   ),
                   IconButton(
                     onPressed: () {
@@ -1615,34 +2576,38 @@ class _LongPressOverlayState extends State<_LongPressOverlay> {
         width: 36,
         height: 36,
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.92),
+          color: Colors.white.withValues(alpha: 0.92),
           shape: BoxShape.circle,
         ),
-        child: Icon(icon, size: 20, color: AppTheme.textPrimary),
+        child: Icon(icon, size: 20, color: context.cs.onSurface),
       ),
     );
   }
 
   Widget _actionChip(IconData icon, String label, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.92),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: AppTheme.textPrimary),
-            const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 13,
-                    color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w500)),
-          ],
+    return Material(
+      color: context.cs.surface,
+      borderRadius: BorderRadius.circular(14),
+      elevation: 2,
+      shadowColor: Colors.black26,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          height: 68,
+          alignment: Alignment.center,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 22, color: AppTheme.primary),
+              const SizedBox(height: 5),
+              Text(label,
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: context.cs.onSurfaceVariant,
+                      fontWeight: FontWeight.w500)),
+            ],
+          ),
         ),
       ),
     );

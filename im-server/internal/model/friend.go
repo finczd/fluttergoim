@@ -3,8 +3,8 @@ package model
 import "time"
 
 const (
-	FriendReqPending = 0
-	FriendReqAgreed  = 1
+	FriendReqPending  = 0
+	FriendReqAgreed   = 1
 	FriendReqRejected = 2
 )
 

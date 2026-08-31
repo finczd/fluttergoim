@@ -203,13 +203,34 @@ func SetPinMessageHandler() gin.HandlerFunc {
 		var body struct {
 			MsgID   int64  `json:"msgId,string"`
 			Content string `json:"content"`
+			Pinned  *bool  `json:"pinned"` // true=置顶 false=取消；缺省按 msgId>0 置顶
 		}
 		c.ShouldBindJSON(&body)
-		if err := service.SetPinMessage(c.Request.Context(), uid, convID, body.MsgID, body.Content); err != nil {
+		pinned := true
+		if body.Pinned != nil {
+			pinned = *body.Pinned
+		} else if body.MsgID <= 0 {
+			pinned = false
+		}
+		if err := service.SetPinMessage(c.Request.Context(), uid, convID, body.MsgID, body.Content, pinned); err != nil {
 			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// PinnedMessagesHandler 置顶消息列表（返回 msgId 数组）
+func PinnedMessagesHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		convID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		ids, err := service.PinnedMessages(c.Request.Context(), uid, convID)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": ids})
 	}
 }
 

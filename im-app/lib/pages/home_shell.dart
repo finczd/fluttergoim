@@ -1,14 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../l10n/app_locale.dart';
+import '../services/api_client.dart';
+import '../services/call_service.dart';
+import '../services/keep_alive_service.dart';
+import '../services/push_service.dart';
+import '../services/sound_service.dart';
+import '../services/wallet_store.dart';
+import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import 'chat_list_page.dart';
 import 'contacts_page.dart';
 import 'discover_page.dart';
 import 'me_page.dart';
 
-/// 底部 4 Tab（消息/通讯录/发现/我的）—— 对齐设计稿：
-/// 顶部细线分隔，active=#0088CC 蓝（图标+文字），inactive=#8E9096 灰
+/// 底部 4 Tab（消息 / 通讯录 / 发现 / 我的）—— 对齐 ChatPulse 参考图
+/// 白色底栏、顶部细线、active=#007AFF 蓝、inactive=#999999 灰
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -16,15 +25,67 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _index = 0;
+  int _friendReqCount = 0; // 通讯录 tab 新朋友申请红点
 
-  static const _pages = [
-    ChatListPage(),
-    ContactsPage(),
-    DiscoverPage(),
-    MePage(),
-  ];
+  late final List<Widget> _pages;
+  VoidCallback? _offFriend;
+
+  @override
+  void initState() {
+    super.initState();
+    // B-24：监听前后台切换——WS 断了、或推送没收到时，切回前台兜底拉一次余额
+    WidgetsBinding.instance.addObserver(this);
+    _pages = <Widget>[
+      const ChatListPage(),
+      const ContactsPage(),
+      const DiscoverPage(),
+      const MePage(),
+    ];
+    _loadFriendReqCount();
+    _offFriend = GlobalWs.instance.onFriend((_) {
+      _loadFriendReqCount();
+      // 需求：被添加好友提示音
+      SoundService.instance.playFriendAdded();
+    });
+    GlobalWs.instance.ensureConnected();
+    // 通话信令：登录后挂上全局监听（来电可在任意页面弹出）
+    CallService.instance.attach();
+    // Android 保活前台服务：申请通知权限 + 电池优化白名单并启动服务
+    //（启动 App 时必经页面，所有登录入口都覆盖）
+    unawaited(KeepAliveService.instance.start());
+    // 极光推送：绑定 alias = 用户 ID（覆盖启动自动登录/登录/注册/扫码四条入口）
+    unawaited(PushService.instance.start());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _offFriend?.call();
+    super.dispose();
+  }
+
+  /// App 切回前台：补拉余额与好友申请数。
+  /// 主链路是服务端 WS 推送（B-24），这里只是兜底——
+  /// 覆盖「WS 断开」「推送丢失」「用户在 PC 后台改完再拿起手机」几种情况。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    unawaited(WalletStore.instance.refresh());
+    _loadFriendReqCount();
+  }
+
+  Future<void> _loadFriendReqCount() async {
+    try {
+      final api = ApiClient.instance;
+      final r = await api.get('/api/v1/friend/request/incoming');
+      final list = (r.data['data'] as List<dynamic>? ?? [])
+          .where((e) => (e as Map<String, dynamic>)['status'] == 0)
+          .length;
+      if (mounted) setState(() => _friendReqCount = list);
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -32,9 +93,12 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       body: _pages[_index],
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: AppTheme.background,
-          border: Border(top: BorderSide(color: AppTheme.divider, width: 0.5)),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          border: Border(
+              top: BorderSide(
+                  color: context.cs.onSurface.withValues(alpha: 0.08),
+                  width: 0.5)),
         ),
         child: SafeArea(
           top: false,
@@ -42,10 +106,13 @@ class _HomeShellState extends State<HomeShell> {
             height: 64,
             child: Row(
               children: [
-                _tab(0, Icons.chat_bubble_outline, Icons.chat_bubble, t('home')),
-                _tab(1, Icons.contacts_outlined, Icons.contacts, t('contacts')),
-                _tab(2, Icons.explore_outlined, Icons.explore, t('discover')),
-                _tab(3, Icons.person_outline, Icons.person, t('me')),
+                _tab(0, Icons.chat_bubble_outline, Icons.chat_bubble_rounded,
+                    t('home')),
+                _tab(1, Icons.contacts_outlined, Icons.contacts_rounded,
+                    t('contacts')),
+                _tab(2, Icons.explore_outlined, Icons.explore_rounded,
+                    t('discover')),
+                _tab(3, Icons.person_outline, Icons.person_rounded, t('me')),
               ],
             ),
           ),
@@ -54,23 +121,58 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  /// 切 Tab。切到"我的"（index 3）时顺手拉一次余额 ——
+  /// 后台给用户加了余额，用户不用杀 App 重进就能看到（B-20）。
+  void _onTabTap(int i) {
+    setState(() => _index = i);
+    if (i == 3) WalletStore.instance.refresh();
+  }
+
   Widget _tab(int i, IconData iconOff, IconData iconOn, String label) {
     final active = i == _index;
     return Expanded(
       child: InkWell(
-        onTap: () => setState(() => _index = i),
+        onTap: () => _onTabTap(i),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(active ? iconOn : iconOff,
-                size: 24,
-                color: active ? AppTheme.primary : AppTheme.textTertiary),
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(active ? iconOn : iconOff,
+                    size: 24,
+                    color: active
+                        ? AppTheme.primary
+                        : context.cs.onSurfaceVariant),
+                if (i == 1 && _friendReqCount > 0)
+                  Positioned(
+                    right: -7,
+                    top: -7,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: AppTheme.unreadBadge,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: Text(
+                          _friendReqCount > 99 ? '99+' : '$_friendReqCount',
+                          style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white)),
+                    ),
+                  ),
+              ],
+            ),
             const SizedBox(height: 4),
             Text(label,
                 style: TextStyle(
                     fontSize: 11,
                     fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                    color: active ? AppTheme.primary : AppTheme.textTertiary)),
+                    color: active
+                        ? AppTheme.primary
+                        : context.cs.onSurfaceVariant)),
           ],
         ),
       ),

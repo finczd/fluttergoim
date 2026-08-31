@@ -51,7 +51,9 @@ class _QrLoginPageState extends State<QrLoginPage> {
     setState(() => _loading = true);
     try {
       final r = await _api.post('/api/v1/auth/qr/ticket');
-      final data = (r.data as Map<String, dynamic>)['data'] as Map<String, dynamic>? ?? {};
+      final data =
+          (r.data as Map<String, dynamic>)['data'] as Map<String, dynamic>? ??
+              {};
       final payload = data['payload']?.toString() ?? '';
       if (payload.isEmpty) throw Exception('生成二维码失败');
       if (mounted) {
@@ -75,8 +77,11 @@ class _QrLoginPageState extends State<QrLoginPage> {
     _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       if (!mounted) return;
       try {
-        final r = await _api.get('/api/v1/auth/qr/status', query: {'ticket': _ticket});
-        final data = (r.data as Map<String, dynamic>)['data'] as Map<String, dynamic>? ?? {};
+        final r = await _api
+            .get('/api/v1/auth/qr/status', query: {'ticket': _ticket});
+        final data =
+            (r.data as Map<String, dynamic>)['data'] as Map<String, dynamic>? ??
+                {};
         final status = data['status']?.toString() ?? '';
         if (status == 'confirmed') {
           _pollTimer?.cancel();
@@ -123,11 +128,14 @@ class _QrLoginPageState extends State<QrLoginPage> {
     });
   }
 
-  String get _statusText {
+  String _statusText(String Function(String, [Map<String, String>?]) t) {
     switch (_status) {
-      case 1: return '已扫码，请在手机上确认';
-      case 2: return '登录成功，正在跳转…';
-      default: return '请使用手机端扫码登录';
+      case 1:
+        return t('qrLoginScannedConfirm');
+      case 2:
+        return t('qrLoginSuccess');
+      default:
+        return t('qrLoginScanHint');
     }
   }
 
@@ -136,9 +144,9 @@ class _QrLoginPageState extends State<QrLoginPage> {
     final t = AppLocalizations.of(context).t;
     final isZh = Localizations.localeOf(context).languageCode == 'zh';
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('扫码登录'),
+        title: Text(t('qrLoginTitle')),
         leading: IconButton(
           onPressed: () => Navigator.of(context).pushReplacement(
               MaterialPageRoute(builder: (_) => const LoginPage())),
@@ -159,38 +167,41 @@ class _QrLoginPageState extends State<QrLoginPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 76, height: 76,
-                decoration: BoxDecoration(
+                width: 76,
+                height: 76,
+                decoration: const BoxDecoration(
                   color: AppTheme.primary,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.send_rounded, color: Colors.white, size: 36),
+                child: const Icon(Icons.send_rounded,
+                    color: Colors.white, size: 36),
               ),
               const SizedBox(height: 14),
-              const Text('ChatPulse',
+              Text('ChatPulse',
                   style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
-                      color: AppTheme.textPrimary)),
+                      color: context.cs.onSurface)),
               const SizedBox(height: 6),
-              const Text('打开手机端，点击右上角 + 后选择扫一扫',
+              Text(t('qrLoginOpenAppHint'),
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  style: TextStyle(
+                      fontSize: 13, color: context.cs.onSurfaceVariant)),
               const SizedBox(height: 24),
               // 二维码卡片
               Container(
-                width: 240, height: 240,
+                width: 240,
+                height: 240,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: context.cs.surface,
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: [
                     BoxShadow(
-                        color: Colors.black.withOpacity(0.06),
+                        color: Colors.black.withValues(alpha: 0.06),
                         blurRadius: 16,
                         offset: const Offset(0, 4)),
                   ],
-                  border: Border.all(color: AppTheme.divider, width: 0.5),
                 ),
                 child: _loading
                     ? const Center(child: CircularProgressIndicator())
@@ -198,39 +209,38 @@ class _QrLoginPageState extends State<QrLoginPage> {
                         data: _qrPayload,
                         version: QrVersions.auto,
                         backgroundColor: Colors.white,
-                        eyeStyle: const QrEyeStyle(
+                        eyeStyle: QrEyeStyle(
                             eyeShape: QrEyeShape.square,
-                            color: AppTheme.textPrimary),
-                        dataModuleStyle: const QrDataModuleStyle(
+                            color: context.cs.onSurface),
+                        dataModuleStyle: QrDataModuleStyle(
                             dataModuleShape: QrDataModuleShape.square,
-                            color: AppTheme.textPrimary),
+                            color: context.cs.onSurface),
                       ),
               ),
               const SizedBox(height: 16),
               // 状态文字 + 倒计时
-              Text(_statusText,
-                  style: const TextStyle(
-                      fontSize: 14, color: AppTheme.textPrimary)),
+              Text(_statusText(t),
+                  style: TextStyle(fontSize: 14, color: context.cs.onSurface)),
               const SizedBox(height: 4),
-              Text('${_expireIn}s 后自动刷新',
-                  style: const TextStyle(
-                      fontSize: 12, color: AppTheme.textTertiary)),
+              Text(t('qrLoginRefreshIn', {'seconds': '$_expireIn'}),
+                  style: TextStyle(
+                      fontSize: 12, color: context.cs.onSurfaceVariant)),
               const SizedBox(height: 24),
               // 底部操作
               Wrap(
                 spacing: 24,
                 children: [
-                  _action('刷新二维码', Icons.refresh, _requestTicket),
+                  _action(t('qrLoginRefreshQr'), Icons.refresh, _requestTicket),
                   InkWell(
                     onTap: () => Navigator.of(context).pushReplacement(
                         MaterialPageRoute(builder: (_) => const LoginPage())),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.account_circle_outlined,
+                      children: [
+                        const Icon(Icons.account_circle_outlined,
                             color: AppTheme.primary, size: 18),
-                        SizedBox(width: 4),
-                        Text('切换账号登录',
+                        const SizedBox(width: 4),
+                        Text(t('qrLoginSwitchAccount'),
                             style: TextStyle(
                                 fontSize: 13,
                                 color: AppTheme.primary,

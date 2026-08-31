@@ -6,12 +6,17 @@ import { preview } from '../utils/format';
 import ChatHeader from './ChatHeader.vue';
 import MessageList from './MessageList.vue';
 import Composer from './Composer.vue';
+import MoneyModal from './MoneyModal.vue';
 
 const messages = useMessagesStore();
 const ui = useUiStore();
 const editDraft = ref('');
 const editSaving = ref(false);
 const editInput = ref(null);
+
+// 红包 / 转账：点击气泡打开领取弹窗
+const moneyMessage = ref(null);
+function onMoney(m) { moneyMessage.value = m; }
 
 // 编辑浮层：打开时预填原内容并聚焦
 watch(
@@ -119,7 +124,10 @@ async function dismissAnn() {
       </button>
     </div>
 
-    <MessageList />
+    <MessageList @money="onMoney" />
+
+    <!-- 红包 / 转账领取弹窗 -->
+    <MoneyModal v-if="moneyMessage" :message="moneyMessage" @close="moneyMessage = null" />
 
     <!-- 编辑消息浮层（仅客服）：右键"编辑"打开，替换输入框 -->
     <div v-if="ui.editingMessage" class="edit-message-bar" @keydown.esc="ui.closeEditMessage">

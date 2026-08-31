@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/yourcompany/im-server/internal/config"
+	"github.com/yourcompany/im-server/internal/model"
 
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
@@ -31,6 +32,17 @@ func InitMySQL(cfg *config.Config) error {
 	sqlDB.SetMaxOpenConns(50)
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetConnMaxLifetime(time.Hour)
+	// 幂等建表/加列：钱包流水、朋友圈；user 表补 balance 列
+	if err := DB.AutoMigrate(
+		&model.WalletTransaction{},
+		&model.MomentsPost{},
+		&model.RedPacketClaim{},
+		&model.TransferClaim{},
+		&model.MoneyPacket{},
+		&model.User{},
+	); err != nil {
+		return err
+	}
 	log.Println("mysql connected")
 	return nil
 }

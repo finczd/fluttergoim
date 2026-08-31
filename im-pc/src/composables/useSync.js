@@ -51,6 +51,27 @@ function applyIncomingMessage(raw) {
   const myId = String(auth.user?.id || '');
   const m = adaptMessage(raw, myId);
   if (!m) return;
+  // 需求7：音视频通话信令（type=7 call）——先处理信令，再合入会话（通话记录留在聊天里）
+  if (m.type === 'call') {
+    handleCallMessage(m, raw, myId);
+    const convId = String(m.conversation_id || '');
+    const currentId = String(messages.current?.id || '');
+    if (currentId && convId === currentId) {
+      messages.mergeMessages([m], false);
+      messages.scheduleReadReceipt();
+    } else {
+      const conv = conversations.findById(convId);
+      if (conv) {
+        conv.last_message = m;
+        if (m.is_mine !== true) conv.unread_count = Number(conv.unread_count || 0) + 1;
+      }
+      if (m.is_mine !== true && document.hidden) {
+        notifyBrowser(conv?.title || '新消息', previewOf(m));
+      }
+    }
+    conversations.load(false).catch(() => {});
+    return;
+  }
   const convId = String(m.conversation_id || '');
   const currentId = String(messages.current?.id || '');
   // 当前打开的就是该会话 → 直接合并
@@ -73,6 +94,53 @@ function applyIncomingMessage(raw) {
   conversations.load(false).catch(() => {});
 }
 
+// 通话信令处理：
+//   invite（他人）→ 弹来电窗口等用户点接听/拒绝；占线则自动回 reject
+//   accept       → 主叫切到"通话中"
+//   reject       → 主叫关闭，提示"对方已拒绝"
+//   hangup/cancel→ 关闭，提示"通话已结束"/"对方已取消"
+function handleCallMessage(m, raw, myId) {
+  const ui = useUiStore();
+  const messages = useMessagesStore();
+  const conversations = useConversationsStore();
+  let sig = m.content || '{}';
+  try { sig = typeof sig === 'string' ? JSON.parse(sig) : sig; } catch (_) { sig = {}; }
+  // 自己发出的回显忽略（避免自己处理自己的信令）
+  if (m.is_mine) return;
+  const action = sig.action || 'invite';
+  const callType = sig.callType || 'voice';
+  const convId = String(m.conversation_id || '');
+  const conv = conversations.findById(convId);
+  const title = conv?.title || sig.callerName || '通话';
+
+  if (action === 'invite') {
+    if (ui.call.open) {
+      // 占线：直接回一条 reject，让主叫端收尾
+      messages.sendCallSignal(convId, 'reject', callType);
+      return;
+    }
+    ui.openCall(convId, callType, title, { role: 'callee', peerName: sig.callerName || title });
+    notifyBrowser('来电', title + ' 邀请你进行' + (callType === 'video' ? '视频' : '语音') + '通话');
+    return;
+  }
+
+  // 以下动作只对"当前正在进行的这一通"生效
+  if (!ui.call.open || String(ui.call.convId) !== convId) return;
+
+  if (action === 'accept') {
+    ui.markCallAccepted();
+  } else if (action === 'reject') {
+    ui.closeCall();
+    ui.toast('对方已拒绝', '', 'info');
+  } else if (action === 'cancel') {
+    ui.closeCall();
+    ui.toast('对方已取消', '', 'info');
+  } else if (action === 'hangup') {
+    ui.closeCall();
+    ui.toast('通话已结束', '', 'info');
+  }
+}
+
 /** 消息预览（与 utils/format preview 一致，避免循环 import） */
 function previewOf(m) {
   if (m.type === 'image') return '[图片]';
@@ -80,6 +148,7 @@ function previewOf(m) {
   if (m.type === 'voice') return '[语音]';
   if (m.type === 'video') return '[视频]';
   if (m.type === 'card') return '[卡片]';
+  if (m.type === 'call') return '[通话]';
   return m.content || '新消息';
 }
 
@@ -109,7 +178,7 @@ function adaptMessage(m, myId = '') {
     conversation_id: String(m.conversationId ?? ''),
     sender_id: String(m.senderId ?? ''),
     sender_name: m.senderName || '',
-    type: ({ 1: 'text', 2: 'image', 3: 'file', 4: 'voice', 5: 'video', 6: 'card' })[Number(m.type)] || 'text',
+    type: ({ 1: 'text', 2: 'image', 3: 'file', 4: 'voice', 5: 'video', 6: 'card', 7: 'call' })[Number(m.type)] || 'text',
     content: m.content || '',
     file_url: file.url || '',
     file_name: file.name || '',
@@ -156,7 +225,24 @@ function applyEvent(event) {
     return;
   }
   if (type === 'read') {
-    // 已读：刷新已读状态（简单全量刷一次会话列表）
+    // 需求2：已读实时更新 —— 本地消息 delivery_state 改为 read（无需刷新）
+    const readMsgId = String(payload.msgId || payload.message_id || '');
+    const readConvId = String(payload.conversationId || payload.conversation_id || '');
+    if (readMsgId || readConvId) {
+      let changed = false;
+      for (const m of messages.messages) {
+        const mId = String(m.msg_id || m.id || '');
+        const cId = String(m.conversation_id || '');
+        if ((readMsgId && mId === readMsgId) || (!readMsgId && cId === readConvId)) {
+          if (m.is_mine && m.delivery_state !== 'read') {
+            m.delivery_state = 'read';
+            changed = true;
+          }
+        }
+      }
+      if (changed) messages.messages = [...messages.messages];
+    }
+    // 会话列表最后一条也同步（全量刷一次）
     conversations.load(false).catch(() => {});
     return;
   }

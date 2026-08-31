@@ -62,7 +62,8 @@ function barHeight(count: number) {
 .stat-card { text-align: center; }
 .chart { display: flex; align-items: flex-end; gap: 12px; height: 220px; padding: 12px; border: 1px solid var(--color-border-2); border-radius: 8px; }
 .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
-.bar { width: 60%; background: #1f6feb; border-radius: 4px 4px 0 0; }
+.bar { width: 60%; background: var(--app-primary); border-radius: var(--app-radius-xs) var(--app-radius-xs) 0 0; transition: opacity var(--app-transition-base); }
+.bar:hover { opacity: 0.8; }
 .bar-val { font-size: 12px; color: var(--color-text-2); }
 .bar-day { font-size: 12px; color: var(--color-text-3); }
 .empty { margin: auto; color: var(--color-text-3); }

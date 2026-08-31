@@ -38,3 +38,23 @@ pubspec.lock
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 本地备份目录（保留在磁盘，不入库）
+_backup_*/
+lib_backup_*/
+
+# 临时分析 / 调试输出
+analyze_out*.txt
+analyze_result.txt
+out.txt
+out2.txt
+*.tsbuildinfo
+vite.config.*.timestamp-*.mjs
+dist-new/
+
+# 本地工具状态（记忆 / AI 配置）
+.trae/
+.workbuddy/
+
+# 部署备份产物
+deploy/backups/

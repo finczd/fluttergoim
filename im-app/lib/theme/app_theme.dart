@@ -1,85 +1,221 @@
 import 'package:flutter/material.dart';
 
-/// Aura Messaging 设计系统（依据 D:\im-project\UI\DESIGN.md）
-/// Telegram Blue 主色 + 现代极简，Inter 字体
+/// ChatPulse 风格设计系统（依据 D:\im-project\UI\ 参考图）
+/// 浅灰背景 + 白色卡片 + 标准科技蓝主色 + Inter 字体
 class AppTheme {
-  // ===== 色板（DESIGN.md Colors） =====
-  static const Color primary = Color(0xFF0088CC); // Telegram Blue
+  // ===== 主色 =====
+  static const Color primary = Color(0xFF007AFF); // iOS 科技蓝，贴近截图
   static const Color onPrimary = Color(0xFFFFFFFF);
-  static const Color primaryContainer = Color(0xFF007BB9);
+  static const Color primaryContainer = Color(0xFFE5F1FF); // 淡蓝底（按钮/高亮）
 
-  static const Color secondary = Color(0xFF00668A);
-  static const Color secondaryContainer = Color(0xFF6ACCFF);
+  // ===== 背景/表面 =====
+  static const Color background = Color(0xFFF5F6F8); // 页面浅灰背景
+  static const Color surface = Color(0xFFFFFFFF); // 卡片/列表项白色
+  static const Color surfaceVariant = Color(0xFFF2F3F5); // 次级背景
+  static const Color surfaceContainerLow = Color(0xFFF7F8FA); // 二级页面底色
 
-  static const Color background = Color(0xFFFFFFFF);
-  static const Color surface = Color(0xFFF4F4F5);
-  static const Color surfaceContainerLow = Color(0xFFF4F3F8);
+  // ===== 文字 =====
+  static const Color textPrimary = Color(0xFF111111); // 标题/名字
+  static const Color textSecondary = Color(0xFF666666); // 预览/副文案
+  static const Color textTertiary = Color(0xFF999999); // 时间/占位
+  static const Color textLink = Color(0xFF007AFF);
 
-  static const Color textPrimary = Color(0xFF1A1B1F);
-  static const Color textSecondary = Color(0xFF3F4850);
-  static const Color textTertiary = Color(0xFF8E9096);
-  static const Color textLink = Color(0xFF0088CC);
+  // ===== 分割线 =====
+  static const Color divider = Color(0xFFE8E8E8);
 
-  static const Color divider = Color(0xFFE9E7ED);
+  // ===== 中性灰阶（显式定义）=====
+  // 背景：ColorScheme.fromSeed 会用 seedColor(蓝) 派生 outlineVariant / surfaceContainer，
+  // 结果是「偏蓝的中灰」，画在白色卡片上是明显的一圈蓝灰描边（浅色模式下尤其刺眼）。
+  // 这里显式锁定为微信式中性灰，并以 ColorScheme 角色注入，全局 58 处引用一次性生效。
+  // ——浅色——
+  static const Color ltFill = Color(0xFFF2F3F5); // 次级填充：搜索框/引用气泡/置顶条
+  static const Color ltFillLow = Color(0xFFF7F8FA); // 二级页面底色
+  static const Color ltFillHigh = Color(0xFFEDEDF0); // 按下态/高一级填充
+  static const Color ltFillHighest = Color(0xFFE4E5E7);
+  static const Color ltHairline = Color(0xFFECECEE); // 发丝线：卡片描边 / 列表分隔
+  static const Color ltOutline = Color(0xFFD9DADD); // 输入框描边（比发丝线实一点）
+  // ——深色——
+  static const Color dkFill = Color(0xFF2C2C2E);
+  static const Color dkFillLow = Color(0xFF232325);
+  static const Color dkFillHigh = Color(0xFF3A3A3C);
+  static const Color dkFillHighest = Color(0xFF48484A);
+  static const Color dkHairline = Color(0xFF2C2C2E);
+  static const Color dkOutline = Color(0xFF3A3A3C);
+  static const Color dkOnSurface = Color(0xFFFFFFFF);
+  static const Color dkOnSurfaceVariant = Color(0xFF98989F);
 
-  // 业务扩展色
-  static const Color success = Color(0xFF00B42A);
-  static const Color warning = Color(0xFFFF7D00);
-  static const Color danger = Color(0xFFBA1A1A);
+  // ===== 业务色 =====
+  static const Color success = Color(0xFF34C759);
+  static const Color warning = Color(0xFFFF9500);
+  static const Color danger = Color(0xFFFF3B30);
 
-  static const Color redPacket = Color(0xFFEE4D4D); // 红包红
-  static const Color redPacketDark = Color(0xFFC73E3E);
-  static const Color transfer = Color(0xFFFFAA4D); // 转账橙
-  static const Color transferDark = Color(0xFFFA8B1F);
-  static const Color unreadBadge = Color(0xFF0088CC);
-  static const Color announcementBg = Color(0xFFE6F4FB); // 浅蓝横幅
-  static const Color pinnedBar = Color(0xFFF0F8FD); // 置顶消息条
+  // ===== 扩展色（发现页/菜单图标） =====
+  static const Color orange = Color(0xFFFF9500); // 新朋友/朋友圈
+  static const Color green = Color(0xFF34C759); // 群聊
+  static const Color cyan = Color(0xFF00C7D4); // 系统公告/扫一扫
+  static const Color purple = Color(0xFFAF52DE); // 账号安全/切换语言
+  static const Color pink = Color(0xFFFF2D55); // 检测更新红点
+
+  // ===== 红包/转账 =====
+  static const Color redPacket = Color(0xFFFA5151);
+  static const Color redPacketDark = Color(0xFFD73B3B);
+  static const Color transfer = Color(0xFFF5A623);
+  static const Color transferDark = Color(0xFFE08D0A);
+
+  static const Color unreadBadge = Color(0xFF007AFF);
+  static const Color announcementBg = Color(0xFFE8F4FD); // 顶部提示条
+  static const Color pinnedBar = Color(0xFFF7F8FA); // 置顶消息条
+
+  // 在线状态
+  static const Color onlineDot = Color(0xFF34C759);
 
   // 头像色板
   static const List<Color> avatarColors = [
-    Color(0xFF0088CC), Color(0xFF6ACCFF), Color(0xFF7B61FF),
-    Color(0xFF00B42A), Color(0xFFFF7D00), Color(0xFFBA1A1A),
+    Color(0xFF007AFF),
+    Color(0xFF5856D6),
+    Color(0xFFFF2D55),
+    Color(0xFFFF9500),
+    Color(0xFF34C759),
+    Color(0xFFAF52DE),
   ];
 
-  // ===== 圆角（DESIGN.md Shapes） =====
-  static const double radiusSm = 8; // 按钮/输入
-  static const double radiusMd = 12; // 模态/卡片
-  static const double radiusBubble = 18; // 消息气泡
+  // ===== 圆角 =====
+  static const double radiusSm = 8;
+  static const double radiusMd = 12;
+  static const double radiusLg = 16;
+  static const double radiusBubble = 18;
   static const double radiusFull = 9999;
 
-  /// 用于登录/注册/主操作按钮：圆角 8、白字、左侧色块 + → 箭头
-  static Widget primaryButton({
-    required String label,
-    required VoidCallback? onPressed,
-    bool fullWidth = true,
-  }) {
-    return SizedBox(
-      width: fullWidth ? double.infinity : null,
-      height: 52,
-      child: FilledButton(
-        onPressed: onPressed,
+  static ThemeData light() {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: primary,
+      primary: primary,
+      secondary: primary,
+      surface: surface,
+      background: background,
+      surfaceVariant: ltFill,
+      // ↓ 显式锁定中性角色，避免蓝色 seed 派生出偏蓝的灰
+      onSurface: textPrimary,
+      onSurfaceVariant: textSecondary,
+      surfaceContainerLowest: surface,
+      surfaceContainerLow: ltFillLow,
+      surfaceContainer: ltFill,
+      surfaceContainerHigh: ltFillHigh,
+      surfaceContainerHighest: ltFillHighest,
+      outline: ltOutline,
+      outlineVariant: ltHairline,
+    );
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: background,
+      fontFamily: 'Inter',
+      appBarTheme: const AppBarTheme(
+        backgroundColor: surface,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: true,
+        titleTextStyle: TextStyle(
+          color: textPrimary,
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
+        ),
+        iconTheme: IconThemeData(color: textPrimary),
+      ),
+      inputDecorationTheme: const InputDecorationTheme(
+        filled: true,
+        fillColor: surfaceVariant,
+        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(radiusMd)),
+          borderSide: BorderSide.none,
+        ),
+      ),
+      dividerTheme: const DividerThemeData(
+        color: divider,
+        thickness: 0.5,
+        space: 0.5,
+      ),
+      filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           backgroundColor: primary,
           foregroundColor: onPrimary,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusSm)),
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600, color: onPrimary)),
-            const SizedBox(width: 8),
-            const Icon(Icons.arrow_forward, size: 18, color: onPrimary),
-          ],
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(radiusSm)),
+          padding: const EdgeInsets.symmetric(vertical: 14),
         ),
       ),
     );
   }
 
-  /// 输入框：浅灰底 + leading 圆角图标 + 圆角边框（无）
+  /// 深色模式主题（Material 框架层）
+  static ThemeData dark() {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: primary,
+      primary: primary,
+      secondary: primary,
+      brightness: Brightness.dark,
+      surface: const Color(0xFF1C1C1E),
+      background: const Color(0xFF000000),
+      surfaceVariant: dkFill,
+      // ↓ 同上：深色下的中性灰阶
+      onSurface: dkOnSurface,
+      onSurfaceVariant: dkOnSurfaceVariant,
+      surfaceContainerLowest: const Color(0xFF1C1C1E),
+      surfaceContainerLow: dkFillLow,
+      surfaceContainer: dkFill,
+      surfaceContainerHigh: dkFillHigh,
+      surfaceContainerHighest: dkFillHighest,
+      outline: dkOutline,
+      outlineVariant: dkHairline,
+    );
+    return ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.dark,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: const Color(0xFF000000),
+      fontFamily: 'Inter',
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Color(0xFF1C1C1E),
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: true,
+        titleTextStyle: TextStyle(
+          color: Colors.white,
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
+        ),
+        iconTheme: IconThemeData(color: Colors.white),
+      ),
+      inputDecorationTheme: const InputDecorationTheme(
+        filled: true,
+        fillColor: Color(0xFF2C2C2E),
+        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(radiusMd)),
+          borderSide: BorderSide.none,
+        ),
+      ),
+      dividerTheme: const DividerThemeData(
+        color: Color(0xFF3A3A3C),
+        thickness: 0.5,
+        space: 0.5,
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: primary,
+          foregroundColor: onPrimary,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(radiusSm)),
+          padding: const EdgeInsets.symmetric(vertical: 14),
+        ),
+      ),
+    );
+  }
+
+  // ===================== 复用组件 =====================
+
+  /// 登录/注册/搜索等输入框样式
   static InputDecoration authInput({
     required String hint,
     required IconData icon,
@@ -88,90 +224,83 @@ class AppTheme {
   }) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(fontSize: 15, color: textTertiary),
+      hintStyle: const TextStyle(color: textTertiary, fontSize: 15),
       prefixIcon: Icon(icon, size: 20, color: textTertiary),
       suffixIcon: suffix,
       filled: true,
       fillColor: surface,
-      isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: BorderSide.none,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: const OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(radiusMd)),
+        borderSide: BorderSide(color: divider),
       ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: BorderSide.none,
+      enabledBorder: const OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(radiusMd)),
+        borderSide: BorderSide(color: divider),
       ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: const BorderSide(color: primary, width: 1.2),
+      focusedBorder: const OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(radiusMd)),
+        borderSide: BorderSide(color: primary, width: 1.5),
+      ),
+      errorBorder: const OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(radiusMd)),
+        borderSide: BorderSide(color: danger),
       ),
     );
   }
 
-  /// 顶部品牌圆头像（内含 send 箭头）：登录/注册页面用
+  /// 主按钮
+  static Widget primaryButton({
+    required String label,
+    VoidCallback? onPressed,
+    bool fullWidth = true,
+  }) {
+    final btn = SizedBox(
+      height: 48,
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: primary,
+          foregroundColor: onPrimary,
+          disabledBackgroundColor: primary.withValues(alpha: 0.4),
+          disabledForegroundColor: onPrimary,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(radiusMd),
+          ),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+      ),
+    );
+    return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
+  }
+
+  /// 默认品牌头像（无头像时的占位）
   static Widget brandAvatar({double size = 80}) {
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: primary,
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: primary.withOpacity(0.25),
-            blurRadius: 18,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [primary, primary.withValues(alpha: 0.75)],
+        ),
+        borderRadius: BorderRadius.circular(size / 4),
       ),
-      child: const Center(
-        child: Icon(Icons.send_rounded, size: 36, color: Colors.white),
+      child: Icon(
+        Icons.chat_bubble_rounded,
+        color: onPrimary,
+        size: size * 0.45,
       ),
     );
   }
+}
 
-  static ThemeData light() {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: primary,
-      primary: primary,
-      secondary: secondary,
-      surface: background,
-    );
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: scheme,
-      scaffoldBackgroundColor: background,
-      fontFamily: 'Inter',
-      appBarTheme: const AppBarTheme(
-        backgroundColor: background,
-        elevation: 0,
-        scrolledUnderElevation: 0.5,
-        centerTitle: false,
-        titleTextStyle: TextStyle(
-          color: textPrimary,
-          fontSize: 18,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: surface,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(radiusMd),
-          borderSide: BorderSide.none,
-        ),
-      ),
-      filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          backgroundColor: primary,
-          foregroundColor: onPrimary,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusSm)),
-          padding: const EdgeInsets.symmetric(vertical: 14),
-        ),
-      ),
-    );
-  }
+/// BuildContext 快捷取色（深色模式适配）
+extension AppContextColors on BuildContext {
+  ColorScheme get cs => Theme.of(this).colorScheme;
 }

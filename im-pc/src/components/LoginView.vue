@@ -1,22 +1,40 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, onBeforeUnmount } from 'vue';
 import { useAuthStore } from '../stores/auth';
-import QrCanvas from './QrCanvas.vue';
 
 const auth = useAuthStore();
-// Go 后端暂未实现扫码登录：默认账号登录，扫码 tab 提示不可用
 const activeTab = ref('password');
 const account = ref('');
 const password = ref('');
 const busy = ref(false);
+const qrCanvas = ref(null);
+const qrLoading = ref(false);
+
+async function startQr() {
+  qrLoading.value = true;
+  try {
+    await auth.startQr();
+    // 二维码内容 = payload（Go 后端返回），用 qrcode 库渲染到 canvas
+    const payload = auth.qr?.payload || '';
+    if (payload && qrCanvas.value) {
+      const QRCode = await import('qrcode');
+      await QRCode.toCanvas(qrCanvas.value, payload, { width: 180, margin: 1 });
+    }
+  } catch (e) {
+    auth.qrStatus = e?.message || '二维码生成失败';
+    auth.qrOverlay = true;
+  } finally {
+    qrLoading.value = false;
+  }
+}
 
 function switchTab(tab) {
-  if (tab === 'qr') {
-    auth.qrStatus = '扫码登录暂未接入，请使用账号密码登录';
-    auth.qrOverlay = true;
-    return;
-  }
   activeTab.value = tab;
+  if (tab === 'qr') {
+    startQr();
+  } else {
+    auth.stopQr();
+  }
 }
 
 async function submit() {
@@ -25,7 +43,17 @@ async function submit() {
   busy.value = false;
 }
 
-watch(() => auth.qr, () => {}, { deep: true });
+// 二维码状态变化（scanned/confirmed）自动刷新 UI
+watch(() => auth.qrStatus, () => {});
+watch(() => auth.qr?.payload, () => {
+  if (activeTab.value === 'qr' && auth.qr?.payload) {
+    import('qrcode').then(QRCode => {
+      if (qrCanvas.value) QRCode.toCanvas(qrCanvas.value, auth.qr.payload, { width: 180, margin: 1 });
+    });
+  }
+});
+
+onBeforeUnmount(() => auth.stopQr());
 </script>
 
 <template>
@@ -57,16 +85,13 @@ watch(() => auth.qr, () => {}, { deep: true });
 
         <div v-show="activeTab === 'qr'" class="login-pane active">
           <div class="qr-shell">
-            <div class="qr-placeholder">
-              <svg width="140" height="140" viewBox="0 0 140 140" fill="none">
-                <rect x="10" y="10" width="50" height="50" rx="6" stroke="currentColor" stroke-width="4"/>
-                <rect x="80" y="10" width="50" height="50" rx="6" stroke="currentColor" stroke-width="4"/>
-                <rect x="10" y="80" width="50" height="50" rx="6" stroke="currentColor" stroke-width="4"/>
-                <path d="M80 90h10v10H80zm14 0h10v10H94zm0 14h10v10H94zm14-14h10v10h-10z" fill="currentColor"/>
-              </svg>
+            <canvas v-show="auth.qr?.payload" ref="qrCanvas" width="180" height="180"></canvas>
+            <div v-if="qrLoading || (!auth.qr?.payload && !auth.qrOverlay)" class="qr-placeholder">
+              <span>{{ qrLoading ? '正在生成…' : '二维码加载中…' }}</span>
             </div>
             <div v-if="auth.qrOverlay" class="qr-overlay">
               <span>{{ auth.qrStatus }}</span>
+              <button type="button" @click="startQr">刷新二维码</button>
               <button type="button" @click="activeTab = 'password'">使用账号登录</button>
             </div>
           </div>

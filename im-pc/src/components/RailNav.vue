@@ -20,7 +20,8 @@ const rail = [
   { view: 'contacts', label: '联系人', icon: 'i-contact' },
   { view: 'groups', label: '群聊', icon: 'i-group' },
   { view: 'favorites', label: '收藏', icon: 'i-star' },
-  { view: 'files', label: '文件', icon: 'i-folder' }
+  { view: 'files', label: '文件', icon: 'i-folder' },
+  { view: 'moments', label: '朋友圈', icon: 'i-moments' }
 ];
 
 const chatBadge = computed(() => (conversations.totalUnread > 99 ? '99+' : String(conversations.totalUnread)));

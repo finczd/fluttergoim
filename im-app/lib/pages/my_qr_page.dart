@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../l10n/app_locale.dart';
 import '../services/friend_service.dart';
 import '../theme/app_theme.dart';
 
@@ -32,18 +33,19 @@ class _MyQrPageState extends State<MyQrPage> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     final p = _profile;
-    final name = p?['nickname']?.toString() ?? 'ChatPulse 用户';
+    final name = p?['nickname']?.toString() ?? t('myQrDefaultName');
     final account = p?['account']?.toString() ?? '';
     final id = p?['id']?.toString() ?? '';
     final avatar = p?['avatar']?.toString() ?? '';
     final qrData = 'chatpulse://user?uid=$id&name=${Uri.encodeComponent(name)}';
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('我的二维码'),
-        backgroundColor: AppTheme.background,
+        title: Text(t('myQrTitle')),
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         elevation: 0,
       ),
       body: Center(
@@ -53,68 +55,70 @@ class _MyQrPageState extends State<MyQrPage> {
             children: [
               // 头像 + 昵称 + 账号
               Container(
-                width: 64, height: 64,
-                decoration: BoxDecoration(
+                width: 64,
+                height: 64,
+                decoration: const BoxDecoration(
                   color: AppTheme.primary,
                   shape: BoxShape.circle,
                 ),
                 clipBehavior: Clip.antiAlias,
                 alignment: Alignment.center,
                 child: avatar.isNotEmpty
-                    ? Image.network(avatar, fit: BoxFit.cover,
+                    ? Image.network(avatar,
+                        fit: BoxFit.cover,
                         errorBuilder: (_, __, ___) => Text(
                             name.isEmpty ? '?' : name.characters.first,
                             style: const TextStyle(
                                 color: Colors.white, fontSize: 26)))
                     : Text(name.isEmpty ? '?' : name.characters.first,
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 26)),
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 26)),
               ),
               const SizedBox(height: 12),
               Text(name,
                   style: const TextStyle(
                       fontSize: 18, fontWeight: FontWeight.w600)),
-              if (account.isNotEmpty)
-                const SizedBox(height: 4),
+              if (account.isNotEmpty) const SizedBox(height: 4),
               if (account.isNotEmpty)
                 Text(account,
-                    style: const TextStyle(
-                        fontSize: 13, color: AppTheme.textTertiary)),
+                    style: TextStyle(
+                        fontSize: 13, color: context.cs.onSurfaceVariant)),
               const SizedBox(height: 24),
               // 二维码卡片
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: context.cs.surface,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppTheme.divider, width: 0.5),
                   boxShadow: [
                     BoxShadow(
-                        color: Colors.black.withOpacity(0.06),
+                        color: Colors.black.withValues(alpha: 0.06),
                         blurRadius: 16,
                         offset: const Offset(0, 4)),
                   ],
                 ),
                 child: id.isEmpty
                     ? const SizedBox(
-                        width: 220, height: 220,
+                        width: 220,
+                        height: 220,
                         child: Center(child: CircularProgressIndicator()))
                     : QrImageView(
                         data: qrData,
                         version: QrVersions.auto,
                         size: 220,
                         backgroundColor: Colors.white,
-                        eyeStyle: const QrEyeStyle(
+                        eyeStyle: QrEyeStyle(
                             eyeShape: QrEyeShape.square,
-                            color: AppTheme.textPrimary),
-                        dataModuleStyle: const QrDataModuleStyle(
+                            color: context.cs.onSurface),
+                        dataModuleStyle: QrDataModuleStyle(
                             dataModuleShape: QrDataModuleShape.square,
-                            color: AppTheme.textPrimary),
+                            color: context.cs.onSurface),
                       ),
               ),
               const SizedBox(height: 20),
-              const Text('扫一扫上面的二维码，添加我为好友',
-                  style: TextStyle(fontSize: 13, color: AppTheme.textTertiary)),
+              Text(t('myQrScanToAdd'),
+                  style: TextStyle(
+                      fontSize: 13, color: context.cs.onSurfaceVariant)),
             ],
           ),
         ),

@@ -136,4 +136,36 @@ func DeptMembersHandler() gin.HandlerFunc {
 	}
 }
 
+// ChangePasswordHandler 修改登录密码（需校验原密码）
+func ChangePasswordHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		var body struct {
+			OldPassword string `json:"oldPassword"`
+			NewPassword string `json:"newPassword"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		if err := service.ChangePassword(c.Request.Context(), uid, body.OldPassword, body.NewPassword); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// DeleteAccountHandler 注销账户
+func DeleteAccountHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		if err := service.DeleteAccount(c.Request.Context(), uid); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
 var _ = errs.Forbidden

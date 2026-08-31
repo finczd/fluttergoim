@@ -29,8 +29,14 @@ export function replyPreview(reply) {
 
 export function asset(value) {
   if (!value) return '';
-  const raw = String(value);
-  if (/^https?:\/\//i.test(raw)) return raw;
+  let raw = String(value);
+  if (/^https?:\/\//i.test(raw)) {
+    // 需求2修复：存量消息里的 localhost:9000（MinIO）对手机/局域网不可达 → 换成当前访问主机
+    if (/localhost|127\.0\.0\.1/.test(raw)) {
+      raw = raw.replace(/localhost|127\.0\.0\.1/, window.location.hostname || 'localhost');
+    }
+    return raw;
+  }
   // 所有非 http(s) 路径都拼到站点 origin 根目录下
   // （无论页面在 /pc/ 还是 /pc-vue-test/，资源都在 /admin/、/uploads/ 等根路径下）
   const rel = raw.replace(/^\/+/, '');
@@ -108,5 +114,32 @@ export function preview(message) {
     if (extra.card_type === 'voice_call') return '[语音通话]';
     if (extra.card_type === 'video_call') return '[视频通话]';
   }
+  if (message.type === 'call') {
+    let sig = {};
+    try { sig = typeof message.content === 'string' ? JSON.parse(message.content) : (message.content || {}); } catch (_) {}
+    const action = sig.action || 'hangup';
+    const callType = sig.callType === 'video' ? '视频' : '语音';
+    const duration = Number(sig.duration || 0);
+    const durText = duration > 0 ? ` ${formatDuration(duration)}` : '';
+    if (action === 'invite') return `[${callType}通话 未接]`;
+    if (action === 'cancel') return `[${callType}通话 已取消]`;
+    if (action === 'reject') return `[${callType}通话 已拒绝]`;
+    return `[${callType}通话${durText}]`;
+  }
+  if (message.type === 'redpacket' || message.type === 'transfer') {
+    let data = {};
+    try { data = typeof message.content === 'string' ? JSON.parse(message.content) : (message.content || {}); } catch (_) {}
+    const note = (data && data.note) || '';
+    if (message.type === 'redpacket') return note ? `[红包] ${note}` : '[红包]';
+    const amount = Number((data && data.amount) || 0);
+    return note ? `[转账] ${note}` : `[转账] ¥${amount}`;
+  }
   return ({ image: '[图片]', file: '[文件]', voice: '[语音]', video: '[视频]', location: '[位置]', card: '[卡片]', system: '[系统消息]' }[message.type] || message.content || '新消息');
+}
+
+function formatDuration(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m > 0) return `${m}:${String(s).padStart(2, '0')}`;
+  return `${s}秒`;
 }

@@ -9,6 +9,16 @@ export const useUiStore = defineStore('ui', () => {
   const theme = ref(localStorage.getItem('qm_pc_theme') || 'system');
   const showViewport = ref(false);
 
+  // 朋友圈：当前查看的所有者（null = 自己的时间线；{id,name} = 好友的朋友圈）
+  const momentsOwner = ref(null);
+  function openMoments(owner) {
+    momentsOwner.value = owner ? { id: String(owner.id ?? ''), name: owner.name || owner.nickname || '' } : null;
+    view.value = 'moments';
+  }
+  function closeMoments() {
+    momentsOwner.value = null;
+  }
+
   const toasts = ref([]);
   let toastSeq = 0;
   function toast(title, message = '', type = 'success', duration = 2600) {
@@ -67,9 +77,26 @@ export const useUiStore = defineStore('ui', () => {
     editingMessage.value = null;
   }
 
-  const call = ref({ open: false, id: 0, type: 'voice', title: '通话' });
-  function openCall(id, type = 'voice', title = '通话') {
-    call.value = { open: true, id: Number(id), type, title };
+  // 通话窗口状态：
+  //  - convId：挂断时写通话记录用（此前缺失导致记录永远写不进去）
+  //  - role：caller 主叫 / callee 被叫（被叫要先显示接听/拒绝，不自动进房）
+  //  - accepted：对方是否已接听（主叫据此把"等待接听"切到"通话中"）
+  const call = ref({ open: false, id: 0, convId: '', type: 'voice', title: '通话', role: 'caller', peerName: '', accepted: false });
+  function openCall(id, type = 'voice', title = '通话', extra = {}) {
+    call.value = {
+      open: true,
+      id: Number(id),
+      convId: String(extra.convId || id || ''),
+      type,
+      title,
+      role: extra.role || 'caller',
+      peerName: extra.peerName || title || '对方',
+      accepted: false
+    };
+  }
+  function markCallAccepted() {
+    if (!call.value.open || call.value.accepted) return;
+    call.value = { ...call.value, accepted: true };
   }
   function closeCall() {
     call.value = { ...call.value, open: false, id: 0 };
@@ -87,10 +114,11 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   return {
-    view, filter, search, theme, showViewport,
+    view, filter, search, theme, showViewport, momentsOwner,
     toasts, modal, inspector, contextMenu, call, selectedContact,
     toast, openModal, closeModal, openInspector, openUserInspector, openConversationInspector, closeInspector,
-    openContextMenu, closeContextMenu, editingMessage, openEditMessage, closeEditMessage, openCall, closeCall, openContact, closeContact,
+    openContextMenu, closeContextMenu, editingMessage, openEditMessage, closeEditMessage, openCall, closeCall, markCallAccepted, openContact, closeContact,
+    openMoments, closeMoments,
     setTheme, initTheme
   };
 });

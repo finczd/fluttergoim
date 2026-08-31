@@ -176,6 +176,98 @@ export const useMessagesStore = defineStore('messages', () => {
     }
   }
 
+  // 通话信令：invite / accept / reject / cancel / hangup
+  // 与 sendMessage 的区别：不走 current.value（来电所属会话未必是当前打开的会话），
+  // 也不做乐观插入（信令只驱动通话状态，可见的通话记录由 hangup 那条消息承载）
+  async function sendCallSignal(convId, action, callType = 'voice', extra = {}) {
+    if (!convId) return;
+    const auth = useAuthStore();
+    try {
+      await api('messages/send', {
+        conversation_id: String(convId),
+        client_msg_id: 'call_' + action + '_' + Date.now(),
+        message_type: 'call',
+        type: 7,
+        content: JSON.stringify({
+          action,
+          callType,
+          roomId: String(convId),
+          callerName: auth.user?.nickname || '',
+          ts: Date.now(),
+          ...extra
+        })
+      }, 'POST');
+    } catch (_) { /* 信令失败不阻断 UI */ }
+  }
+
+  // 发红包 / 转账：构造 content JSON（对齐移动端 chat_page._openMoneyPage），乐观插入
+  async function sendMoney(payload = {}) {
+    const auth = useAuthStore();
+    const conversations = useConversationsStore();
+    const ui = useUiStore();
+    if (!current.value) return;
+    const kind = payload.kind === 'transfer' ? 'transfer' : 'redpacket';
+    const contentData = {
+      kind,
+      amount: Number(payload.amount || 0),
+      note: payload.note || '',
+      ts: Date.now()
+    };
+    if (kind === 'redpacket') {
+      contentData.mode = payload.mode === 'lucky' ? 'lucky' : 'normal';
+      contentData.count = Number(payload.count || 1);
+    } else {
+      // 转账：收款人 = 当前会话对方（单聊）
+      const peerId = payload.toUserId || current.value.peer?.id || '';
+      contentData.toUserId = String(peerId);
+      contentData.toName = payload.toName || current.value.peer?.nickname || current.value.title || '';
+    }
+    const clientId = 'pc_' + Date.now() + '_' + cryptoRandom(12);
+    const requestPayload = {
+      conversation_id: String(current.value.id),
+      client_msg_id: clientId,
+      message_type: kind,
+      content: JSON.stringify(contentData)
+    };
+    const optimistic = {
+      id: 'local_' + clientId,
+      client_msg_id: clientId,
+      conversation_id: String(current.value.id),
+      sender_id: String(auth.user?.id || ''),
+      sender_name: auth.user?.nickname || '我',
+      sender_avatar: auth.user?.avatar || '',
+      message_type: kind,
+      type: kind,
+      content: JSON.stringify(contentData),
+      file_url: '',
+      file_name: '',
+      file_size: 0,
+      duration: 0,
+      extra: {},
+      reply: null,
+      status: 1,
+      is_mine: true,
+      delivery_state: 'sending',
+      local_status: 'sending',
+      local_created_ms: Date.now(),
+      created_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      retry_payload: requestPayload
+    };
+    mergeMessages([optimistic], false);
+    try {
+      const message = await api('messages/send', requestPayload, 'POST');
+      mergeMessages([message], false);
+      // 发红包/转账的扣款已由服务端在发消息时原子完成（B-19），
+      // 这里**绝对不能再调 wallet/record 记支出**，否则会重复扣款。
+      // 发送成功即代表已扣款成功，余额由服务端保证一致。
+      await conversations.load(false);
+    } catch (error) {
+      optimistic.local_status = 'failed';
+      optimistic.retry_payload = requestPayload;
+      ui.toast('发送失败', error.message, 'error');
+    }
+  }
+
   function retryFailedMessage(tempId) {
     const message = messages.value.find(item => String(item.id) === String(tempId));
     if (message && message.local_status === 'failed') sendMessage({}, message);
@@ -245,13 +337,20 @@ export const useMessagesStore = defineStore('messages', () => {
   async function pinMessage(messageId, pinned = true) {
     const ui = useUiStore();
     try {
-      await api('messages/pin', { message_id: String(messageId), pinned: !!pinned }, 'POST');
+      // 需求3修复：必须传 conversation_id，否则后端 URL 变 /conversation//pin-message → 1003
+      const convId = String(current.value?.id || '');
+      const msg = messages.value.find(item => String(item.id) === String(messageId));
+      await api('messages/pin', {
+        message_id: String(messageId),
+        conversation_id: convId,
+        content: msg?.content || '',
+        pinned: !!pinned
+      }, 'POST');
       ui.toast(pinned ? '已置顶' : '已取消置顶');
       // 重新拉置顶列表
-      const id = String(current.value?.id || '');
-      if (id) {
+      if (convId) {
         try {
-          pins.value = (await api('messages/pins', { conversation_id: id })) || [];
+          pins.value = (await api('messages/pins', { conversation_id: convId })) || [];
         } catch (_) {}
       }
     } catch (error) {
@@ -320,7 +419,7 @@ export const useMessagesStore = defineStore('messages', () => {
 
   return {
     current, currentDetail, messages, pins, hasMoreMessages, loadingOlder, replyTo, drafts, draftDirty, readState, scrollSignal,
-    mergeMessages, openConversation, loadOlderMessages, sendMessage, retryFailedMessage,
+    mergeMessages, openConversation, loadOlderMessages, sendMessage, sendMoney, sendCallSignal, retryFailedMessage,
     recallMessage, editMessage, favoriteMessage, pinMessage, isPinned, dismissAnnouncement, openDirect, setReply, clearReply,
     draftFor, clearDraft, saveDraft, persistDraftCache, normalizeDraftRows, applyReadState, scheduleReadReceipt
   };

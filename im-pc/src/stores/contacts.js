@@ -1,11 +1,14 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import api from '../api/client';
 import { useUiStore } from './ui';
 
 export const useContactsStore = defineStore('contacts', () => {
   const friends = ref([]);
   const requests = ref([]);
+
+  // 需求1：待处理好友申请数（通讯录/新朋友红点）
+  const requestCount = computed(() => requests.value.filter(r => Number(r.status) === 0).length);
 
   async function loadFriends(render = true) {
     try {
@@ -43,5 +46,5 @@ export const useContactsStore = defineStore('contacts', () => {
     }
   }
 
-  return { friends, requests, loadFriends, loadRequests, respondFriendRequest, addFriend };
+  return { friends, requests, requestCount, loadFriends, loadRequests, respondFriendRequest, addFriend };
 });

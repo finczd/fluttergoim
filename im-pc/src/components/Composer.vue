@@ -1,18 +1,20 @@
 <script setup>
-import { ref, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick } from 'vue';
 import { useMessagesStore } from '../stores/messages';
 import { useUiStore } from '../stores/ui';
+import { useAuthStore } from '../stores/auth';
 import { uploadFile } from '../api/client';
 import { EMOJIS } from '../utils/helpers';
 
 const messages = useMessagesStore();
 const ui = useUiStore();
+const auth = useAuthStore();
 const text = ref('');
 const inputEl = ref(null);
 const showEmoji = ref(false);
 const draftTimer = ref(null);
 
-// 需求11：语音/视频通话（TRTC，单聊）
+// 需求11：语音/视频通话（TRTC，单聊）—— 先发 invite 信令再开窗，否则对方不会响铃
 function onCallClick() {
   if (!messages.current) {
     ui.toast('请先选择一个会话');
@@ -22,7 +24,16 @@ function onCallClick() {
     ui.toast('暂仅支持单聊通话', '', 'warning');
     return;
   }
-  ui.openCall(messages.current.id, 'voice', messages.current.title || '通话');
+  if (ui.call.open) {
+    ui.toast('正在通话中', '', 'warning');
+    return;
+  }
+  startCall(messages.current.id, 'voice', messages.current.title || '通话');
+}
+
+function startCall(convId, callType, peerName) {
+  messages.sendCallSignal(convId, 'invite', callType);
+  ui.openCall(convId, callType, peerName, { role: 'caller', peerName });
 }
 
 watch(
@@ -140,11 +151,75 @@ function onDrop(e) {
   images.forEach(uploadAndSend);
 }
 
-async function startCall(type) {
-  // 已废弃：当前版本不支持主动发起通话
-  onCallClick();
-  return;
+// ============ 红包 / 转账 ============
+const isGroup = computed(() => messages.current?.type === 'group');
+const peerOptions = computed(() => {
+  if (!isGroup.value) return [];
+  const members = messages.currentDetail?.members || [];
+  return members
+    .filter(m => String(m.id) !== String(auth.user?.id))
+    .map(m => ({ id: String(m.id), name: m.nickname || m.username || '用户' }));
+});
+
+const showMoney = ref(false);
+const moneyKind = ref('redpacket');
+const moneyAmount = ref('');
+const moneyNote = ref('');
+const moneyMode = ref('normal');
+const moneyCount = ref(1);
+const moneyPeerId = ref('');
+const moneyBusy = ref(false);
+const moneyError = ref('');
+
+function openMoney(kind) {
+  if (!messages.current) {
+    ui.toast('请先选择一个会话');
+    return;
+  }
+  moneyKind.value = kind;
+  moneyAmount.value = '';
+  moneyNote.value = '';
+  moneyMode.value = 'normal';
+  moneyCount.value = 1;
+  moneyError.value = '';
+  if (isGroup.value) {
+    const opts = peerOptions.value;
+    moneyPeerId.value = opts.length ? opts[0].id : '';
+  } else {
+    moneyPeerId.value = messages.current.peer?.id || '';
+  }
+  showMoney.value = true;
 }
+function closeMoney() { showMoney.value = false; }
+
+async function submitMoney() {
+  if (moneyBusy.value) return;
+  const amount = Number(moneyAmount.value || 0);
+  if (!amount || amount <= 0) {
+    moneyError.value = '请输入有效金额';
+    return;
+  }
+  moneyBusy.value = true;
+  moneyError.value = '';
+  try {
+    const payload = { kind: moneyKind.value, amount, note: moneyNote.value.trim() };
+    if (moneyKind.value === 'redpacket') {
+      payload.mode = moneyMode.value;
+      payload.count = Number(moneyCount.value || 1);
+    } else {
+      const o = peerOptions.value.find(p => p.id === moneyPeerId.value);
+      payload.toUserId = String(moneyPeerId.value || '');
+      payload.toName = (o ? o.name : '') || messages.current.title || '';
+    }
+    await messages.sendMoney(payload);
+    showMoney.value = false;
+  } catch (e) {
+    moneyError.value = e.message || '发送失败';
+  } finally {
+    moneyBusy.value = false;
+  }
+}
+
 </script>
 
 <template>
@@ -166,6 +241,8 @@ async function startCall(type) {
       <button class="tool-button" type="button" title="发送文件" @click="pickFiles('file')"><svg><use href="#i-paperclip" /></svg></button>
       <button class="tool-button" type="button" title="语音通话" @click="onCallClick"><svg><use href="#i-phone" /></svg></button>
       <button class="tool-button" type="button" title="视频通话" @click="onCallClick"><svg><use href="#i-video-call" /></svg></button>
+      <button class="tool-button" type="button" title="红包" @click="openMoney('redpacket')"><svg><use href="#i-redpacket" /></svg></button>
+      <button class="tool-button" type="button" title="转账" @click="openMoney('transfer')"><svg><use href="#i-transfer" /></svg></button>
       <span class="upload-status"></span>
     </div>
 
@@ -188,6 +265,56 @@ async function startCall(type) {
     <div class="composer-bottom">
       <span class="composer-hint">Enter 发送 · Shift + Enter 换行</span>
       <button class="send-button" type="button" @click="send"><span>发送</span><svg><use href="#i-send" /></svg></button>
+    </div>
+
+    <!-- 红包 / 转账输入弹窗 -->
+    <div v-if="showMoney" class="modal-mask" @click.self="closeMoney">
+      <div class="money-compose-modal">
+        <div class="money-compose-head">
+          <span>{{ moneyKind === 'redpacket' ? '发红包' : '转账' }}</span>
+          <button class="money-modal-close" type="button" title="关闭" @click="closeMoney"><svg><use href="#i-close" /></svg></button>
+        </div>
+
+        <div v-if="isGroup && moneyKind === 'transfer'" class="money-field">
+          <label>收款人</label>
+          <select v-model="moneyPeerId">
+            <option v-for="o in peerOptions" :key="o.id" :value="o.id">{{ o.name }}</option>
+          </select>
+        </div>
+
+        <div class="money-field">
+          <label>金额</label>
+          <input v-model="moneyAmount" type="number" min="0.01" step="0.01" placeholder="0.00" />
+        </div>
+
+        <template v-if="moneyKind === 'redpacket' && isGroup">
+          <div class="money-field">
+            <label>类型</label>
+            <select v-model="moneyMode">
+              <option value="normal">普通红包</option>
+              <option value="lucky">拼手气红包</option>
+            </select>
+          </div>
+          <div v-if="moneyMode === 'lucky'" class="money-field">
+            <label>个数</label>
+            <input v-model="moneyCount" type="number" min="1" step="1" />
+          </div>
+        </template>
+
+        <div class="money-field">
+          <label>留言</label>
+          <input v-model="moneyNote" maxlength="30" :placeholder="moneyKind === 'redpacket' ? '恭喜发财，大吉大利' : '添加转账说明'" />
+        </div>
+
+        <div v-if="moneyError" class="money-modal-error">{{ moneyError }}</div>
+
+        <div class="money-compose-actions">
+          <button class="money-cancel" type="button" @click="closeMoney">取消</button>
+          <button class="money-submit" type="button" :disabled="moneyBusy" @click="submitMoney">
+            {{ moneyBusy ? '发送中…' : (moneyKind === 'redpacket' ? '塞钱进红包' : '确认转账') }}
+          </button>
+        </div>
+      </div>
     </div>
   </footer>
 </template>

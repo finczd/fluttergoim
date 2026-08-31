@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "pinia": "^2.1.7",
+    "qrcode": "^1.5.4",
+    "trtc-js-sdk": "^4.15.21",
     "vue": "^3.4.21"
   },
   "devDependencies": {

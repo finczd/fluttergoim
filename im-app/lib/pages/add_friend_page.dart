@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../services/friend_service.dart';
+import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
 
 /// 添加好友：搜索用户 + 发送申请
 class AddFriendPage extends StatefulWidget {
@@ -49,54 +51,35 @@ class _AddFriendPageState extends State<AddFriendPage> {
   }
 
   Future<void> _request(Map<String, dynamic> u) async {
-    final msgCtl = TextEditingController(text: '你好，我是 ChatPulse 用户，希望能加你为好友');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('添加好友'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('向 ${u['nickname'] ?? u['account'] ?? '用户'} 发送好友申请',
-                style: const TextStyle(fontSize: 14, color: AppTheme.textSecondary)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: msgCtl,
-              maxLines: 3,
-              maxLength: 100,
-              decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: '验证消息',
-                  isDense: true),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('取消')),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('发送'),
-          ),
-        ],
-      ),
+    final t = AppLocalizations.of(context).t;
+    final name =
+        (u['nickname'] ?? u['account'] ?? t('addFriendUser')).toString();
+    final msg = await AppDialogs.input(
+      context,
+      title: t('addFriendTitle'),
+      hint: t('addFriendMsgHint', {'name': name}),
+      initialValue: t('addFriendDefaultMsg'),
+      maxLines: 3,
+      maxLength: 100,
+      confirmText: t('addFriendSend'),
     );
-    if (ok != true) return;
-    final sent = await _svc.request(u['id']?.toString() ?? '', message: msgCtl.text.trim());
+    if (msg == null) return;
+    final sent = await _svc.request(u['id']?.toString() ?? '', message: msg);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(sent ? '申请已发送' : '发送失败（可能已是好友）')));
+      AppDialogs.toast(
+          context, sent ? t('addFriendSent') : t('addFriendSendFailed'));
       if (sent) Navigator.of(context).pop();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('添加好友'),
-        backgroundColor: AppTheme.background,
+        title: Text(t('addFriendTitle')),
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         elevation: 0,
       ),
       body: Column(
@@ -107,7 +90,7 @@ class _AddFriendPageState extends State<AddFriendPage> {
               controller: _kw,
               onChanged: _onChange,
               decoration: AppTheme.authInput(
-                  hint: '输入账号 / 昵称 / 手机号 / 邮箱', icon: Icons.search),
+                  hint: t('addFriendSearchHint'), icon: Icons.search),
             ),
           ),
           if (_loading) const LinearProgressIndicator(minHeight: 2),
@@ -118,22 +101,30 @@ class _AddFriendPageState extends State<AddFriendPage> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.person_search_outlined,
-                            size: 64, color: AppTheme.textTertiary),
+                            size: 64, color: context.cs.onSurfaceVariant),
                         const SizedBox(height: 12),
-                        Text(_kw.text.isEmpty ? '输入关键字搜索用户' : '未找到相关用户',
-                            style: const TextStyle(
-                                color: AppTheme.textTertiary, fontSize: 14)),
+                        Text(_kw.text.isEmpty
+                            ? t('addFriendInputKeyword')
+                            : t('addFriendNoUser'),
+                            style: TextStyle(
+                                color: context.cs.onSurfaceVariant,
+                                fontSize: 14)),
                       ],
                     ),
                   )
                 : ListView.separated(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     itemCount: _results.length,
-                    separatorBuilder: (_, __) => const Divider(
-                        height: 1, indent: 76, endIndent: 16, color: AppTheme.divider),
+                    separatorBuilder: (_, __) => Divider(
+                        height: 1,
+                        indent: 76,
+                        endIndent: 16,
+                        color: context.cs.outlineVariant),
                     itemBuilder: (_, i) {
                       final u = _results[i];
-                      final name = (u['nickname'] ?? u['account'] ?? '用户').toString();
+                      final name = (u['nickname'] ?? u['account'] ??
+                              t('addFriendUser'))
+                          .toString();
                       return ListTile(
                         onTap: () => _request(u),
                         leading: CircleAvatar(
@@ -146,9 +137,11 @@ class _AddFriendPageState extends State<AddFriendPage> {
                             style: const TextStyle(
                                 fontSize: 15, fontWeight: FontWeight.w500)),
                         subtitle: Text(
-                            (u['account'] ?? u['email'] ?? u['phone'] ?? '').toString(),
-                            style: const TextStyle(
-                                fontSize: 12, color: AppTheme.textTertiary)),
+                            (u['account'] ?? u['email'] ?? u['phone'] ?? '')
+                                .toString(),
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: context.cs.onSurfaceVariant)),
                         trailing: const Icon(Icons.person_add_alt_1,
                             color: AppTheme.primary, size: 20),
                       );

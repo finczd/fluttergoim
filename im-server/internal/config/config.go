@@ -1,10 +1,61 @@
 package config
 
 import (
+	"bufio"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
+
+// loadDotEnv 加载当前工作目录或父目录（最多 5 层）的 .env 到环境变量。
+// 已存在的真实环境变量优先级更高，不会被 .env 覆盖。
+// 不依赖 godotenv 第三方库，避免 GOPROXY 拉取失败。
+func loadDotEnv() {
+	wd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	for i := 0; i < 6; i++ {
+		p := filepath.Join(wd, ".env")
+		if f, e := os.Open(p); e == nil {
+			scanner := bufio.NewScanner(f)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+					continue
+				}
+				// 跳过 export FOO=bar 前缀
+				if strings.HasPrefix(line, "export ") {
+					line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+				}
+				idx := strings.Index(line, "=")
+				if idx <= 0 {
+					continue
+				}
+				k := strings.TrimSpace(line[:idx])
+				v := strings.TrimSpace(line[idx+1:])
+				if len(v) >= 2 {
+					if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+						v = v[1 : len(v)-1]
+					}
+				}
+				if _, exists := os.LookupEnv(k); !exists {
+					_ = os.Setenv(k, v)
+				}
+			}
+			f.Close()
+			log.Printf("[info] loaded env: %s", p)
+			return
+		}
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			break
+		}
+		wd = parent
+	}
+}
 
 // Config 全局配置（环境变量驱动）
 type Config struct {
@@ -90,6 +141,9 @@ func getenvInt(key string, def int) int {
 }
 
 func Load() *Config {
+	// 先读 .env（im-server/.env 或父目录），再回落到默认值
+	loadDotEnv()
+
 	cfg := &Config{
 		AppEnv: getenv("APP_ENV", "dev"),
 		NodeID: getenv("NODE_ID", "node-a"),
@@ -112,9 +166,10 @@ func Load() *Config {
 		MinIOBucket:    getenv("MINIO_BUCKET", "im-files"),
 		MinIOPublicURL: getenv("MINIO_PUBLIC_URL", "http://127.0.0.1:9000"),
 
-		JWTSecret:         getenv("JWT_SECRET", "dev-secret"),
-		JWTAccessTTLHours: getenvInt("JWT_ACCESS_TTL_HOURS", 2),
-		JWTRefreshTTLDays: getenvInt("JWT_REFRESH_TTL_DAYS", 7),
+		JWTSecret: getenv("JWT_SECRET", "dev-secret"),
+		// 需求：长时保持登录（默认 24h，刷新 token 30 天；可被 .env 覆盖）
+		JWTAccessTTLHours: getenvInt("JWT_ACCESS_TTL_HOURS", 24),
+		JWTRefreshTTLDays: getenvInt("JWT_REFRESH_TTL_DAYS", 30),
 
 		AuthMode:     getenv("AUTH_MODE", "none"),
 		InviteCodeOn: getenvBool("INVITE_CODE_ENABLED", false),

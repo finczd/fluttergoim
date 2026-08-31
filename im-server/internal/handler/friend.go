@@ -14,16 +14,35 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// FriendListHandler 好友列表（附带在线状态）
+// FriendListHandler 好友列表（附带在线状态 + 备注）
 func FriendListHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := middleware.CurrentUserID(c)
-		users, err := service.FriendList(c.Request.Context(), uid)
+		friends, err := service.FriendList(c.Request.Context(), uid)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"code": 500, "message": "获取好友失败"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": attachOnline(c, users)})
+		// FriendInfo → User（attachOnline 需要）+ 备注映射
+		us := make([]model.User, 0, len(friends))
+		remarks := make(map[int64]string, len(friends))
+		for _, fi := range friends {
+			us = append(us, fi.User)
+			if fi.Remark != "" {
+				remarks[fi.User.ID] = fi.Remark
+			}
+		}
+		data := attachOnline(c, us)
+		for _, item := range data {
+			if idStr, ok := item["id"].(string); ok {
+				if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+					if r, ok := remarks[id]; ok {
+						item["remark"] = r
+					}
+				}
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
 	}
 }
 

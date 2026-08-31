@@ -18,7 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func msgColl() *mongo.Collection { return store.Mongo.Collection("message") }
+func msgColl() *mongo.Collection     { return store.Mongo.Collection("message") }
 func receiptColl() *mongo.Collection { return store.Mongo.Collection("message_receipt") }
 
 // ============ 发送消息 ============
@@ -55,9 +55,23 @@ func SendMessage(ctx context.Context, senderID int64, req *SendMsgReq) (*model.M
 		}
 	}
 
+	// 红包(8) / 转账(9)：**落库前冻结资金**（B-19 + B-22）
+	// 注意两点：
+	//   1. 放在幂等判断之后：clientMsgId 重复提交会提前 return，保证重试不会重复冻结；
+	//   2. 是**冻结**不是扣款 —— 钱从 balance 挪到 frozen，没人领时 24h 后原路退回，
+	//      不会像以前那样「发出即扣款、没人领就凭空蒸发」。
+	// msgID 必须在冻结前生成，资金包要按 msgID 记账。
+	isMoney := req.Type == model.MsgRedPacket || req.Type == model.MsgTransfer
+	msgID := id.Next()
+	if isMoney {
+		if err := SendMoneyFreeze(ctx, senderID, msgID, req.Type, req.Content); err != nil {
+			return nil, err
+		}
+	}
+
 	msg := &model.Message{
 		ConversationID: req.ConversationID,
-		MsgID:          id.Next(),
+		MsgID:          msgID,
 		ClientMsgID:    req.ClientMsgID,
 		Seq:            nextSeq(ctx, req.ConversationID), // 会话内单调递增序号
 		SenderID:       senderID,
@@ -88,6 +102,12 @@ func SendMessage(ctx context.Context, senderID int64, req *SendMsgReq) (*model.M
 	}
 	// 先落库，成功后确认（保证不丢消息）
 	if _, err := msgColl().InsertOne(ctx, msg); err != nil {
+		// 钱已冻结但消息没落库 → 立刻解冻退回，避免"钱被冻住、消息没了"。
+		// MySQL(余额) 与 MongoDB(消息) 是两套存储，没法用数据库事务包住，
+		// 所以用**补偿解冻**兜底（幂等，见 RefundMoneyPacket）。
+		if isMoney {
+			RefundMoneyPacket(ctx, msgID)
+		}
 		return nil, err
 	}
 
@@ -108,6 +128,10 @@ func SendMessage(ctx context.Context, senderID int64, req *SendMsgReq) (*model.M
 		UserIDs: append(receivers, senderID),
 		Data:    marshalJSON(msg),
 	})
+
+	// 离线推送兜底（极光，后台可配置）：异步执行不阻塞主流程，
+	// 只推当前不在 WS 在线集合的接收者（在线用户已通过长连接实时收到）
+	go PushMessageOffline(context.Background(), senderID, receivers, msg)
 	return msg, nil
 }
 
@@ -233,7 +257,7 @@ func RecallMessage(ctx context.Context, userID int64, msgID int64) error {
 	_ = PublishEvent(ctx, &Event{
 		Type:    "recall",
 		UserIDs: convMemberIDs(ctx, msg.ConversationID),
-		Data:    marshalJSON(map[string]interface{}{"conversationId": msg.ConversationID, "msgId": msgID, "recalledBy": userID}),
+		Data:    marshalJSON(map[string]interface{}{"conversationId": fmt.Sprintf("%d", msg.ConversationID), "msgId": fmt.Sprintf("%d", msgID), "recalledBy": fmt.Sprintf("%d", userID)}),
 	})
 	return nil
 }
@@ -261,11 +285,11 @@ func MarkRead(ctx context.Context, userID, convID, msgID int64) error {
 			}},
 			options.Update().SetUpsert(true))
 	}
-	// 广播已读事件给会话成员
+	// 广播已读事件给会话成员（ID 用字符串，避免 H5 JS 精度丢失导致前端匹配失败）
 	_ = PublishEvent(ctx, &Event{
 		Type:    "read",
 		UserIDs: convMemberIDs(ctx, convID),
-		Data:    marshalJSON(map[string]interface{}{"conversationId": convID, "userId": userID, "msgId": msgID}),
+		Data:    marshalJSON(map[string]interface{}{"conversationId": fmt.Sprintf("%d", convID), "userId": fmt.Sprintf("%d", userID), "msgId": fmt.Sprintf("%d", msgID)}),
 	})
 	return nil
 }

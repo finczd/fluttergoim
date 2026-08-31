@@ -1,8 +1,48 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- ===== 基础网络（HTTP / WebSocket 必需）===== -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- ===== 前台服务保活（flutter_foreground_task，保持 WS 长连接）===== -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
+    <!-- 电池优化白名单：ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 直接弹授权框必需，
+         缺了它 startActivity 会直接被拒（表现为点了"去开启"没反应） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <!-- ===== 音视频通话（腾讯云 TRTC）===== -->
+    <!-- 麦克风：语音/视频通话采集音频，缺它双方都听不到声音 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <!-- 摄像头：视频通话采集画面 -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- 蓝牙耳机 -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <!-- 通话中监听来电/保持唤醒 -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- ===== 图片/文件（image_picker 选图发送，Android 13+ 细分媒体权限）===== -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+
+    <!-- 摄像头非必需（语音通话也要能装），声明为可选 -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+
     <application
-        android:label="im_app"
+        android:label="青鸟IM"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -25,6 +65,13 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- ===== 保活前台服务（flutter_foreground_task，服务名不可改）=====
+             Android 14+ 必须声明 foregroundServiceType；
+             dataSync 有 Android 15 单日 6 小时限制，超出被杀后由插件自动重启兜底 -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="dataSync|remoteMessaging"
+            android:exported="false" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

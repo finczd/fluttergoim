@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/yourcompany/im-server/internal/model"
@@ -10,8 +11,14 @@ import (
 	"github.com/yourcompany/im-server/internal/store"
 )
 
+// FriendInfo 好友信息（User + 我设置的备注）
+type FriendInfo struct {
+	model.User
+	Remark string `json:"remark"` // 我对该好友的备注（未设置则空）
+}
+
 // FriendList 我的好友列表
-func FriendList(ctx context.Context, userID int64) ([]model.User, error) {
+func FriendList(ctx context.Context, userID int64) ([]FriendInfo, error) {
 	var ids []int64
 	store.DB.Model(&model.FriendRelation{}).
 		Where("user_id = ?", userID).Pluck("friend_id", &ids)
@@ -23,12 +30,24 @@ func FriendList(ctx context.Context, userID int64) ([]model.User, error) {
 	ids = append(ids, reverse...)
 
 	if len(ids) == 0 {
-		return []model.User{}, nil
+		return []FriendInfo{}, nil
 	}
 	var users []model.User
 	store.DB.Where("id IN ? AND status = ?", ids, model.StatusNormal).
 		Order("id asc").Find(&users)
-	return users, nil
+
+	// 备注（仅查我主动设置的）
+	var rels []model.FriendRelation
+	store.DB.Where("user_id = ? AND friend_id IN ?", userID, ids).Find(&rels)
+	remarkMap := make(map[int64]string, len(rels))
+	for _, r := range rels {
+		remarkMap[r.FriendID] = r.Remark
+	}
+	out := make([]FriendInfo, 0, len(users))
+	for _, u := range users {
+		out = append(out, FriendInfo{User: u, Remark: remarkMap[u.ID]})
+	}
+	return out, nil
 }
 
 // FriendRequestAdd 发起好友申请（全员可见，直接搜索添加）
@@ -64,9 +83,9 @@ func FriendRequestAdd(ctx context.Context, fromID, toID int64, message string) e
 	}).Error; err != nil {
 		return err
 	}
-	// 通知对方：有新的好友申请（前端刷新申请列表 + 红点）
+	// 通知对方：有新的好友申请（前端刷新申请列表 + 红点；ID 字符串防精度丢失）
 	data, _ := json.Marshal(map[string]interface{}{
-		"fromUserId":   fromID,
+		"fromUserId":   fmt.Sprintf("%d", fromID),
 		"fromUserName": selfNickname(fromID),
 		"message":      message,
 	})
@@ -114,7 +133,7 @@ func FriendRequestHandle(ctx context.Context, userID int64, reqID int64, agree b
 		}
 		// 通知对方：好友申请已通过
 		evData, _ := json.Marshal(map[string]interface{}{
-			"fromUserId": req.ToUser,
+			"fromUserId": fmt.Sprintf("%d", req.ToUser),
 			"message":    "我已通过你的好友申请",
 		})
 		_ = PublishEvent(ctx, &Event{Type: "friend.accepted", UserIDs: []int64{req.FromUser}, Data: evData})

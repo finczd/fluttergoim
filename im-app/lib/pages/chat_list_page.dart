@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
+import '../services/call_service.dart';
 import '../services/conversation_service.dart';
+import '../services/sound_service.dart';
+import '../services/ws_service.dart';
+import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
+import '../widgets/app_slidable.dart';
 import 'add_friend_page.dart';
 import 'chat_page.dart';
 import 'new_conversation_page.dart';
-import 'qr_login_page.dart';
 import 'scan_qr_login_page.dart';
 import 'search_page.dart';
 
@@ -26,6 +31,7 @@ class _ChatListPageState extends State<ChatListPage> {
   bool _loading = true;
   String _myId = '';
   String _announcementText = '';
+  VoidCallback? _wsCancel;
 
   @override
   void initState() {
@@ -33,6 +39,27 @@ class _ChatListPageState extends State<ChatListPage> {
     _load();
     _loadMyId();
     _loadAnnouncement();
+    // 需求7：全局 WS 实时推送 —— 收到新消息立即刷新会话列表（无需手动刷新）
+    _wsCancel = GlobalWs.instance.onMessage((m) {
+      _load(); // 会话列表整体刷新（含未读、排序、最后消息）
+      // 需求：新消息铃声（非自己发送、非通话信令、非通话中）
+      final type = (m['type'] as num?)?.toInt();
+      final senderId = m['senderId']?.toString() ?? '';
+      if (type == 1 &&
+          senderId.isNotEmpty &&
+          senderId != _myId &&
+          CallService.instance.state.value == null) {
+        SoundService.instance.playNewMessage();
+      }
+    });
+    GlobalWs.instance.onRecall((_) => _load());
+    GlobalWs.instance.ensureConnected();
+  }
+
+  @override
+  void dispose() {
+    _wsCancel?.call();
+    super.dispose();
   }
 
   /// 公告内容来自后台配置（/auth/config → announcement）
@@ -50,7 +77,8 @@ class _ChatListPageState extends State<ChatListPage> {
   Future<void> _loadMyId() async {
     try {
       final r = await _api.get('/api/v1/user/profile');
-      final id = ((r.data['data'] as Map<String, dynamic>)['id'])?.toString() ?? '';
+      final id =
+          ((r.data['data'] as Map<String, dynamic>)['id'])?.toString() ?? '';
       if (mounted && id.isNotEmpty) setState(() => _myId = id);
     } catch (_) {}
   }
@@ -70,73 +98,94 @@ class _ChatListPageState extends State<ChatListPage> {
   }
 
   /// 顶栏 + 按钮：弹出菜单（添加好友 / 创建群聊 / 扫一扫）
-  void _showPlusMenu(BuildContext context) {
+  void _showPlusMenu() {
+    final t = AppLocalizations.of(context).t;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      barrierColor: const Color(0x80000000), // 半透明遮罩
+      barrierColor: const Color(0x80000000),
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-          child: Container(
-            decoration: BoxDecoration(
-              color: AppTheme.background,
-              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.12),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.fromLTRB(12, 18, 12, 18),
+                decoration: BoxDecoration(
+                  color: context.cs.surface,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusLg),
                 ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _menuItem(
-                  icon: Icons.person_add_alt_1,
-                  color: AppTheme.primary,
-                  title: '添加好友',
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => const AddFriendPage()))
-                        .then((_) => _load());
-                  },
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _menuGridItem(
+                      icon: Icons.person_add_alt_1,
+                      color: AppTheme.primary,
+                      title: t('chatListAddFriend'),
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        Navigator.of(context)
+                            .push(MaterialPageRoute(
+                                builder: (_) => const AddFriendPage()))
+                            .then((_) => _load());
+                      },
+                    ),
+                    _menuGridItem(
+                      icon: Icons.group_add_outlined,
+                      color: AppTheme.green,
+                      title: t('chatListCreateGroup'),
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        Navigator.of(context)
+                            .push(MaterialPageRoute(
+                                builder: (_) =>
+                                    NewConversationPage(myId: _myId)))
+                            .then((_) => _load());
+                      },
+                    ),
+                    _menuGridItem(
+                      icon: Icons.qr_code_scanner,
+                      color: AppTheme.orange,
+                      title: t('chatListScan'),
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const ScanQrLoginPage()));
+                      },
+                    ),
+                  ],
                 ),
-                const Divider(height: 1, color: AppTheme.divider),
-                _menuItem(
-                  icon: Icons.group_add_outlined,
-                  color: AppTheme.primary,
-                  title: '创建群聊',
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => NewConversationPage(myId: _myId)))
-                        .then((_) => _load());
-                  },
+              ),
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: context.cs.surface,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusLg),
                 ),
-                const Divider(height: 1, color: AppTheme.divider),
-                _menuItem(
-                  icon: Icons.qr_code_scanner,
-                  color: AppTheme.primary,
-                  title: '扫一扫',
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    // 手机端扫 PC 端二维码登录
-                    Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => const ScanQrLoginPage()));
-                  },
+                width: double.infinity,
+                child: InkWell(
+                  onTap: () => Navigator.of(ctx).pop(),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: Text(t('chatListCancel'),
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: context.cs.onSurface)),
+                    ),
+                  ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _menuItem({
+  Widget _menuGridItem({
     required IconData icon,
     required Color color,
     required String title,
@@ -144,16 +193,28 @@ class _ChatListPageState extends State<ChatListPage> {
   }) {
     return InkWell(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
+      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+      child: Container(
+        width: 86,
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 22, color: color),
-            const SizedBox(width: 16),
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              alignment: Alignment.center,
+              child: Icon(icon, size: 26, color: color),
+            ),
+            const SizedBox(height: 8),
             Text(title,
-                style: const TextStyle(
-                    fontSize: 15,
-                    color: AppTheme.textPrimary,
+                style: TextStyle(
+                    fontSize: 13,
+                    color: context.cs.onSurface,
                     fontWeight: FontWeight.w500)),
           ],
         ),
@@ -163,8 +224,9 @@ class _ChatListPageState extends State<ChatListPage> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -176,11 +238,12 @@ class _ChatListPageState extends State<ChatListPage> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : _convs.isEmpty
-                      ? const Center(
-                          child: Text('暂无会话',
-                              style: TextStyle(color: AppTheme.textTertiary)))
+                      ? Center(
+                          child: Text(t('chatListEmpty'),
+                              style: TextStyle(
+                                  color: context.cs.onSurfaceVariant)))
                       : ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(0, 4, 0, 16),
+                          padding: const EdgeInsets.fromLTRB(0, 2, 0, 8),
                           itemCount: _convs.length,
                           itemBuilder: (_, i) => _convItem(_convs[i]),
                         ),
@@ -193,20 +256,20 @@ class _ChatListPageState extends State<ChatListPage> {
 
   // ===== 顶栏 =====
   Widget _header() {
+    final t = AppLocalizations.of(context).t;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
       child: Row(
         children: [
-          const Text('消息',
+          Text(t('home'),
               style: TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
-                  color: AppTheme.textPrimary)),
+                  color: context.cs.onSurface)),
           const Spacer(),
           IconButton(
-            onPressed: () => _showPlusMenu(context),
-            icon: const Icon(Icons.add,
-                size: 26, color: AppTheme.textPrimary),
+            onPressed: _showPlusMenu,
+            icon: Icon(Icons.add, size: 26, color: context.cs.onSurface),
             splashRadius: 22,
           ),
         ],
@@ -214,25 +277,28 @@ class _ChatListPageState extends State<ChatListPage> {
     );
   }
 
-  // ===== 搜索栏（surface 浅灰圆角）=====
+  // ===== 搜索栏（白色填充 + 发丝线描边，与灰色页面背景拉开对比）=====
   Widget _searchBar() {
+    final t = AppLocalizations.of(context).t;
     return GestureDetector(
-      onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const SearchPage())),
+      onTap: () => Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => const SearchPage())),
       child: Container(
-        margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-        height: 40,
+        margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        height: 42,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.circular(10),
+          color: context.cs.surface,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          border: Border.all(color: context.cs.outlineVariant),
         ),
-        child: const Row(
+        child: Row(
           children: [
-            Icon(Icons.search, size: 18, color: AppTheme.textTertiary),
+            Icon(Icons.search, size: 20, color: context.cs.onSurfaceVariant),
             SizedBox(width: 8),
-            Text('搜索',
-                style: TextStyle(fontSize: 14, color: AppTheme.textTertiary)),
+            Text(t('chatListSearch'),
+                style: TextStyle(
+                    fontSize: 14, color: context.cs.onSurfaceVariant)),
           ],
         ),
       ),
@@ -245,179 +311,154 @@ class _ChatListPageState extends State<ChatListPage> {
     if (text.isEmpty) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      height: 40,
+      height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: AppTheme.announcementBg,
-        borderRadius: BorderRadius.circular(10),
+        color: context.cs.primaryContainer,
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       ),
       child: Row(
         children: [
-          const Icon(Icons.chat_bubble_outline, size: 16, color: AppTheme.primary),
-          const SizedBox(width: 8),
+          const Icon(Icons.campaign_outlined,
+              size: 18, color: AppTheme.primary),
+          const SizedBox(width: 10),
           // 跑马灯：文字循环滚动（动画驱动）
           Expanded(
-            child: _Marquee(text: text, style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary)),
+            child: _Marquee(
+                text: text,
+                style: TextStyle(fontSize: 13, color: context.cs.onSurface)),
           ),
         ],
       ),
     );
   }
 
-  // ===== 会话项 =====
+  // ===== 会话项（仿微信侧滑：置顶 / 免打扰 / 删除 直接点击执行） =====
   Widget _convItem(ConvItem c) {
+    final t = AppLocalizations.of(context).t;
     final isGroup = (c.conversation['type'] as num?)?.toInt() == 2;
-    return Dismissible(
-      key: ValueKey('conv-${c.id}'),
-      direction: DismissDirection.endToStart, // 从右到左滑动
-      // 滑动阈值超过 40% 才接受（避免误触）
-      dismissThresholds: const {DismissDirection.endToStart: 0.4},
-      background: Container(
-        color: AppTheme.background,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _slideAction(Icons.push_pin, c.pinned ? '取消置顶' : '置顶',
-                AppTheme.primary, () => _togglePin(c)),
-            const SizedBox(width: 18),
-            _slideAction(c.mute ? Icons.notifications_active : Icons.notifications_off,
-                c.mute ? '取消免打扰' : '免打扰', AppTheme.warning, () => _toggleMute(c)),
-          ],
-        ),
-      ),
-      confirmDismiss: (dir) async {
-        // 滑动后弹菜单选择操作（避免直接消失）
-        await _showConvActions(c);
-        return false; // 不真的 dismiss
-      },
-      child: InkWell(
-        onTap: () async {
-          await Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => ChatPage(conv: c, myId: _myId)));
-          if (mounted) _load();
-        },
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            children: [
-              _avatar(c, showOnline: !isGroup),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(c.conversationName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppTheme.textPrimary)),
-                        ),
-                        Text(c.timeText,
-                            style: const TextStyle(
-                                fontSize: 12,
-                                color: AppTheme.textTertiary)),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        if (c.mute && c.unread == 0)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 4),
-                            child: Icon(Icons.notifications_off_outlined,
-                                size: 14, color: Color(0xFFC0C6CF)),
-                          )
-                        else if (c.pinned)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 4),
-                            child: Icon(Icons.push_pin,
-                                size: 14, color: AppTheme.textTertiary),
-                          ),
-                        Expanded(
-                          child: Text(c.lastMsgPreview,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  color: AppTheme.textSecondary)),
-                        ),
-                        if (c.unread > 0)
-                          Container(
-                            margin: const EdgeInsets.only(left: 8),
-                            constraints:
-                                const BoxConstraints(minWidth: 22, minHeight: 22),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: AppTheme.unreadBadge,
-                              borderRadius: BorderRadius.circular(11),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                                c.unread > 99 ? '99+' : '${c.unread}',
-                                style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white)),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: AppSlidable(
+        cardColor: c.pinned
+            ? AppTheme.primary.withValues(alpha: 0.06)
+            : context.cs.surface,
+        actions: [
+          SlidableAction(
+            icon: Icons.push_pin,
+            label: c.pinned ? t('chatListUnpin') : t('chatListPin'),
+            color: AppTheme.primary.withValues(alpha: 0.14),
+            foregroundColor: AppTheme.primary,
+            onTap: () => _togglePin(c),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _slideAction(IconData icon, String label, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 22),
-          const SizedBox(height: 4),
-          Text(label, style: TextStyle(fontSize: 11, color: color)),
+          SlidableAction(
+            icon: c.mute ? Icons.notifications_active : Icons.notifications_off,
+            label: c.mute ? t('chatListUnmute') : t('chatListMute'),
+            color: context.cs.outlineVariant,
+            foregroundColor: context.cs.onSurface,
+            onTap: () => _toggleMute(c),
+          ),
+          SlidableAction(
+            icon: Icons.delete_outline,
+            label: t('chatListDelete'),
+            color: AppTheme.danger,
+            onTap: () => _deleteConv(c),
+          ),
         ],
-      ),
-    );
-  }
-
-  /// 滑动后弹出操作菜单（不直接消失）
-  Future<void> _showConvActions(ConvItem c) async {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(Icons.push_pin, color: AppTheme.primary),
-              title: Text(c.pinned ? '取消置顶' : '置顶会话'),
-              onTap: () { Navigator.of(ctx).pop(); _togglePin(c); },
+        child: Container(
+          decoration: BoxDecoration(
+            color: c.pinned
+                ? AppTheme.primary.withValues(alpha: 0.06)
+                : context.cs.surface,
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+            onTap: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ChatPage(conv: c, myId: _myId)));
+              if (mounted) _load();
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              child: Row(
+                children: [
+                  _avatar(c, showOnline: !isGroup),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(c.conversationName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: context.cs.onSurface)),
+                            ),
+                            Text(c.timeText,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: context.cs.onSurfaceVariant)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            if (c.mute && c.unread == 0)
+                              Padding(
+                                padding: EdgeInsets.only(right: 4),
+                                child: Icon(Icons.notifications_off_outlined,
+                                    size: 14,
+                                    color: context.cs.onSurfaceVariant),
+                              )
+                            else if (c.pinned)
+                              Padding(
+                                padding: EdgeInsets.only(right: 4),
+                                child: Icon(Icons.push_pin,
+                                    size: 14,
+                                    color: context.cs.onSurfaceVariant),
+                              ),
+                            Expanded(
+                              child: Text(c.lastMsgPreview,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      color: context.cs.onSurfaceVariant)),
+                            ),
+                            if (c.unread > 0)
+                              Container(
+                                margin: const EdgeInsets.only(left: 8),
+                                constraints: const BoxConstraints(
+                                    minWidth: 22, minHeight: 22),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 7, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.unreadBadge,
+                                  borderRadius: BorderRadius.circular(11),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                    c.unread > 99 ? '99+' : '${c.unread}',
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white)),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-            ListTile(
-              leading: Icon(c.mute ? Icons.notifications_active : Icons.notifications_off,
-                  color: AppTheme.warning),
-              title: Text(c.mute ? '取消免打扰' : '消息免打扰'),
-              onTap: () { Navigator.of(ctx).pop(); _toggleMute(c); },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline, color: AppTheme.danger),
-              title: const Text('删除会话', style: TextStyle(color: AppTheme.danger)),
-              onTap: () { Navigator.of(ctx).pop(); _deleteConv(c); },
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -426,17 +467,25 @@ class _ChatListPageState extends State<ChatListPage> {
   Future<void> _togglePin(ConvItem c) async {
     try {
       await ConversationService().setPin(c.id, !c.pinned);
-      _toast(c.pinned ? '已取消置顶' : '已置顶');
+      _toast(c.pinned
+          ? AppLocalizations.of(context).t('chatListUnpinned')
+          : AppLocalizations.of(context).t('chatListPinned'));
       _load();
-    } catch (e) { _toast('操作失败'); }
+    } catch (e) {
+      _toast(AppLocalizations.of(context).t('chatListOpFailed'));
+    }
   }
 
   Future<void> _toggleMute(ConvItem c) async {
     try {
       await ConversationService().setMute(c.id, !c.mute);
-      _toast(c.mute ? '已开启提醒' : '已开启免打扰');
+      _toast(c.mute
+          ? AppLocalizations.of(context).t('chatListNotifyOn')
+          : AppLocalizations.of(context).t('chatListMuteOn'));
       _load();
-    } catch (e) { _toast('操作失败'); }
+    } catch (e) {
+      _toast(AppLocalizations.of(context).t('chatListOpFailed'));
+    }
   }
 
   Future<void> _deleteConv(ConvItem c) async {
@@ -444,16 +493,16 @@ class _ChatListPageState extends State<ChatListPage> {
     setState(() {
       _convs.removeWhere((x) => x.id == c.id);
     });
-    _toast('已删除会话');
+    _toast(AppLocalizations.of(context).t('chatListDeleted'));
   }
 
   void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    AppDialogs.toast(context, msg);
   }
 
   Widget _avatar(ConvItem c, {bool showOnline = true}) {
-    final color =
-        AppTheme.avatarColors[c.id.hashCode.abs() % AppTheme.avatarColors.length];
+    final color = AppTheme
+        .avatarColors[c.id.hashCode.abs() % AppTheme.avatarColors.length];
     final isGroup = (c.conversation['type'] as num?)?.toInt() == 2;
     return SizedBox(
       width: 48,
@@ -462,33 +511,48 @@ class _ChatListPageState extends State<ChatListPage> {
         clipBehavior: Clip.none,
         children: [
           Positioned.fill(
-            child: Container(
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(isGroup ? 14 : 24),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                c.conversationName.isEmpty ? '群' : c.conversationName.characters.first,
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
-              ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(isGroup ? 14 : 24),
+              child: c.avatarUrl.isNotEmpty
+                  ? Image.network(
+                      c.avatarUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) =>
+                          _avatarFallback(color, c, isGroup),
+                    )
+                  : _avatarFallback(color, c, isGroup),
             ),
           ),
           // 单聊头像右下角在线状态点（群聊不显示；对方在线才显示绿点）
           if (!isGroup && showOnline && c.peerOnline)
             Positioned(
-              right: 0, bottom: 0,
+              right: 0,
+              bottom: 0,
               child: Container(
-                width: 12, height: 12,
+                width: 12,
+                height: 12,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF00B42A), // 在线绿
+                  color: AppTheme.onlineDot, // 在线绿
                   shape: BoxShape.circle,
-                  border: Border.all(color: AppTheme.background, width: 2),
+                  border: Border.all(color: context.cs.surface, width: 2),
                 ),
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _avatarFallback(Color color, ConvItem c, bool isGroup) {
+    return Container(
+      color: color,
+      alignment: Alignment.center,
+      child: Text(
+        c.conversationName.isEmpty
+            ? AppLocalizations.of(context).t('chatListGroupInitial')
+            : c.conversationName.characters.first,
+        style: const TextStyle(
+            fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
       ),
     );
   }
@@ -514,13 +578,13 @@ class _MarqueeState extends State<_Marquee>
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-        vsync: this, duration: const Duration(seconds: 12))
-      ..addListener(() {
-        if (_scroll.hasClients) {
-          _scroll.jumpTo(_controller.value * _textWidth);
-        }
-      });
+    _controller =
+        AnimationController(vsync: this, duration: const Duration(seconds: 12))
+          ..addListener(() {
+            if (_scroll.hasClients) {
+              _scroll.jumpTo(_controller.value * _textWidth);
+            }
+          });
     _scroll = ScrollController();
     WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
   }

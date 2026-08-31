@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/app_locale.dart';
 import '../services/conversation_service.dart';
 import '../theme/app_theme.dart';
 
@@ -37,8 +38,15 @@ class _FavoritesPageState extends State<FavoritesPage> {
   }
 
   String _preview(Map<String, dynamic> m) {
-    final typeMap = {2: '[图片]', 3: '[文件]', 4: '[语音]', 5: '[视频]'};
-    return (typeMap[(m['type'] as num?)?.toInt()] ?? '') + (m['content']?.toString() ?? '');
+    final t = AppLocalizations.instance.t;
+    final typeMap = {
+      2: t('favoritesPreviewImage'),
+      3: t('favoritesPreviewFile'),
+      4: t('favoritesPreviewVoice'),
+      5: t('favoritesPreviewVideo'),
+    };
+    return (typeMap[(m['type'] as num?)?.toInt()] ?? '') +
+        (m['content']?.toString() ?? '');
   }
 
   String _time(String? iso) {
@@ -50,19 +58,22 @@ class _FavoritesPageState extends State<FavoritesPage> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context).t;
     return Scaffold(
-      backgroundColor: AppTheme.background,
-      appBar: AppBar(title: const Text('我的收藏')),
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      appBar: AppBar(title: Text(t('favoritesTitle'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _favs.isEmpty
-              ? const Center(
+              ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.star_border, size: 48, color: AppTheme.textTertiary),
+                      Icon(Icons.star_border,
+                          size: 48, color: context.cs.onSurfaceVariant),
                       SizedBox(height: 8),
-                      Text('暂无收藏，聊天中长按消息可收藏', style: TextStyle(color: AppTheme.textTertiary)),
+                      Text(t('favoritesEmpty'),
+                          style: TextStyle(color: context.cs.onSurfaceVariant)),
                     ],
                   ),
                 )
@@ -73,29 +84,38 @@ class _FavoritesPageState extends State<FavoritesPage> {
                   itemBuilder: (_, i) {
                     final m = _favs[i];
                     return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: context.cs.surface,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppTheme.divider),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             children: [
-                              const Icon(Icons.star, size: 14, color: Color(0xFFFFB800)),
+                              const Icon(Icons.star,
+                                  size: 14, color: Color(0xFFFFB800)),
                               const SizedBox(width: 4),
-                              Text('会话 #${m['conversationId']}', style: const TextStyle(fontSize: 12, color: AppTheme.textTertiary)),
+                              Text(t('favoritesConversation',
+                                  {'id': '${m['conversationId']}'}),
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: context.cs.onSurfaceVariant)),
                               const Spacer(),
-                              Text(_time(m['createdAt']?.toString()), style: const TextStyle(fontSize: 12, color: AppTheme.textTertiary)),
+                              Text(_time(m['createdAt']?.toString()),
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: context.cs.onSurfaceVariant)),
                             ],
                           ),
                           const SizedBox(height: 6),
                           Text(_preview(m),
                               maxLines: 3,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 14, color: AppTheme.textPrimary)),
+                              style: TextStyle(
+                                  fontSize: 14, color: context.cs.onSurface)),
                         ],
                       ),
                     );

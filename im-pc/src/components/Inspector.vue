@@ -26,9 +26,11 @@ const myRole = computed(() => {
   const me = String(auth.user?.id || '');
   if (!me) return null;
   const m = members.value.find(x => String(x.id) === me);
-  return m?.role || null;
+  const r = m?.role;
+  if (r === undefined || r === null) return null;
+  return Number(r); // 1=群主 2=管理员 3=成员
 });
-const canManage = computed(() => myRole.value === 'owner' || myRole.value === 'admin');
+const canManage = computed(() => myRole.value === 1 || myRole.value === 2);
 
 function memberInitial(m) {
   return m.alias || m.nickname || m.name || '成员';
@@ -169,6 +171,7 @@ async function kickMember(m) {
       </div>
       <div class="inspector-actions">
         <button class="secondary-button" type="button" @click="inspector.messageUser()">发消息</button>
+        <button class="secondary-button" type="button" @click="ui.openMoments({ id: ui.inspector.user.id, name: ui.inspector.user.nickname })">朋友圈</button>
       </div>
       <div class="inspector-section">
         <div class="detail-list">

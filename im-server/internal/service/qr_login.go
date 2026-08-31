@@ -19,13 +19,13 @@ import (
 // PC 端轮询 GET /auth/qr/status?ticket=xxx → confirmed 后取 accessToken 登录
 
 type QrTicketInfo struct {
-	Ticket       string     `json:"ticket"`
-	Secret       string     `json:"secret"`
-	Payload      string     `json:"payload"`
-	Status       string     `json:"status"` // pending / scanned / confirmed / expired
-	Expires      int64      `json:"expires"`
-	AccessToken  string     `json:"accessToken"`
-	RefreshToken string     `json:"refreshToken"`
+	Ticket       string      `json:"ticket"`
+	Secret       string      `json:"secret"`
+	Payload      string      `json:"payload"`
+	Status       string      `json:"status"` // pending / scanned / confirmed / expired
+	Expires      int64       `json:"expires"`
+	AccessToken  string      `json:"accessToken"`
+	RefreshToken string      `json:"refreshToken"`
 	User         *model.User `json:"user"`
 }
 
