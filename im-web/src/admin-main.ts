@@ -9,8 +9,9 @@ import AdminApp from '@/views/admin/AdminApp.vue'
 import { i18n } from '@/i18n'
 
 // 管理后台独立入口：只含后台路由与后台登录页
+// BASE_URL 跟随 vite.config.ts 的 base（'./'），子目录部署时路由前缀自动指向部署目录
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', redirect: '/admin/dashboard' },
     { path: '/login', name: 'admin-login', component: () => import('@/views/admin/AdminLogin.vue') },

@@ -58,3 +58,11 @@ dist-new/
 
 # 部署备份产物
 deploy/backups/
+
+# 部署打包产物 / 构建产物（2026-09-01 git 提交甄别）
+deploy/*.zip
+deploy/package/
+im-app/web/*.zip
+im-server/bin/
+im-web/im-web/
+ui_preview_*.jpg

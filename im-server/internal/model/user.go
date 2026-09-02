@@ -29,6 +29,7 @@ type User struct {
 	PasswordHash string     `gorm:"size:255" json:"-"`
 	Nickname     string     `gorm:"size:64" json:"nickname"`
 	Avatar       string     `gorm:"size:512" json:"avatar"`
+	Signature    string     `gorm:"size:200" json:"signature"` // 个人签名（AutoMigrate 自动加列）
 	Phone        string     `gorm:"size:32" json:"phone"`
 	Email        string     `gorm:"size:128" json:"email"`
 	CountryCode  string     `gorm:"size:8" json:"countryCode"`

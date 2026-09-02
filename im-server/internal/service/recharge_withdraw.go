@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -17,17 +18,17 @@ import (
 // ========== 支付配置（sys_config:pay_config） ==========
 
 type PayConfig struct {
-	Enabled                bool            `json:"enabled"`
-	ReceiveWechatQrcodeURL string          `json:"receiveWechatQrcodeUrl"`
-	ReceiveAlipayQrcodeURL string          `json:"receiveAlipayQrcodeUrl"`
-	ReceiveBankQrcodeURL   string          `json:"receiveBankQrcodeUrl"`
-	ReceiveBankInfo        PayBankInfo     `json:"receiveBankInfo"`
-	RechargeTips           string          `json:"rechargeTips"`
-	WithdrawEnabled        bool            `json:"withdrawEnabled"`
-	WithdrawMin            float64         `json:"withdrawMin"`
-	WithdrawMax            float64         `json:"withdrawMax"`
-	WithdrawFeeRate        float64         `json:"withdrawFeeRate"` // 0 ~ 0.1
-	WithdrawFeeMin         float64         `json:"withdrawFeeMin"`
+	Enabled                bool        `json:"enabled"`
+	ReceiveWechatQrcodeURL string      `json:"receiveWechatQrcodeUrl"`
+	ReceiveAlipayQrcodeURL string      `json:"receiveAlipayQrcodeUrl"`
+	ReceiveBankQrcodeURL   string      `json:"receiveBankQrcodeUrl"`
+	ReceiveBankInfo        PayBankInfo `json:"receiveBankInfo"`
+	RechargeTips           string      `json:"rechargeTips"`
+	WithdrawEnabled        bool        `json:"withdrawEnabled"`
+	WithdrawMin            float64     `json:"withdrawMin"`
+	WithdrawMax            float64     `json:"withdrawMax"`
+	WithdrawFeeRate        float64     `json:"withdrawFeeRate"` // 0 ~ 0.1
+	WithdrawFeeMin         float64     `json:"withdrawFeeMin"`
 }
 type PayBankInfo struct {
 	BankName    string `json:"bankName"`
@@ -216,16 +217,16 @@ func UserWithdrawAccountSave(ctx context.Context, userID int64, wa *model.Withdr
 	wa.CreatedAt = existing.CreatedAt
 	wa.UpdatedAt = now
 	return store.DB.Model(&existing).Updates(map[string]any{
-		"account_type":       wa.AccountType,
-		"wechat_qrcode_url":  wa.WechatQrcodeURL,
-		"wechat_name":        wa.WechatName,
-		"alipay_qrcode_url":  wa.AlipayQrcodeURL,
-		"alipay_account":     wa.AlipayAccount,
-		"alipay_name":        wa.AlipayName,
-		"bank_card_no":       wa.BankCardNo,
-		"bank_name":          wa.BankName,
-		"bank_account_name":  wa.BankAccountName,
-		"updated_at":         now,
+		"account_type":      wa.AccountType,
+		"wechat_qrcode_url": wa.WechatQrcodeURL,
+		"wechat_name":       wa.WechatName,
+		"alipay_qrcode_url": wa.AlipayQrcodeURL,
+		"alipay_account":    wa.AlipayAccount,
+		"alipay_name":       wa.AlipayName,
+		"bank_card_no":      wa.BankCardNo,
+		"bank_name":         wa.BankName,
+		"bank_account_name": wa.BankAccountName,
+		"updated_at":        now,
 	}).Error
 }
 
@@ -296,16 +297,16 @@ func UserWithdrawSubmit(ctx context.Context, userID int64, amount float64, withd
 		actualAmount = 0
 	}
 	snap := model.JSONBlob(map[string]any{
-		"accountType":      wa.AccountType,
-		"wechatQrcodeUrl":  wa.WechatQrcodeURL,
-		"wechatName":       wa.WechatName,
-		"alipayQrcodeUrl":  wa.AlipayQrcodeURL,
-		"alipayAccount":    wa.AlipayAccount,
-		"alipayName":       wa.AlipayName,
-		"bankCardNo":       maskCard(wa.BankCardNo), // 卡号/账号 mask 存快照，管理员列表也能看到 mask
-		"bankCardNoFull":   wa.BankCardNo,           // 原始卡号（仅审核时用，接口返回按需要 mask）
-		"bankName":         wa.BankName,
-		"bankAccountName":  wa.BankAccountName,
+		"accountType":     wa.AccountType,
+		"wechatQrcodeUrl": wa.WechatQrcodeURL,
+		"wechatName":      wa.WechatName,
+		"alipayQrcodeUrl": wa.AlipayQrcodeURL,
+		"alipayAccount":   wa.AlipayAccount,
+		"alipayName":      wa.AlipayName,
+		"bankCardNo":      maskCard(wa.BankCardNo), // 卡号/账号 mask 存快照，管理员列表也能看到 mask
+		"bankCardNoFull":  wa.BankCardNo,           // 原始卡号（仅审核时用，接口返回按需要 mask）
+		"bankName":        wa.BankName,
+		"bankAccountName": wa.BankAccountName,
 	})
 
 	// ========== 原子：建订单 + 冻结（同一个事务）==========
@@ -451,9 +452,9 @@ func AdminRechargeOrderApprove(ctx context.Context, orderID int64, reviewerID in
 		}
 		now := time.Now()
 		if err := tx.Model(&order).Updates(map[string]any{
-			"status":       model.OrderStatusApproved,
-			"reviewer_id":  reviewerID,
-			"reviewed_at":  now,
+			"status":      model.OrderStatusApproved,
+			"reviewer_id": reviewerID,
+			"reviewed_at": now,
 		}).Error; err != nil {
 			return err
 		}
@@ -463,13 +464,15 @@ func AdminRechargeOrderApprove(ctx context.Context, orderID int64, reviewerID in
 		return nil, err
 	}
 	PublishWalletUpdate(ctx, userID)
-	// 充值审核通过 → 小助手系统提醒（uid=-1；失败不影响审核结果）
-	_ = AssistantNotify(ctx, userID, fmt.Sprintf("充值成功：您的充值 ¥%.2f 已到账，请留意余额变化。", amountF))
+	// 充值审核通过 → 小助手系统提醒（uid=-1；失败不影响审核结果，但要留日志排障）
+	if nerr := AssistantNotify(ctx, userID, fmt.Sprintf("充值成功：您的充值 ¥%.2f 已到账，请留意余额变化。", amountF)); nerr != nil {
+		log.Printf("[Assistant] recharge notify failed: order=%d user=%d err=%v", orderID, userID, nerr)
+	}
 	return map[string]any{
-		"orderId":  orderID,
-		"userId":   userID,
-		"amount":   amountF,
-		"balance":  newBal,
+		"orderId": orderID,
+		"userId":  userID,
+		"amount":  amountF,
+		"balance": newBal,
 	}, nil
 }
 
@@ -519,22 +522,22 @@ func AdminWithdrawOrderList(ctx context.Context, kw string, status int, wType in
 	var total int64
 	q.Count(&total)
 	type Row struct {
-		ID              int64     `json:"id"`
-		UserID          int64     `json:"userId"`
-		Amount          float64   `json:"amount"`
-		Fee             float64   `json:"fee"`
-		ActualAmount    float64   `json:"actualAmount"`
-		WithdrawType    int       `json:"withdrawType"`
-		AccountSnapshot []byte    `gorm:"column:account_snapshot" json:"-"`
-		Status          int       `json:"status"`
-		RejectReason    string    `json:"rejectReason"`
-		ReviewerID      int64     `json:"reviewerId"`
+		ID              int64      `json:"id"`
+		UserID          int64      `json:"userId"`
+		Amount          float64    `json:"amount"`
+		Fee             float64    `json:"fee"`
+		ActualAmount    float64    `json:"actualAmount"`
+		WithdrawType    int        `json:"withdrawType"`
+		AccountSnapshot []byte     `gorm:"column:account_snapshot" json:"-"`
+		Status          int        `json:"status"`
+		RejectReason    string     `json:"rejectReason"`
+		ReviewerID      int64      `json:"reviewerId"`
 		ReviewedAt      *time.Time `json:"reviewedAt"`
-		Remark          string    `json:"remark"`
-		CreatedAt       time.Time `json:"createdAt"`
-		UserAccount     string    `gorm:"column:user_account"`
-		UserNickname    string    `gorm:"column:user_nickname"`
-		UserShortID     *string   `gorm:"column:user_short_id"`
+		Remark          string     `json:"remark"`
+		CreatedAt       time.Time  `json:"createdAt"`
+		UserAccount     string     `gorm:"column:user_account"`
+		UserNickname    string     `gorm:"column:user_nickname"`
+		UserShortID     *string    `gorm:"column:user_short_id"`
 	}
 	var rows []Row
 	if err := q.Scan(&rows).Error; err != nil {
@@ -570,17 +573,17 @@ func AdminWithdrawOrderList(ctx context.Context, kw string, status int, wType in
 //   - frozen -amount（释放冻结的提现本金）
 //   - balance -fee（手续费真正扣掉，用户提现 100 手续费 1 → 冻结 100，实际到账 99）
 //     → 这样用户总余额变化：balance -amount -fee + frozen -(-amount) = -amount -fee + amount = -fee?
-//       不，用户提现 100，最终资产应该是 balance-100、frozen-0（原本冻结 100）+ 手续费 -1
-//       正确账户变化（通过审核 = 提现成功）：
-//           frozen  -100（不再冻结）
-//           balance -100（真的扣本金，而之前申请时是 balance -100 已发生）
-//       实际上申请时我们做的是 balance -amount + frozen +amount，所以 总资产 = balance+frozen 不变。
-//       通过审核时：frozen -amount（把冻结"释放"，但钱是要真走的，所以不再加回 balance）
-//                   再 balance -fee（手续费从余额里扣。申请时没扣手续费，余额正好 = 申请前 - amount，够扣 fee 吗？若用户提交时余额 = amount，手续费就会余额不足 4101。
-//       → 更稳妥做法：提交申请时就把 amount+fee 一起冻结，审核通过 frozen -(amount+fee)、balance 不动；驳回就 frozen +(amount+fee) balance +(amount+fee)。
-//         但前面提交实现已按 amount 冻结，为了避免迁移，这里处理成：
-//              审核通过时：frozen -amount（释放冻结，不回 balance 表示钱已出款）
-//                         再 WalletApply 扣 -fee（余额不足报错，由管理员看到让用户再充值或修改手续费配置）。
+//     不，用户提现 100，最终资产应该是 balance-100、frozen-0（原本冻结 100）+ 手续费 -1
+//     正确账户变化（通过审核 = 提现成功）：
+//     frozen  -100（不再冻结）
+//     balance -100（真的扣本金，而之前申请时是 balance -100 已发生）
+//     实际上申请时我们做的是 balance -amount + frozen +amount，所以 总资产 = balance+frozen 不变。
+//     通过审核时：frozen -amount（把冻结"释放"，但钱是要真走的，所以不再加回 balance）
+//     再 balance -fee（手续费从余额里扣。申请时没扣手续费，余额正好 = 申请前 - amount，够扣 fee 吗？若用户提交时余额 = amount，手续费就会余额不足 4101。
+//     → 更稳妥做法：提交申请时就把 amount+fee 一起冻结，审核通过 frozen -(amount+fee)、balance 不动；驳回就 frozen +(amount+fee) balance +(amount+fee)。
+//     但前面提交实现已按 amount 冻结，为了避免迁移，这里处理成：
+//     审核通过时：frozen -amount（释放冻结，不回 balance 表示钱已出款）
+//     再 WalletApply 扣 -fee（余额不足报错，由管理员看到让用户再充值或修改手续费配置）。
 func AdminWithdrawOrderApprove(ctx context.Context, orderID int64, reviewerID int64) (map[string]any, error) {
 	var (
 		order   model.WithdrawOrder
@@ -618,9 +621,9 @@ func AdminWithdrawOrderApprove(ctx context.Context, orderID int64, reviewerID in
 		}
 		now := time.Now()
 		return tx.Model(&order).Updates(map[string]any{
-			"status":       model.OrderStatusApproved,
-			"reviewer_id":  reviewerID,
-			"reviewed_at":  now,
+			"status":      model.OrderStatusApproved,
+			"reviewer_id": reviewerID,
+			"reviewed_at": now,
 		}).Error
 	})
 	if err != nil {
@@ -628,7 +631,9 @@ func AdminWithdrawOrderApprove(ctx context.Context, orderID int64, reviewerID in
 	}
 	PublishWalletUpdate(ctx, userID)
 	// 提现审核通过 → 小助手系统提醒（uid=-1；金额用扣除手续费后的实际到账额，比打款额更贴近用户感知）
-	_ = AssistantNotify(ctx, userID, fmt.Sprintf("提现成功：您的提现 ¥%.2f 已完成打款，实际到账 ¥%.2f。", amountF, amountF-feeF))
+	if nerr := AssistantNotify(ctx, userID, fmt.Sprintf("提现成功：您的提现 ¥%.2f 已完成打款，实际到账 ¥%.2f。", amountF, amountF-feeF)); nerr != nil {
+		log.Printf("[Assistant] withdraw notify failed: order=%d user=%d err=%v", orderID, userID, nerr)
+	}
 	return map[string]any{
 		"orderId": orderID,
 		"userId":  userID,

@@ -33,6 +33,14 @@ class PushService {
   /// 登录态就绪后调用（HomeShell.initState，覆盖启动/登录/注册/扫码四条入口）。
   Future<void> start() async {
     if (kIsWeb) return; // 极光插件不支持 Web 平台
+    // 未配置极光 AppKey（线上 config/app_config.json 无 jpushAppKey 字段）时
+    // 必须直接跳过，绝不能带着空 AppKey 去初始化原生 SDK：
+    // 极光在原生层校验 appKey，空值会抛未捕获异常直接崩进程，
+    // Dart 的 try/catch 接不住（不是 PlatformException，是 JVM 层崩溃）。
+    if (AppConfig.instance.jpushAppKey.isEmpty) {
+      debugPrint('[PushService] jpushAppKey 未配置，跳过极光初始化');
+      return;
+    }
     try {
       // Android 13+ 通知权限由 KeepAliveService 统一申请（HomeShell 更早触发），
       // 这里不再重复弹框
@@ -44,6 +52,7 @@ class PushService {
       if (uid.isEmpty) return;
       _myId = uid;
       final jpush = _ensure();
+      if (jpush == null) return; // AppKey 缺失/初始化失败：静默跳过
       if (_alias == uid) return; // 已绑定同一账号
       if (_alias != null && _alias != uid) {
         // 换账号：先解绑旧 alias
@@ -70,6 +79,8 @@ class PushService {
 
   dynamic _ensure() {
     if (_inited) return _jpush;
+    // 双重保险：_ensure 也可能被其它路径调用，空 AppKey 一律不初始化
+    if (AppConfig.instance.jpushAppKey.isEmpty) return null;
     final jpush = JPush.newJPush();
     // 官方要求：addEventHandler 放在 setup 之前
     jpush.addEventHandler(

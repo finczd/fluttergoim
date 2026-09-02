@@ -35,6 +35,9 @@ export const adminApi = {
     http.post<ApiResp>('/admin/assistant/config', payload),
   assistantPush: (payload: { userIds: string[]; userId?: string; content?: string; fileUrl?: string }) =>
     http.post<ApiResp>('/admin/assistant/push', payload),
+  assistantConversations: () => http.get<ApiResp<Array<Record<string, any>>>>('/admin/assistant/conversations'),
+  assistantMessages: (params: { userId: string; beforeMsgId?: string | number; limit?: number }) =>
+    http.get<ApiResp<Array<Record<string, any>>>>('/admin/assistant/messages', { params }),
 
   // 小程序管理（H5 容器）
   apps: () => http.get<ApiResp<Array<Record<string, any>>>>('/admin/app-entries'),
@@ -103,6 +106,34 @@ export const adminApi = {
   // 系统健康检测
   healthCheck: (key: string) =>
     http.get<ApiResp<Record<string, any>>>(`/admin/health/${key}`),
+
+  // 服务重启（systemd 托管环境）：target = api | gateway
+  systemRestart: (target: 'api' | 'gateway') =>
+    http.post<ApiResp<null>>('/admin/system/restart', { target }),
+
+  /**
+   * 后台文件上传：POST /api/v1/admin/upload（admin 接口，admin token 鉴权）。
+   * 走 axios 而非 fetch，确保拦截器统一带 Authorization + 401 自动刷新；
+   * 历史 bug：直接用 fetch('/api/v1/upload') 走用户接口，部分反向代环境下
+   * FormData body 被吞，后端 FormFile("file") 拿不到 → 返回 1001「缺少文件」。
+   * 改走 admin 接口 + axios 后该问题消失。返回 MinIO URL 字符串。
+   *
+   * 再次踩坑：显式 { 'Content-Type': 'multipart/form-data' } 会**覆盖** axios 自动加的 boundary，
+   * 后端 c.Request.FormFile("file") 因缺少 boundary 解析失败 → 同样 1001。
+   * 修复：删掉显式 headers，让 axios 检测到 FormData 时自动补齐 Content-Type（含 boundary）。
+   */
+  uploadFile: (file: File, dir = 'common/') => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('dir', dir)
+    return http.post<ApiResp<{ url: string; object: string; size: number }>>(
+      '/admin/upload',
+      fd
+    ).then(r => {
+      if (r.data.code !== 0) throw new Error(r.data.message || '上传失败')
+      return r.data.data.url
+    })
+  },
 
   // 财务
   financeRecords: (params: { kw?: string; type?: string; side?: string; page?: number; size?: number; from?: number; to?: number }) =>

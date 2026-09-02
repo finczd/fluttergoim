@@ -91,6 +91,16 @@
                 <a-radio value="all">全部（添加所有客服）</a-radio>
               </a-radio-group>
             </a-form-item>
+            <a-form-item label="客服自动打招呼内容">
+              <a-textarea v-model="kefu.greeting" :rows="3" :max-length="200" show-word-limit
+                          placeholder="例如：你好，我是 {nickname}，很高兴为您服务~（{nickname} 会被替换成客服昵称）" />
+              <div style="color: #86909c; font-size: 12px; margin-top: 4px">
+                留空则不发送；支持 <code style="background:#f2f3f5;padding:1px 4px;border-radius:3px">{nickname}</code> 占位符自动替换为客服昵称。
+              </div>
+            </a-form-item>
+            <a-form-item>
+              <a-button type="primary" :loading="savingKefu" @click="saveKefu">保存客服设置</a-button>
+            </a-form-item>
           </a-form>
         </a-card>
       </div>
@@ -583,8 +593,9 @@ const sections = [
 ]
 
 const cfg = ref({ registerOn: true, authMode: 'none' as string, inviteCodeOn: false, captchaOn: false, e2eOn: false })
-// 客服设置：kefu_config 为整体 JSON 键（{autoAdd, mode}），读取后解包渲染，保存时整体写回
-const kefu = ref({ autoAdd: false, mode: 'round' as string })
+// 客服设置：kefu_config 为整体 JSON 键（{autoAdd, mode, greeting}），读取后解包渲染，保存时整体写回
+const kefu = ref({ autoAdd: false, mode: 'round' as string, greeting: '' })
+const savingKefu = ref(false)
 const brand = ref({ appName: '', brandName: '', appLogo: '', brandLogo: '' })
 const version = ref({ appVersion: '', updateLog: '', androidUrl: '', iosUrl: '', hotUpdateUrl: '' })
 const sms = ref({ accessKey: '', secret: '', signName: '', templateCode: '' })
@@ -723,11 +734,16 @@ onMounted(async () => {
   const infraKeys = ['node_id', 'jwt_secret']
   const [ni, js] = await Promise.all(infraKeys.map((k) => adminApi.configGet(k)))
   infra.value = { nodeId: String(ni.data.data || ''), jwtSecret: String(js.data.data || '') }
-  // 客服设置（GET 返回 SysConfigGet 解包后的 {autoAdd, mode}，未配置时为 null）
+  // 客服设置（GET 返回 SysConfigGet 解包后的 {autoAdd, mode, greeting}，未配置时为 null）
   try {
     const kf = await adminApi.configGet('kefu_config')
     const kfVal = (kf.data?.data ?? null) as Record<string, any> | null
-    kefu.value = { autoAdd: !!kfVal?.autoAdd, mode: kfVal?.mode === 'all' ? 'all' : 'round' }
+    kefu.value = {
+      autoAdd: !!kfVal?.autoAdd,
+      mode: kfVal?.mode === 'all' ? 'all' : 'round',
+      // 后端已兜底默认文案；前端再保险一次，避免首次进入空 textarea 没引导
+      greeting: typeof kfVal?.greeting === 'string' ? kfVal.greeting : '你好，我是 {nickname}，很高兴为您服务~'
+    }
   } catch { /* 未配置时保持默认 */ }
   const miscKeys = ['default_avatar']
   const [da] = await Promise.all(miscKeys.map((k) => adminApi.configGet(k)))
@@ -819,10 +835,19 @@ async function saveAnnouncement() {
 }
 
 async function saveKefu() {
-  // 整体写回 {autoAdd, mode}；后端 SysConfigSet 包 {"value": {...}} 存 sys_config
-  const { data } = await adminApi.configSet('kefu_config', { autoAdd: kefu.value.autoAdd, mode: kefu.value.mode })
-  if (data.code === 0) Message.success('客服设置已保存')
-  else Message.error(data.message)
+  savingKefu.value = true
+  try {
+    // 整体写回 {autoAdd, mode, greeting}；后端 SysConfigSet 包 {"value": {...}} 存 sys_config
+    const { data } = await adminApi.configSet('kefu_config', {
+      autoAdd: kefu.value.autoAdd,
+      mode: kefu.value.mode,
+      greeting: kefu.value.greeting
+    })
+    if (data.code === 0) Message.success('客服设置已保存')
+    else Message.error(data.message)
+  } finally {
+    savingKefu.value = false
+  }
 }
 </script>
 

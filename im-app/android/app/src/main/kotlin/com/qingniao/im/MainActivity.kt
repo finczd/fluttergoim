@@ -1,4 +1,4 @@
-package com.yourcompany.im_app
+package com.qingniao.im
 
 import android.content.ComponentName
 import android.content.Intent

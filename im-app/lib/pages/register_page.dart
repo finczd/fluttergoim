@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_dialogs.dart';
 import 'home_shell.dart';
 import 'login_page.dart';
+import 'pay_ui.dart';
 
+/// 注册页（美化版：登录页同风格）
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
 
@@ -27,7 +31,8 @@ class _RegisterPageState extends State<RegisterPage> {
   bool _loading = false;
   String _error = '';
   String _logoUrl = '';
-  String _brandName = '';
+  bool _pwdVisible = false;
+  bool _confirmPwdVisible = false;
 
   @override
   void initState() {
@@ -40,15 +45,32 @@ class _RegisterPageState extends State<RegisterPage> {
     if (mounted) {
       setState(() {
         _config = cfg;
-        _logoUrl = (cfg.appLogo ?? cfg.brandLogo ?? '').toString();
-        _brandName = (cfg.appName ?? cfg.brandName ?? 'ChatPulse').toString();
+        _logoUrl = cfg.appLogo.isNotEmpty ? cfg.appLogo : cfg.brandLogo;
       });
     }
   }
 
+  @override
+  void dispose() {
+    _account.dispose();
+    _password.dispose();
+    _inviteCode.dispose();
+    _confirmPwd.dispose();
+    super.dispose();
+  }
+
   Future<void> _register() async {
+    final t = AppLocalizations.of(context).t;
     if (_password.text != _confirmPwd.text) {
-      setState(() => _error = AppLocalizations.of(context).t('pwdMismatch'));
+      setState(() => _error = t('pwdMismatch'));
+      return;
+    }
+    if (_password.text.length < 6) {
+      setState(() => _error = '密码至少 6 位');
+      return;
+    }
+    if (_account.text.trim().length < 3) {
+      setState(() => _error = '账号至少 3 位');
       return;
     }
     setState(() {
@@ -62,7 +84,6 @@ class _RegisterPageState extends State<RegisterPage> {
         nickname: _account.text.trim(),
         inviteCode:
             (_config?.inviteCodeOn ?? false) ? _inviteCode.text.trim() : null,
-        // 需求1：UI 不再收集图形验证码
         captchaId: null,
         captchaCode: null,
       );
@@ -83,159 +104,168 @@ class _RegisterPageState extends State<RegisterPage> {
     final t = AppLocalizations.of(context).t;
     final isZh = Localizations.localeOf(context).languageCode == 'zh';
     final cfg = _config;
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // ===== 顶栏：返回 + 语言 pill =====
-              Padding(
-                padding: const EdgeInsets.only(top: 4, bottom: 24),
-                child: Row(
-                  children: [
-                    InkWell(
-                      onTap: () => Navigator.of(context).pushReplacement(
-                          MaterialPageRoute(builder: (_) => const LoginPage())),
-                      borderRadius: BorderRadius.circular(20),
-                      child: SizedBox(
-                        width: 40,
-                        height: 40,
-                        child: Icon(Icons.arrow_back,
-                            color: context.cs.onSurface, size: 22),
-                      ),
-                    ),
-                    const Spacer(),
-                    InkWell(
-                      onTap: () => LocaleProvider.of(context)?.toggle(),
-                      borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: context.cs.surfaceContainer,
-                          borderRadius:
-                              BorderRadius.circular(AppTheme.radiusFull),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.language,
-                                size: 16, color: AppTheme.primary),
-                            const SizedBox(width: 4),
-                            Text(isZh ? t('langZh') : t('langEn'),
-                                style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: AppTheme.primary)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // ===== 品牌区 =====
-              Center(child: _brandLogo()),
-              if (_brandName.isNotEmpty) ...[
-                const SizedBox(height: 14),
-                Center(
-                  child: Text(_brandName,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: context.cs.onSurface)),
-                ),
-              ],
-              const SizedBox(height: 24),
-              Text(t('createAccount'),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontSize: 30,
-                      fontWeight: FontWeight.w700,
-                      color: context.cs.onSurface,
-                      height: 1.2)),
-              const SizedBox(height: 8),
-              Text(t('fillInfo'),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontSize: 15, color: context.cs.onSurfaceVariant)),
-              const SizedBox(height: 32),
-              // ===== 用户名 / 账号 =====
-              TextField(
-                controller: _account,
-                style: TextStyle(fontSize: 15, color: context.cs.onSurface),
-                decoration: AppTheme.authInput(
-                    hint: t('account'), icon: Icons.person_outline),
-              ),
-              const SizedBox(height: 14),
-              // ===== 密码 =====
-              TextField(
-                controller: _password,
-                obscureText: true,
-                style: TextStyle(fontSize: 15, color: context.cs.onSurface),
-                decoration: AppTheme.authInput(
-                    hint: t('password'), icon: Icons.lock_outline),
-              ),
-              const SizedBox(height: 14),
-              // ===== 确认密码 =====
-              TextField(
-                controller: _confirmPwd,
-                obscureText: true,
-                style: TextStyle(fontSize: 15, color: context.cs.onSurface),
-                decoration: AppTheme.authInput(
-                    hint: t('confirmPassword'), icon: Icons.lock_outline),
-              ),
-              const SizedBox(height: 14),
-              // ===== 邀请码（开关开启时显示）=====
-              if (cfg != null && cfg.inviteCodeOn) ...[
-                TextField(
-                  controller: _inviteCode,
-                  style: TextStyle(fontSize: 15, color: context.cs.onSurface),
-                  decoration: AppTheme.authInput(
-                      hint: t('inviteCode'), icon: Icons.card_giftcard),
-                ),
-                const SizedBox(height: 14),
-              ],
-              if (_error.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(_error,
-                    textAlign: TextAlign.center,
-                    style:
-                        const TextStyle(color: AppTheme.danger, fontSize: 13)),
-              ],
-              const SizedBox(height: 24),
-              // ===== 注册按钮 =====
-              AppTheme.primaryButton(
-                label: _loading ? t('registering') : t('register'),
-                onPressed: _loading ? null : _register,
-              ),
-              const SizedBox(height: 20),
-              // ===== 已有账号去登录 =====
-              Center(
-                child: InkWell(
-                  onTap: () => Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(builder: (_) => const LoginPage())),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+    final primary = AppTheme.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = Theme.of(context).colorScheme;
+
+    const lightGradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment(0, 0.45),
+      colors: [Color(0xFFE8F2FF), Color(0xFFFFFFFF)],
+    );
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark.copyWith(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: isDark ? scheme.surface : Colors.white,
+        resizeToAvoidBottomInset: true,
+        body: Container(
+          decoration:
+              isDark ? null : const BoxDecoration(gradient: lightGradient),
+          child: SafeArea(
+            top: true,
+            child: Stack(
+              children: [
+                SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(28, 0, 28, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Text(t('haveAccount'),
-                          style: TextStyle(
-                              fontSize: 14,
-                              color: context.cs.onSurfaceVariant)),
-                      Text(' ${t('goLogin')}',
-                          style: const TextStyle(
-                              fontSize: 14,
-                              color: AppTheme.textLink,
-                              fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 8),
+                      // 返回 + 语言胶囊
+                      Row(
+                        children: [
+                          InkWell(
+                            onTap: () => Navigator.of(context).pushReplacement(
+                                MaterialPageRoute(
+                                    builder: (_) => const LoginPage())),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: scheme.surface.withValues(alpha: 0.85),
+                                borderRadius: BorderRadius.circular(10),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.06),
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
+                              ),
+                              alignment: Alignment.center,
+                              child: Icon(Icons.arrow_back_ios_new_rounded,
+                                  color: scheme.onSurface, size: 16),
+                            ),
+                          ),
+                          const Spacer(),
+                          _buildLangChip(scheme, isZh, t),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      // 品牌 Logo（接口加载，居中 + 紧凑；不显示软件名）
+                      _brandLogo(primary, size: 56),
+                      const SizedBox(height: 16),
+                      Text(
+                        t('createAccount'),
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.3,
+                          color: scheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        t('fillInfo'),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark
+                              ? scheme.onSurfaceVariant
+                              : const Color(0xFF888888),
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      // 单大卡片
+                      _buildRegisterCard(t, scheme, primary, isDark, cfg),
+                      const SizedBox(height: 12),
+                      // 已有账号去登录
+                      Center(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => Navigator.of(context).pushReplacement(
+                              MaterialPageRoute(
+                                  builder: (_) => const LoginPage())),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  t('haveAccount'),
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      color: scheme.onSurfaceVariant),
+                                ),
+                                Text(
+                                  ' ${t('goLogin')}',
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      color: AppTheme.primary,
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
                     ],
                   ),
                 ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ========= 右上角语言胶囊 =========
+  Widget _buildLangChip(ColorScheme scheme, bool isZh,
+      String Function(String, [Map<String, String>]) t) {
+    return Material(
+      color: scheme.surface.withValues(alpha: 0.85),
+      borderRadius: BorderRadius.circular(999),
+      elevation: 2,
+      shadowColor: Colors.black.withValues(alpha: 0.08),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => LocaleProvider.of(context)?.toggle(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.language, size: 18, color: AppTheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                isZh ? t('langZh') : t('langEn'),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scheme.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(width: 2),
+              Icon(Icons.keyboard_arrow_down_rounded,
+                  size: 18, color: scheme.onSurfaceVariant),
             ],
           ),
         ),
@@ -243,16 +273,238 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
-  Widget _brandLogo() {
+  // ========= 品牌 Logo =========
+  Widget _brandLogo(Color primary, {double size = 72}) {
     if (_logoUrl.isNotEmpty) {
-      return ClipOval(
-        child: Image.network(_logoUrl,
-            width: 96,
-            height: 96,
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.primary.withValues(alpha: 0.3),
+              blurRadius: 18,
+              spreadRadius: 1,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ClipOval(
+          child: Image.network(
+            _logoUrl,
+            width: size,
+            height: size,
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => AppTheme.brandAvatar(size: 96)),
+            errorBuilder: (_, __, ___) => AppTheme.brandAvatar(size: size),
+          ),
+        ),
       );
     }
-    return AppTheme.brandAvatar(size: 96);
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          colors: [primary.withValues(alpha: 0.75), primary],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.primary.withValues(alpha: 0.3),
+            blurRadius: 18,
+            spreadRadius: 1,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Icon(Icons.chat_bubble_rounded,
+          color: Colors.white, size: size * 0.5),
+    );
+  }
+
+  // ========= 注册大卡片 =========
+  Widget _buildRegisterCard(
+    String Function(String, [Map<String, String>]) t,
+    ColorScheme scheme,
+    Color primary,
+    bool isDark,
+    AuthConfig? cfg,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.09),
+            blurRadius: 20,
+            spreadRadius: -2,
+            offset: const Offset(0, 8),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _field(
+            controller: _account,
+            hint: t('account'),
+            prefixIcon: Icons.person_outline_rounded,
+            scheme: scheme,
+            isDark: isDark,
+          ),
+          const SizedBox(height: 12),
+          _field(
+            controller: _password,
+            hint: t('password'),
+            prefixIcon: Icons.lock_outline_rounded,
+            scheme: scheme,
+            isDark: isDark,
+            obscureText: !_pwdVisible,
+            suffix: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => setState(() => _pwdVisible = !_pwdVisible),
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Icon(
+                  _pwdVisible
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  size: 20,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _field(
+            controller: _confirmPwd,
+            hint: t('confirmPassword'),
+            prefixIcon: Icons.shield_outlined,
+            scheme: scheme,
+            isDark: isDark,
+            obscureText: !_confirmPwdVisible,
+            suffix: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () =>
+                  setState(() => _confirmPwdVisible = !_confirmPwdVisible),
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Icon(
+                  _confirmPwdVisible
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  size: 20,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+          if (cfg != null && cfg.inviteCodeOn) ...[
+            const SizedBox(height: 12),
+            _field(
+              controller: _inviteCode,
+              hint: t('inviteCode'),
+              prefixIcon: Icons.card_giftcard_rounded,
+              scheme: scheme,
+              isDark: isDark,
+            ),
+          ],
+          if (_error.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFDEAEA),
+                borderRadius: BorderRadius.circular(10),
+                border:
+                    Border.all(color: AppTheme.danger.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.error_outline_rounded,
+                      size: 18, color: AppTheme.danger),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _error,
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: AppTheme.danger,
+                          fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          PayUI.blueButton(
+            label: _loading ? t('registering') : t('register'),
+            onPressed: _loading ? null : _register,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ========= 字段封装 =========
+  Widget _field({
+    required TextEditingController controller,
+    required String hint,
+    required IconData prefixIcon,
+    required ColorScheme scheme,
+    required bool isDark,
+    Widget? suffix,
+    bool obscureText = false,
+  }) {
+    return TextField(
+      controller: controller,
+      obscureText: obscureText,
+      style: TextStyle(fontSize: 15, color: scheme.onSurface),
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(
+            fontSize: 15,
+            color: isDark ? scheme.outlineVariant : const Color(0xFFAAAAAA)),
+        prefixIcon: Padding(
+          padding: const EdgeInsets.only(left: 4, right: 8),
+          child: Icon(prefixIcon, size: 20, color: scheme.onSurfaceVariant),
+        ),
+        prefixIconConstraints:
+            const BoxConstraints(minWidth: 36, maxHeight: 36),
+        suffixIcon: suffix == null
+            ? null
+            : Padding(padding: const EdgeInsets.only(right: 6), child: suffix),
+        suffixIconConstraints:
+            const BoxConstraints(minWidth: 36, maxHeight: 36),
+        filled: true,
+        fillColor:
+            isDark ? scheme.surfaceContainerHighest : const Color(0xFFF7F8FA),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
   }
 }

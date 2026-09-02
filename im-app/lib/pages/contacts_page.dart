@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
@@ -7,6 +10,7 @@ import '../services/ws_service.dart';
 import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/official_tag.dart';
 import 'add_friend_page.dart';
 import 'chat_page.dart';
 import 'conv_settings_page.dart';
@@ -28,6 +32,7 @@ class _ContactsPageState extends State<ContactsPage> {
   List<Map<String, dynamic>> _friends = [];
   List<Map<String, dynamic>> _filteredFriends = [];
   List<FriendRequest> _requests = [];
+  String _assistantAvatar = ''; // 后台配置的小助手头像（通讯录官方入口显示）
   bool _loading = true;
   bool _searching = false;
   final String _msg = '';
@@ -40,13 +45,43 @@ class _ContactsPageState extends State<ContactsPage> {
   @override
   void initState() {
     super.initState();
+    _loadCached();
     _load();
     _loadMyId();
+    _loadAssistantAvatar();
     // 需求6：被添加好友 → WS friend 事件 → 刷新申请列表（红点）
     _wsCancel = GlobalWs.instance.onFriend((_) {
       _load();
     });
     GlobalWs.instance.ensureConnected();
+  }
+
+  /// 先渲染本地缓存的好友/申请/助手头像，网络回来后覆盖刷新。
+  /// 解决切到通讯录时整页菊花等待的问题。
+  Future<void> _loadCached() async {
+    try {
+      final raw = await _api.readPref('contacts');
+      if (raw != null && raw.isNotEmpty && mounted && _friends.isEmpty) {
+        final data = jsonDecode(raw);
+        if (data is Map) {
+          setState(() {
+            _friends =
+                ((data['friends'] as List?) ?? []).whereType<Map>().map((e) {
+              final m = <String, dynamic>{};
+              e.forEach((k, v) => m[k.toString()] = v);
+              return m;
+            }).toList();
+            _requests = ((data['requests'] as List?) ?? [])
+                .whereType<Map>()
+                .map(
+                    (e) => FriendRequest.fromJson(Map<String, dynamic>.from(e)))
+                .toList();
+            _assistantAvatar = data['assistantAvatar']?.toString() ?? '';
+            if (_friends.isNotEmpty || _requests.isNotEmpty) _loading = false;
+          });
+        }
+      }
+    } catch (_) {}
   }
 
   @override
@@ -64,6 +99,18 @@ class _ContactsPageState extends State<ContactsPage> {
     } catch (_) {}
   }
 
+  /// 小助手头像：后台「智能小助手」配置（/auth/config 下发 assistantAvatar）
+  Future<void> _loadAssistantAvatar() async {
+    try {
+      final r = await _api.get('/api/v1/auth/config');
+      final data = (r.data as Map<String, dynamic>)['data'];
+      final av =
+          (data is Map ? data['assistantAvatar'] : null)?.toString() ?? '';
+      if (mounted) setState(() => _assistantAvatar = av);
+      await _api.writePref('assistantAvatar', av);
+    } catch (_) {}
+  }
+
   Future<void> _load() async {
     try {
       final friends = await _svc.list();
@@ -74,6 +121,21 @@ class _ContactsPageState extends State<ContactsPage> {
           _requests = requests;
           _loading = false;
         });
+        // 好友/申请/助手头像一并落缓存，下次进页首帧直出
+        unawaited(_api.writePref(
+            'contacts',
+            jsonEncode({
+              'friends': friends,
+              'requests': requests
+                  .map((r) => {
+                        'id': r.id,
+                        'fromUser': r.fromUser,
+                        'message': r.message,
+                        'status': r.status,
+                      })
+                  .toList(),
+              'assistantAvatar': _assistantAvatar,
+            })));
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
@@ -153,7 +215,8 @@ class _ContactsPageState extends State<ContactsPage> {
       Divider(height: 1, indent: 52, color: context.cs.outlineVariant);
 
   Widget _funcRow(
-      IconData icon, String title, int count, Color color, VoidCallback onTap) {
+      IconData icon, String title, int count, Color color, VoidCallback onTap,
+      {bool official = false, String avatarUrl = ''}) {
     return InkWell(
       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       onTap: onTap,
@@ -169,15 +232,41 @@ class _ContactsPageState extends State<ContactsPage> {
                 borderRadius: BorderRadius.circular(AppTheme.radiusSm),
               ),
               alignment: Alignment.center,
-              child: Icon(icon, size: 22, color: color),
+              // 小助手：显示后台配置的头像（加载失败回落机器人图标）
+              child: avatarUrl.isNotEmpty
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                      child: Image.network(
+                        avatarUrl,
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) =>
+                            Icon(icon, size: 22, color: color),
+                      ),
+                    )
+                  : Icon(icon, size: 22, color: color),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(title,
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: context.cs.onSurface)),
+              child: official
+                  // 小助手等官方入口：标题后带「官方」标识
+                  ? Row(
+                      children: [
+                        Text(title,
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                                color: context.cs.onSurface)),
+                        const SizedBox(width: 6),
+                        const OfficialTag(),
+                      ],
+                    )
+                  : Text(title,
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: context.cs.onSurface)),
             ),
             if (count > 0)
               Container(
@@ -327,13 +416,15 @@ class _ContactsPageState extends State<ContactsPage> {
                                           MyGroupsPage(myId: _myId)));
                                 }),
                                 _divider(),
-                                // 需求10：系统公告 → 小助手
+                                // 需求10：系统公告 → 小助手（带官方标识 + 后台配置头像）
                                 _funcRow(
                                     Icons.smart_toy_outlined,
                                     t('contactsAssistant'),
                                     0,
                                     AppTheme.cyan,
-                                    _openAssistant),
+                                    _openAssistant,
+                                    official: true,
+                                    avatarUrl: _assistantAvatar),
                               ],
                             ),
                           ),

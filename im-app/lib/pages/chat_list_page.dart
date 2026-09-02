@@ -3,12 +3,15 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../services/call_service.dart';
 import '../services/conversation_service.dart';
+import '../services/local_notify_service.dart';
 import '../services/sound_service.dart';
+import '../services/unread_store.dart';
 import '../services/ws_service.dart';
 import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/app_slidable.dart';
+import '../widgets/official_tag.dart';
 import 'add_friend_page.dart';
 import 'chat_page.dart';
 import 'new_conversation_page.dart';
@@ -31,6 +34,7 @@ class _ChatListPageState extends State<ChatListPage> {
   bool _loading = true;
   String _myId = '';
   String _announcementText = '';
+  String _dismissedAnnouncement = ''; // 用户已手动关闭的公告内容（按内容记忆）
   VoidCallback? _wsCancel;
 
   @override
@@ -39,6 +43,7 @@ class _ChatListPageState extends State<ChatListPage> {
     _load();
     _loadMyId();
     _loadAnnouncement();
+    _loadDismissedAnnouncement();
     // 需求7：全局 WS 实时推送 —— 收到新消息立即刷新会话列表（无需手动刷新）
     _wsCancel = GlobalWs.instance.onMessage((m) {
       _load(); // 会话列表整体刷新（含未读、排序、最后消息）
@@ -51,6 +56,8 @@ class _ChatListPageState extends State<ChatListPage> {
           CallService.instance.state.value == null) {
         SoundService.instance.playNewMessage();
       }
+      // 需求3：App 后台时通知栏本地通知（极光只推离线用户，在线/后台挂 WS 不推）
+      _maybeLocalNotify(m);
     });
     GlobalWs.instance.onRecall((_) => _load());
     GlobalWs.instance.ensureConnected();
@@ -74,6 +81,14 @@ class _ChatListPageState extends State<ChatListPage> {
     } catch (_) {}
   }
 
+  /// 读本地"已关闭公告"记录（重启后仍生效；后台换新公告内容会重新显示）
+  Future<void> _loadDismissedAnnouncement() async {
+    try {
+      final v = await _api.readPref('dismissed_announcement') ?? '';
+      if (mounted) setState(() => _dismissedAnnouncement = v);
+    } catch (_) {}
+  }
+
   Future<void> _loadMyId() async {
     try {
       final r = await _api.get('/api/v1/user/profile');
@@ -86,6 +101,9 @@ class _ChatListPageState extends State<ChatListPage> {
   Future<void> _load() async {
     try {
       final list = await _svc.list();
+      // 需求1：底部"消息"tab 红点 —— 未读总数上报全局 store
+      UnreadStore.instance
+          .update(list.fold<int>(0, (sum, c) => sum + (c.mute ? 0 : c.unread)));
       if (mounted) {
         setState(() {
           _convs = list;
@@ -95,6 +113,32 @@ class _ChatListPageState extends State<ChatListPage> {
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// App 处于后台/锁屏时收到新消息 → 发通知栏本地通知。
+  /// 前台不发（页内已有铃声 + 红点）；免打扰会话不发；通话信令不发。
+  void _maybeLocalNotify(Map<String, dynamic> m) {
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state == AppLifecycleState.resumed) return;
+    final type = (m['type'] as num?)?.toInt();
+    final senderId = m['senderId']?.toString() ?? '';
+    if (type != 1 || senderId.isEmpty || senderId == _myId) return;
+    if (CallService.instance.state.value != null) return;
+    final convId = m['conversationId']?.toString() ?? '';
+    ConvItem? conv;
+    for (final c in _convs) {
+      if (c.id == convId) {
+        conv = c;
+        break;
+      }
+    }
+    if (conv != null && conv.mute) return; // 免打扰会话不通知
+    final title =
+        (conv?.conversationName ?? '').isNotEmpty ? conv!.conversationName : '新消息';
+    final body = (conv?.lastMsgPreview ?? '').isNotEmpty
+        ? conv!.lastMsgPreview
+        : '你收到一条新消息';
+    LocalNotifyService.instance.showMessage(title: title, body: body);
   }
 
   /// 顶栏 + 按钮：弹出菜单（添加好友 / 创建群聊 / 扫一扫）
@@ -305,14 +349,16 @@ class _ChatListPageState extends State<ChatListPage> {
     );
   }
 
-  // ===== 公告横幅（后台配置 + 跑马灯） =====
+  // ===== 公告横幅（后台配置 + 跑马灯；用户可手动关闭，按内容记忆——换新公告会重新显示） =====
   Widget _announcement() {
     final text = _announcementText;
     if (text.isEmpty) return const SizedBox.shrink();
+    // 用户已关闭过同一条公告 → 不再显示
+    if (_dismissedAnnouncement == text) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.only(left: 14),
       decoration: BoxDecoration(
         color: context.cs.primaryContainer,
         borderRadius: BorderRadius.circular(AppTheme.radiusMd),
@@ -328,9 +374,23 @@ class _ChatListPageState extends State<ChatListPage> {
                 text: text,
                 style: TextStyle(fontSize: 13, color: context.cs.onSurface)),
           ),
+          // 手动关闭按钮
+          IconButton(
+            onPressed: _dismissAnnouncement,
+            icon:
+                Icon(Icons.close, size: 18, color: context.cs.onSurfaceVariant),
+            splashRadius: 18,
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _dismissAnnouncement() async {
+    setState(() => _dismissedAnnouncement = _announcementText);
+    try {
+      await _api.writePref('dismissed_announcement', _announcementText);
+    } catch (_) {}
   }
 
   // ===== 会话项（仿微信侧滑：置顶 / 免打扰 / 删除 直接点击执行） =====
@@ -392,13 +452,25 @@ class _ChatListPageState extends State<ChatListPage> {
                         Row(
                           children: [
                             Expanded(
-                              child: Text(c.conversationName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: context.cs.onSurface)),
+                              child: Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(c.conversationName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            color: context.cs.onSurface)),
+                                  ),
+                                  // 小助手官方标识（虚拟 uid -1）
+                                  if (c.isAssistant)
+                                    const Padding(
+                                      padding: EdgeInsets.only(left: 6),
+                                      child: OfficialTag(),
+                                    ),
+                                ],
+                              ),
                             ),
                             Text(c.timeText,
                                 style: TextStyle(

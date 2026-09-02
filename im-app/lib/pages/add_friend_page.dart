@@ -125,13 +125,23 @@ class _AddFriendPageState extends State<AddFriendPage> {
                       final name = (u['nickname'] ?? u['account'] ??
                               t('addFriendUser'))
                           .toString();
+                      final avatar = (u['avatar'] ?? '').toString();
                       return ListTile(
                         onTap: () => _request(u),
+                        // 需求8：搜索结果显示用户头像（无头像回退首字母）
                         leading: CircleAvatar(
                           backgroundColor: AppTheme.primary,
-                          child: Text(
-                              name.isEmpty ? '?' : name.characters.first,
-                              style: const TextStyle(color: Colors.white)),
+                          backgroundImage: avatar.isNotEmpty
+                              ? NetworkImage(avatar)
+                              : null,
+                          child: avatar.isEmpty
+                              ? Text(
+                                  name.isEmpty
+                                      ? '?'
+                                      : name.characters.first,
+                                  style: const TextStyle(
+                                      color: Colors.white))
+                              : null,
                         ),
                         title: Text(name,
                             style: const TextStyle(

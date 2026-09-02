@@ -230,6 +230,7 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     final page = type == 'video'
         ? VideoCallPage(
             peerName: widget.conv.conversationName,
+            peerAvatar: widget.conv.avatarUrl,
             convId: widget.conv.id,
           )
         : VoiceCallPage(

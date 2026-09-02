@@ -10,6 +10,7 @@
           <a-tag :color="okCount === checks.length ? 'green' : okCount > 0 ? 'orange' : 'red'">
             {{ okCount }}/{{ checks.length }} 正常
           </a-tag>
+          <span class="summary-hint">检测数据来自服务端真实连接探测（.env 配置）</span>
         </div>
         <a-button type="primary" :loading="checking" @click="runAll">
           <template #icon><IconRefresh /></template>重新检测
@@ -46,8 +47,18 @@
             </div>
           </div>
           <div class="check-foot">
-            <span class="check-time">上次检测：{{ c.checkedAt || '未检测' }}</span>
-            <a-button size="mini" :loading="checking" @click="runOne(c)">单项检测</a-button>
+            <span class="check-time">
+              上次检测：{{ c.checkedAt || '未检测' }}<template v-if="c.latencyMs > 0"> · {{ c.latencyMs }}ms</template>
+            </span>
+            <span class="foot-btns">
+              <a-button
+                v-if="c.key === 'api' || c.key === 'wss'"
+                size="mini" status="danger"
+                :disabled="restarting"
+                @click="confirmRestart(c)"
+              >重启服务</a-button>
+              <a-button size="mini" :loading="checking" @click="runOne(c)">单项检测</a-button>
+            </span>
           </div>
         </div>
       </div>
@@ -56,7 +67,7 @@
         <a-descriptions :column="2" bordered size="small">
           <a-descriptions-item label="检测时间">{{ runAt || '—' }}</a-descriptions-item>
           <a-descriptions-item label="当前节点 ID">{{ nodeId || '—' }}</a-descriptions-item>
-          <a-descriptions-item label="Go 运行版本（客户端 SDK）">{{ goVersion || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="Go 运行版本">{{ goVersion || '—' }}</a-descriptions-item>
           <a-descriptions-item label="前端版本">{{ frontVersion }}</a-descriptions-item>
         </a-descriptions>
       </a-card>
@@ -66,7 +77,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, markRaw } from 'vue'
-import { Message } from '@arco-design/web-vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import {
   IconSync, IconRefresh,
   IconCheckCircleFill, IconExclamationCircleFill, IconClose,
@@ -83,70 +94,57 @@ type CheckItem = {
   status: St
   message: string
   checkedAt: string
-  details?: Record<string, string | number>
+  latencyMs: number
+  restartable?: boolean
+  details?: Record<string, string>
 }
 
+// key 与服务端 AdminHealthCheck 一一对应（GET /admin/health/:key）
 const checks: CheckItem[] = reactive([
   {
-    key: 'mysql',
-    name: 'MySQL 主数据库',
-    icon: markRaw(IconBook),
+    key: 'api', name: 'API 服务', icon: markRaw(IconCommand),
     gradient: 'linear-gradient(135deg, #165dff, #4080ff)',
-    status: 'idle', message: '', checkedAt: '',
-    details: undefined
+    status: 'idle', message: '', checkedAt: '', latencyMs: 0, restartable: true
   },
   {
-    key: 'go-env',
-    name: 'Go 运行环境',
-    icon: markRaw(IconCommand),
-    gradient: 'linear-gradient(135deg, #00ADD8, #37C5DD)',
-    status: 'idle', message: '', checkedAt: ''
-  },
-  {
-    key: 'wss',
-    name: 'WSS 长连接服务',
-    icon: markRaw(IconThunderbolt),
+    key: 'wss', name: 'WSS 长连接服务', icon: markRaw(IconThunderbolt),
     gradient: 'linear-gradient(135deg, #F7BA2A, #FFC84C)',
-    status: 'idle', message: '', checkedAt: ''
+    status: 'idle', message: '', checkedAt: '', latencyMs: 0, restartable: true
   },
   {
-    key: 'mongodb',
-    name: 'MongoDB 消息存储',
-    icon: markRaw(IconFileImage),
-    gradient: 'linear-gradient(135deg, #47A248, #7EC870)',
-    status: 'idle', message: '', checkedAt: ''
+    key: 'mysql', name: 'MySQL 主数据库', icon: markRaw(IconBook),
+    gradient: 'linear-gradient(135deg, #00B42A, #37D45C)',
+    status: 'idle', message: '', checkedAt: '', latencyMs: 0
   },
   {
-    key: 'redis',
-    name: 'Redis 缓存',
-    icon: markRaw(IconExperiment),
+    key: 'redis', name: 'Redis 缓存', icon: markRaw(IconExperiment),
     gradient: 'linear-gradient(135deg, #DC382D, #EF6B5F)',
-    status: 'idle', message: '', checkedAt: ''
+    status: 'idle', message: '', checkedAt: '', latencyMs: 0
   },
   {
-    key: 'minio',
-    name: 'MinIO 对象存储',
-    icon: markRaw(IconStorage),
+    key: 'mongo', name: 'MongoDB 消息存储', icon: markRaw(IconFileImage),
+    gradient: 'linear-gradient(135deg, #47A248, #7EC870)',
+    status: 'idle', message: '', checkedAt: '', latencyMs: 0
+  },
+  {
+    key: 'minio', name: 'MinIO 对象存储', icon: markRaw(IconStorage),
     gradient: 'linear-gradient(135deg, #C72C49, #E06B7D)',
-    status: 'idle', message: '', checkedAt: ''
+    status: 'idle', message: '', checkedAt: '', latencyMs: 0
   },
   {
-    key: 'mq',
-    name: '消息队列',
-    icon: markRaw(IconSchedule),
-    gradient: 'linear-gradient(135deg, #7B61FF, #9A86FF)',
-    status: 'idle', message: '', checkedAt: ''
-  },
-  {
-    key: 'sms',
-    name: '短信通道',
-    icon: markRaw(IconCloud),
+    key: 'jpush', name: '极光推送配置', icon: markRaw(IconCloud),
     gradient: 'linear-gradient(135deg, #722ED1, #A36EE0)',
-    status: 'idle', message: '', checkedAt: ''
+    status: 'idle', message: '', checkedAt: '', latencyMs: 0
+  },
+  {
+    key: 'version', name: '运行环境（.env）', icon: markRaw(IconSchedule),
+    gradient: 'linear-gradient(135deg, #86909C, #A9B4BE)',
+    status: 'idle', message: '', checkedAt: '', latencyMs: 0
   }
 ])
 
 const checking = ref(false)
+const restarting = ref(false)
 const runAt = ref('')
 const nodeId = ref('')
 const goVersion = ref('')
@@ -179,85 +177,77 @@ async function runOne(c: CheckItem, batch = false) {
   c.status = 'idle'
   c.message = ''
   c.checkedAt = ''
+  c.latencyMs = 0
   c.details = undefined
   try {
-    // 尝试后端接口：GET /admin/health/:key
     const { data } = await adminApi.healthCheck(c.key)
     if (data.code === 0) {
-      const d = data.data as Record<string, any>
-      c.status = d.status === 'ok' ? 'ok' : d.status === 'warn' ? 'warn' : 'err'
-      c.message = d.message || ''
-      c.details = d.details as any
-      if (d.version) {
-        if (c.key === 'go-env') goVersion.value = String(d.version)
+      // 服务端返回 { [key]: { status, message, details, latencyMs } }
+      const d = (data.data || {})[c.key] as
+        { status?: string; message?: string; details?: Record<string, string>; latencyMs?: number } | undefined
+      if (d && d.status) {
+        c.status = (d.status === 'ok' ? 'ok' : d.status === 'warn' ? 'warn' : 'err') as St
+        c.message = d.message || ''
+        c.details = d.details
+        c.latencyMs = d.latencyMs || 0
+        if (c.key === 'version') {
+          const dd = d.details || {}
+          nodeId.value = dd['NodeID'] || nodeId.value
+        }
+        if (c.key === 'api') {
+          const dd = d.details || {}
+          goVersion.value = dd['Go版本'] || goVersion.value
+          if (!nodeId.value) nodeId.value = dd['NodeID'] || ''
+        }
+      } else {
+        c.status = 'err'
+        c.message = '接口返回格式异常'
       }
-      if (c.key === 'mysql' && d.nodeId) nodeId.value = String(d.nodeId)
     } else {
       c.status = 'err'
       c.message = data.message || '接口返回异常'
     }
-  } catch {
-    // 后端接口不可用：演示性 mock 结果，以颜色区分，不影响体验
-    const rand = Math.random()
-    if (rand > 0.85) {
-      c.status = 'err'
-      c.message = mockErrMsg(c.key)
-    } else if (rand > 0.7) {
-      c.status = 'warn'
-      c.message = mockWarnMsg(c.key)
-      c.details = mockDetails(c.key, 'warn')
-    } else {
-      c.status = 'ok'
-      c.message = mockOkMsg(c.key)
-      c.details = mockDetails(c.key, 'ok')
-    }
+  } catch (e: any) {
+    c.status = 'err'
+    c.message = '检测接口请求失败：' + (e?.message || e)
   } finally {
     c.checkedAt = fmt(new Date())
     if (!batch) Message.info(`${c.name} 检测完成`)
   }
 }
 
-function mockOkMsg(k: string) {
-  switch (k) {
-    case 'mysql': return '连接正常，当前活跃连接 12 / 200'
-    case 'go-env': return 'Go SDK 心跳正常'
-    case 'wss': return 'WSS 在线节点 2，当前在线用户 326'
-    case 'mongodb': return '副本集 PRIMARY，最近一次写入延迟 8ms'
-    case 'redis': return '内存占用 245 MB / 2 GB，命中率 99.4%'
-    case 'minio': return 'Bucket im-files 可用，已用 4.1 GB'
-    case 'mq': return 'Kafka 集群在环，消费延迟 < 100ms'
-    case 'sms': return '通道配额剩余 98,450 条，上小时发送 12'
-  }
-  return '通过'
+/** 重启 api / gateway（systemd 托管环境） */
+function confirmRestart(c: CheckItem) {
+  const target = c.key === 'api' ? 'API 服务' : 'WSS 网关'
+  Modal.confirm({
+    title: '确认重启',
+    content: `重启${target}（systemctl restart，Restart=always 自动拉起）。` +
+      (c.key === 'api' ? '重启期间后台与 App 接口会短暂中断（约 3~5 秒）。' : '在线客户端的 WS 连接会断开并自动重连。'),
+    okText: '确认重启',
+    cancelText: '取消',
+    onOk: () => doRestart(c.key === 'api' ? 'api' : 'gateway')
+  })
 }
-function mockWarnMsg(k: string) {
-  switch (k) {
-    case 'redis': return '内存占用偏高（1.7GB / 2GB），建议关注热点 Key'
-    case 'mq': return '一个消费组（im-msg-persist）延迟约 1.2s，正在恢复'
-    case 'sms': return '通道配额剩 11%，请及时联系运营商充值'
+
+async function doRestart(target: 'api' | 'gateway') {
+  restarting.value = true
+  try {
+    const { data } = await adminApi.systemRestart(target)
+    if (data.code === 0) {
+      Message.success(data.message || '重启指令已下发')
+      // gateway 重启后等 3 秒刷新状态；api 重启会短暂失联，等 5 秒再刷
+      await new Promise((r) => setTimeout(r, target === 'api' ? 5000 : 3000))
+      const card = checks.find((x) => x.key === target)
+      if (card) await runOne(card, true)
+      runAt.value = fmt(new Date())
+    } else {
+      Message.warning(data.message || '重启失败')
+    }
+  } catch (e: any) {
+    Message.error('重启请求失败：' + (e?.message || e))
+  } finally {
+    restarting.value = false
   }
-  return '存在一些告警，请查看详情'
-}
-function mockErrMsg(k: string) {
-  switch (k) {
-    case 'mongodb': return '副本集 Secondary 节点 192.168.3.21:27017 心跳失败'
-    case 'minio': return '4/5 节点可用，数据仍可读写，建议检查下线节点'
-    case 'wss': return '节点 wss-node-2 3 分钟内无新连接，疑似僵死'
-  }
-  return '检测异常，请排查组件'
-}
-function mockDetails(k: string, _: St): Record<string, string | number> {
-  switch (k) {
-    case 'mysql': return { '主机': '127.0.0.1:3306', '活跃连接': 12, '最近 1s QPS': 142, '慢查询': 0 }
-    case 'go-env': return { 'SDK 版本': 'v1.3.0', '构建': 'go1.21.0', '在线实例': 12 }
-    case 'wss': return { '节点数': 2, '在线客户端': 326, '最近 1m 消息': 8421 }
-    case 'mongodb': return { '副本集': 'rs0', '角色': 'PRIMARY', '集群大小': '3 节点', 'Oplog': '36h' }
-    case 'redis': return { '角色': 'master', '使用内存': '245 MB', '命中率': '99.4%', 'Key 数量': 18234 }
-    case 'minio': return { 'Endpoint': '127.0.0.1:9000', 'Bucket': 'im-files', '可用节点': '5/5', '容量': '4.1 GB / 100 GB' }
-    case 'mq': return { 'Broker': 'kafka:9092', 'Topic': 'im_messages', '分区': 8, '消费组': 'im-msg-persist | 延迟 < 100ms' }
-    case 'sms': return { '厂商': '阿里云', '签名': 'ChatPulse', '模板': 'SMS_123456789', '本月使用': '1,550 条' }
-  }
-  return {}
 }
 </script>
 
@@ -267,6 +257,7 @@ function mockDetails(k: string, _: St): Record<string, string | number> {
 .summary-title { display: inline-flex; align-items: center; gap: 8px; font-size: var(--app-font-size-lg); font-weight: var(--app-font-weight-semibold); color: var(--app-text-1); }
 .summary-title :deep(.spin) { animation: spin 1.2s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.summary-hint { font-size: 12px; color: var(--app-text-3); }
 
 .check-grid {
   display: grid;
@@ -327,19 +318,22 @@ function mockDetails(k: string, _: St): Record<string, string | number> {
 }
 .detail-row {
   display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
   padding: 3px 0;
   font-size: 12px;
   color: var(--app-text-2);
 }
-.detail-row b { color: var(--app-text-1); font-weight: var(--app-font-weight-medium); }
+.detail-row b { color: var(--app-text-1); font-weight: var(--app-font-weight-medium); text-align: right; word-break: break-all; }
 
 .check-foot {
   display: flex; align-items: center; justify-content: space-between;
+  gap: 8px;
   margin-top: auto;
   padding-top: 8px;
   border-top: 1px dashed var(--app-border-2);
 }
 .check-time { font-size: 11px; color: var(--app-text-3); }
+.foot-btns { display: inline-flex; gap: 6px; flex-shrink: 0; }
 
 .env-card :deep(.arco-card-header-title) { font-weight: var(--app-font-weight-semibold); }
 

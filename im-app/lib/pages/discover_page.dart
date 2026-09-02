@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
@@ -34,7 +37,28 @@ class _DiscoverPageState extends State<DiscoverPage> {
   @override
   void initState() {
     super.initState();
+    _loadCachedApps();
     _load();
+  }
+
+  /// 先渲染本地缓存的小程序列表，避免每次进页都从空白/菊花开始；
+  /// 网络回来后覆盖刷新。
+  Future<void> _loadCachedApps() async {
+    try {
+      final raw = await _api.readPref('discoverApps');
+      if (raw == null || raw.isEmpty || !mounted || _apps.isNotEmpty) return;
+      final list = jsonDecode(raw);
+      if (list is List && list.isNotEmpty) {
+        setState(() {
+          _apps = list.whereType<Map>().map((e) {
+            final m = <String, dynamic>{};
+            e.forEach((k, v) => m[k.toString()] = v);
+            return m;
+          }).toList();
+          _loading = false;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -49,6 +73,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
           _apps = data.map((e) => e as Map<String, dynamic>).toList();
           _loading = false;
         });
+        unawaited(_api.writePref('discoverApps', jsonEncode(data)));
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
@@ -119,8 +144,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: _quickEntry(scheme, Icons.camera_alt_outlined,
-                              t('discoverMoments'), t('discoverMomentsSubtitle'),
+                          child: _quickEntry(
+                              scheme,
+                              Icons.camera_alt_outlined,
+                              t('discoverMoments'),
+                              t('discoverMomentsSubtitle'),
                               AppTheme.orange, () {
                             Navigator.of(context).push(MaterialPageRoute(
                                 builder: (_) => const MomentsPage()));

@@ -166,7 +166,7 @@ const areaPath = computed(() => {
 })
 
 onMounted(async () => {
-  // 容错：后端未启动时降级为 0 / 空
+  // 容错：后端未启动或返回 null 时降级为 0 / 空
   try {
     const [o, m, g, a] = await Promise.all([
       adminApi.statsOverview(),
@@ -174,13 +174,15 @@ onMounted(async () => {
       adminApi.groups(),
       adminApi.apps()
     ])
-    if (o.data.code === 0) overview.value = o.data.data as never
-    if (m.data.code === 0) {
-      series.value = (m.data.data as { series: Array<{ day: string; count: number }> }).series
-      maxCount.value = Math.max(...series.value.map((s) => s.count), 1)
+    if (o.data.code === 0 && o.data.data) overview.value = o.data.data as never
+    if (m.data.code === 0 && m.data.data) {
+      const md = m.data.data as { series?: Array<{ day: string; count: number }> }
+      const arr = md.series ?? []
+      series.value = arr
+      maxCount.value = Math.max(...arr.map((s) => s.count), 1)
     }
-    if (g.data.code === 0) groupCount.value = (g.data.data as any[]).length
-    if (a.data.code === 0) appCount.value = (a.data.data as any[]).length
+    if (g.data.code === 0 && Array.isArray(g.data.data)) groupCount.value = (g.data.data as any[]).length
+    if (a.data.code === 0 && Array.isArray(a.data.data)) appCount.value = (a.data.data as any[]).length
   } catch {
     /* 后端未启动，保持默认空值 */
   }

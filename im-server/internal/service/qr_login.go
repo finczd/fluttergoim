@@ -56,14 +56,32 @@ func QrCreateTicket(ctx context.Context, cfg *config.Config) (*QrTicketInfo, err
 	}, nil
 }
 
-// QrConfirm 手机端扫码确认（需登录态：uid 来自 JWT）
+// QrMarkScanned 手机端扫码成功（需登录态）：pending → scanned。
+// PC 端轮询到 scanned 显示"已扫码，请在手机上确认"，
+// 手机端随后展示二次确认页（微信式），用户点确认才真正登录。
+func QrMarkScanned(ctx context.Context, cfg *config.Config, ticket string, uid int64) error {
+	key := "qr:ticket:" + ticket
+	status, err := store.RDB.HGet(ctx, key, "status").Result()
+	if err != nil {
+		return &errs.Err{Code: 4001, Msg: "二维码无效或已过期"}
+	}
+	// 已 scanned 或已 confirmed 都直接成功（幂等，重复上报不报错）
+	if status != "pending" {
+		return nil
+	}
+	store.RDB.HSet(ctx, key, "status", "scanned", "uid", fmt.Sprintf("%d", uid))
+	return nil
+}
+
+// QrConfirm 手机端确认登录（需登录态：uid 来自 JWT）。
+// 兼容两种流程：直接 confirm（旧版 App，无 scanned 步骤）与 scanned → confirm（微信式二次确认）。
 func QrConfirm(ctx context.Context, cfg *config.Config, ticket string, uid int64) error {
 	key := "qr:ticket:" + ticket
 	status, err := store.RDB.HGet(ctx, key, "status").Result()
 	if err != nil {
 		return &errs.Err{Code: 4001, Msg: "二维码无效或已过期"}
 	}
-	if status != "pending" {
+	if status != "pending" && status != "scanned" {
 		return &errs.Err{Code: 4002, Msg: "二维码已处理"}
 	}
 	store.RDB.HSet(ctx, key, "status", "confirmed", "uid", fmt.Sprintf("%d", uid))

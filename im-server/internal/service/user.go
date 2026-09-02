@@ -19,10 +19,10 @@ func GetProfile(ctx context.Context, userID int64) (*model.User, error) {
 }
 
 type UpdateProfileReq struct {
-	Nickname     string `json:"nickname"`
-	Avatar       string `json:"avatar"`
-	Signature    string `json:"signature"`
-	DepartmentID int64  `json:"departmentId"`
+	Nickname     string  `json:"nickname"`
+	Avatar       string  `json:"avatar"`
+	Signature    *string `json:"signature"` // 指针语义：传了就更新（允许清空为空串），不传不动
+	DepartmentID int64   `json:"departmentId"`
 }
 
 // UpdateProfile 更新资料
@@ -33,6 +33,9 @@ func UpdateProfile(ctx context.Context, userID int64, req *UpdateProfileReq) err
 	}
 	if req.Avatar != "" {
 		updates["avatar"] = req.Avatar
+	}
+	if req.Signature != nil {
+		updates["signature"] = *req.Signature
 	}
 	if req.DepartmentID > 0 {
 		updates["department_id"] = req.DepartmentID

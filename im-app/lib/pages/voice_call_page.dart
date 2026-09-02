@@ -311,12 +311,24 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
               offset: const Offset(0, 8)),
         ],
       ),
+      clipBehavior: Clip.antiAlias,
       alignment: Alignment.center,
-      child: Text(initial,
-          style: const TextStyle(
-              color: Colors.white, fontSize: 44, fontWeight: FontWeight.w600)),
+      // 需求4：有头像显示网络头像，加载失败回退首字母
+      child: widget.peerAvatar.isNotEmpty
+          ? Image.network(
+              widget.peerAvatar,
+              width: 120,
+              height: 120,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _initialAvatar(initial),
+            )
+          : _initialAvatar(initial),
     );
   }
+
+  Widget _initialAvatar(String initial) => Text(initial,
+      style: const TextStyle(
+          color: Colors.white, fontSize: 44, fontWeight: FontWeight.w600));
 
   Widget _bottomBar() {
     return Row(

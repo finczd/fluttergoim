@@ -138,10 +138,15 @@ class CallService {
     required String peerName,
     String peerAvatar = '',
   }) async {
+    // 注意：必须把主叫昵称/头像直接带进 invite 信令——
+    // 此时 state 还没赋值，_sendSignal 里读 state.value 恒为 null，
+    // 被叫来电页会拿不到 callerName/callerAvatar（显示"未知"无头像）。
     await _sendSignal(
       convId: convId,
       action: CallAction.invite,
       callType: callType,
+      callerName: peerName,
+      callerAvatar: peerAvatar,
     );
     state.value = CallState(
       convId: convId,
@@ -320,6 +325,8 @@ class CallService {
     required String callType,
     int duration = 0,
     bool silent = false,
+    String? callerName,    // invite 信令主叫昵称覆盖（startCall 时 state 还没值）
+    String? callerAvatar,  // invite 信令主叫头像覆盖
   }) async {
     try {
       final token = await ApiClient.instance.readToken();
@@ -333,7 +340,8 @@ class CallService {
             'callType': callType,
             'roomId': convId,
             'duration': duration,
-            'callerName': state.value?.peerName ?? '',
+            'callerName': callerName ?? state.value?.peerName ?? '',
+            'callerAvatar': callerAvatar ?? state.value?.peerAvatar ?? '',
             'ts': DateTime.now().millisecondsSinceEpoch,
           }),
           'clientMsgId':

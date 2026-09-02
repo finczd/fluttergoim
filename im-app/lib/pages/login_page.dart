@@ -1,20 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
-import '../services/call_service.dart';
-import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import 'home_shell.dart';
-import 'qr_login_page.dart';
+import 'pay_ui.dart';
 import 'register_page.dart';
 
-/// 登录页（Aura Messaging 设计稿图 1 + 需求调整）
-/// - 顶部无品牌行（用户需求）
-/// - 右上角语言 pill：点击切换中/英（AppLocalizations 实时刷新）
-/// - 居中 logo + 名称：从后端 /auth/config 读取（appLogo/appName），有则用，无则回退蓝色圆形 send
+/// 登录页（美化版：上移重心 + 单大卡片 + 去扫码登录）
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -23,228 +19,308 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _account = TextEditingController();
-  final _password = TextEditingController();
-  final _api = ApiClient.instance;
-  final _svc = AuthService();
+  final _formKey = GlobalKey<FormState>();
+  final _accountCtrl = TextEditingController();
+  final _pwdCtrl = TextEditingController();
+  bool _pwdVisible = false;
   bool _loading = false;
-  bool _obscure = true;
-  String _error = '';
-  String _logoUrl = '';
-  String _brandName = '';
+  String _logoUrl = ''; // 接口下发的品牌 Logo（appLogo / brandLogo）
+
+  final _svc = AuthService();
 
   @override
   void initState() {
     super.initState();
-    _loadBrand();
+    _loadLogo();
   }
 
-  /// 从后端读 brand 配置（logo + 名称）
-  Future<void> _loadBrand() async {
+  Future<void> _loadLogo() async {
     try {
       final cfg = await _svc.getConfig();
-      if (mounted) {
-        setState(() {
-          _logoUrl = (cfg.appLogo ?? cfg.brandLogo ?? '').toString();
-          _brandName = (cfg.appName ?? cfg.brandName ?? 'ChatPulse').toString();
-        });
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _login() async {
-    setState(() {
-      _loading = true;
-      _error = '';
-    });
-    try {
-      final r = await _svc.login(_account.text.trim(), _password.text);
-      await _api.saveToken(r.accessToken);
-      await _api.saveRefresh(r.refreshToken);
-      // 换号登录兜底：清掉上一个账号残留的通话态 / 旧 WS 连接，
-      // 保证 HomeShell 里 ensureConnected 是用新 token 建的连。
-      // 套一层 3s 超时兜底（B-18）：任何一步意外卡住都不能让按钮停在"登录中"。
-      await CallService.instance
-          .resetSession()
-          .timeout(const Duration(seconds: 3), onTimeout: () {});
-      GlobalWs.instance.close();
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeShell()));
-    } catch (e) {
-      setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
-    } finally {
-      if (mounted) setState(() => _loading = false);
+      setState(() {
+        _logoUrl = cfg.appLogo.isNotEmpty ? cfg.appLogo : cfg.brandLogo;
+      });
+    } catch (_) {
+      // 接口失败静默回退默认 Logo
     }
   }
 
-  void _forgotPassword() {
-    AppDialogs.toast(context, AppLocalizations.of(context).t('contactAdmin'));
+  @override
+  void dispose() {
+    _accountCtrl.dispose();
+    _pwdCtrl.dispose();
+    super.dispose();
   }
 
-  void _goRegister() {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const RegisterPage()));
+  // ========= 品牌 Logo（优先接口图片，失败/未加载回退默认） =========
+  Widget _brandLogo({double size = 72}) {
+    if (_logoUrl.isNotEmpty) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.primary.withValues(alpha: 0.3),
+              blurRadius: 18,
+              spreadRadius: 1,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ClipOval(
+          child: Image.network(
+            _logoUrl,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => AppTheme.brandAvatar(size: size),
+          ),
+        ),
+      );
+    }
+    return AppTheme.brandAvatar(size: size);
   }
 
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
     final isZh = Localizations.localeOf(context).languageCode == 'zh';
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ===== 顶栏：仅语言 pill（按需求 3 去掉 ChatPulse 行）=====
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Row(
-                children: [
-                  const Spacer(),
-                  InkWell(
-                    onTap: () => LocaleProvider.of(context)?.toggle(),
-                    borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: context.cs.surfaceContainer,
-                        borderRadius:
-                            BorderRadius.circular(AppTheme.radiusFull),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = Theme.of(context).colorScheme;
+
+    const lightGradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment(0, 0.45),
+      colors: [Color(0xFFE8F2FF), Color(0xFFFFFFFF)],
+    );
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark.copyWith(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: isDark ? scheme.surface : Colors.white,
+        resizeToAvoidBottomInset: true,
+        body: Container(
+          decoration:
+              isDark ? null : const BoxDecoration(gradient: lightGradient),
+          child: SafeArea(
+            top: true,
+            child: Stack(
+              children: [
+                SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(28, 0, 28, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 8),
+                      // 语言切换（右上角）
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: _buildLangChip(scheme, isZh, t),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.language,
-                              size: 16, color: AppTheme.primary),
-                          const SizedBox(width: 4),
-                          Text(isZh ? t('langZh') : t('langEn'),
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppTheme.primary)),
-                        ],
+                      // 品牌 Logo（接口加载，居中 + 紧凑；不显示软件名）
+                      const SizedBox(height: 12),
+                      _brandLogo(size: 56),
+                      const SizedBox(height: 16),
+                      // 欢迎语（居中 + 紧凑）
+                      Text(
+                        t('welcomeBack'),
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.3,
+                          color: scheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        t('loginSubtitle'),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark
+                              ? scheme.onSurfaceVariant
+                              : const Color(0xFF888888),
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      // 单大卡片（紧凑 padding）
+                      _buildLoginCard(t, scheme, isDark),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ========= 右上角语言胶囊 =========
+  Widget _buildLangChip(
+    ColorScheme scheme,
+    bool isZh,
+    String Function(String, [Map<String, String>]) t,
+  ) {
+    // 外层 SafeArea(top:true) 已经处理状态栏高度，这里只用 Padding 给语言胶囊留顶部设计间距
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Material(
+        color: scheme.surface.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(999),
+        elevation: 2,
+        shadowColor: Colors.black.withValues(alpha: 0.08),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: () => LocaleProvider.of(context)?.toggle(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.language, size: 18, color: AppTheme.primary),
+                const SizedBox(width: 6),
+                Text(
+                  isZh ? '中文' : 'English',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurface,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 2),
+                Icon(Icons.keyboard_arrow_down_rounded,
+                    size: 18, color: scheme.onSurfaceVariant),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ========= 登录大卡片 =========
+  Widget _buildLoginCard(String Function(String, [Map<String, String>]) t,
+      ColorScheme scheme, bool isDark) {
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.09),
+            blurRadius: 20,
+            spreadRadius: -2,
+            offset: const Offset(0, 8),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _field(
+              controller: _accountCtrl,
+              hint: t('loginAccountHint'),
+              prefixIcon: Icons.person_outline_rounded,
+              scheme: scheme,
+              isDark: isDark,
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) {
+                  return t('loginAccountRequired');
+                }
+                if (v.trim().length < 3) return t('loginAccountTooShort');
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            _field(
+              controller: _pwdCtrl,
+              hint: t('loginPwdHint'),
+              prefixIcon: Icons.lock_outline_rounded,
+              scheme: scheme,
+              isDark: isDark,
+              obscureText: !_pwdVisible,
+              suffix: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => setState(() => _pwdVisible = !_pwdVisible),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(
+                    _pwdVisible
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    size: 20,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              validator: (v) {
+                if (v == null || v.isEmpty) return t('loginPwdRequired');
+                if (v.length < 6) return t('loginPwdTooShort');
+                return null;
+              },
+              onFieldSubmitted: (_) => _doLogin(t),
+            ),
+            const SizedBox(height: 20),
+            PayUI.blueButton(
+              label: t('loginSubmit'),
+              onPressed: _loading ? null : () => _doLogin(t),
+            ),
+            const SizedBox(height: 12),
+            // 忘记密码（左） + 立即注册（右）——去掉扫码登录
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                GestureDetector(
+                  onTap: () {
+                    AppDialogs.toast(context, '请联系管理员重置密码');
+                  },
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      t('forgotPassword'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppTheme.primary,
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
-            // ===== 主区 =====
-            Expanded(
-              child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const SizedBox(height: 60),
-                    Center(child: _brandLogo()),
-                    if (_brandName.isNotEmpty) ...[
-                      const SizedBox(height: 14),
-                      Center(
-                        child: Text(_brandName,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w700,
-                                color: context.cs.onSurface)),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    Text(t('welcomeBack'),
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.w700,
-                            color: context.cs.onSurface,
-                            height: 1.2)),
-                    const SizedBox(height: 8),
-                    Text(t('signInContinue'),
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontSize: 15, color: context.cs.onSurfaceVariant)),
-                    const SizedBox(height: 40),
-                    TextField(
-                      controller: _account,
-                      style:
-                          TextStyle(fontSize: 15, color: context.cs.onSurface),
-                      decoration: AppTheme.authInput(
-                          hint: t('account'), icon: Icons.person_outline),
-                    ),
-                    const SizedBox(height: 14),
-                    TextField(
-                      controller: _password,
-                      obscureText: _obscure,
-                      style:
-                          TextStyle(fontSize: 15, color: context.cs.onSurface),
-                      decoration: AppTheme.authInput(
-                        hint: t('password'),
-                        icon: Icons.lock_outline,
-                        suffix: IconButton(
-                          onPressed: () => setState(() => _obscure = !_obscure),
-                          icon: Icon(
-                              _obscure
-                                  ? Icons.visibility_off
-                                  : Icons.visibility,
-                              size: 20,
-                              color: context.cs.onSurfaceVariant),
-                        ),
-                      ),
-                      onSubmitted: (_) => _login(),
-                    ),
-                    if (_error.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Text(_error,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              color: AppTheme.danger, fontSize: 13)),
-                    ],
-                    const SizedBox(height: 24),
-                    AppTheme.primaryButton(
-                      label: _loading ? t('loggingIn') : t('login'),
-                      onPressed: _loading ? null : _login,
-                    ),
-                    const SizedBox(height: 24),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Row(
-                        children: [
-                          InkWell(
-                            onTap: _forgotPassword,
-                            child: Text(t('forgotPassword'),
-                                style: const TextStyle(
-                                    fontSize: 13,
-                                    color: AppTheme.textLink,
-                                    fontWeight: FontWeight.w500)),
-                          ),
-                          const Spacer(),
-                          InkWell(
-                            onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute(
-                                    builder: (_) => const _NavigateToQr())),
-                            child: Text(t('scanLogin'),
-                                style: const TextStyle(
-                                    fontSize: 13,
-                                    color: AppTheme.textLink,
-                                    fontWeight: FontWeight.w500)),
-                          ),
-                          const SizedBox(width: 20),
-                          InkWell(
-                            onTap: _goRegister,
-                            child: Text(t('goRegister'),
-                                style: const TextStyle(
-                                    fontSize: 13,
-                                    color: AppTheme.textLink,
-                                    fontWeight: FontWeight.w500)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
                 ),
-              ),
+                GestureDetector(
+                  onTap: () => Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(builder: (_) => const RegisterPage())),
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      t('registerNow'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -252,63 +328,85 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  /// 后端 logo 优先；无则回退蓝色 send 圆
-  Widget _brandLogo() {
-    if (_logoUrl.isNotEmpty) {
-      return ClipOval(
-        child: Image.network(_logoUrl,
-            width: 80,
-            height: 80,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => AppTheme.brandAvatar(size: 80)),
-      );
-    }
-    return AppTheme.brandAvatar(size: 80);
-  }
-}
-
-/// 占位：登录跳扫码页（实际由路由处理）
-class _NavigateToQr extends StatelessWidget {
-  const _NavigateToQr();
-  @override
-  Widget build(BuildContext context) => const QrLoginPage();
-}
-
-/// 启动页：检查本地 Token 决定进入登录页还是首页
-class SplashPage extends StatefulWidget {
-  const SplashPage({super.key});
-
-  @override
-  State<SplashPage> createState() => _SplashPageState();
-}
-
-class _SplashPageState extends State<SplashPage> {
-  @override
-  void initState() {
-    super.initState();
-    _check();
-  }
-
-  Future<void> _check() async {
-    final token = await ApiClient.instance.readToken();
-    if (!mounted) return;
-    if (token == null) {
-      Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const LoginPage()));
-      return;
-    }
-    // 有登录态：先尝试用 refreshToken 续期（长期保持登录），
-    // 续期失败（refresh 也过期）才视为未登录跳登录页
-    final ok = await ApiClient.instance.refreshAccess();
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(MaterialPageRoute(
-        builder: (_) => ok ? const HomeShell() : const LoginPage()));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
+  // ========= 字段封装 =========
+  Widget _field({
+    required TextEditingController controller,
+    required String hint,
+    required IconData prefixIcon,
+    required ColorScheme scheme,
+    required bool isDark,
+    Widget? suffix,
+    bool obscureText = false,
+    String? Function(String?)? validator,
+    void Function(String)? onFieldSubmitted,
+  }) {
+    return TextFormField(
+      controller: controller,
+      obscureText: obscureText,
+      validator: validator,
+      onFieldSubmitted: onFieldSubmitted,
+      style: TextStyle(fontSize: 15, color: scheme.onSurface),
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(
+            fontSize: 15,
+            color: isDark ? scheme.outlineVariant : const Color(0xFFAAAAAA)),
+        prefixIcon: Padding(
+          padding: const EdgeInsets.only(left: 4, right: 8),
+          child: Icon(prefixIcon, size: 20, color: scheme.onSurfaceVariant),
+        ),
+        prefixIconConstraints:
+            const BoxConstraints(minWidth: 36, maxHeight: 36),
+        suffixIcon: suffix == null
+            ? null
+            : Padding(padding: const EdgeInsets.only(right: 6), child: suffix),
+        suffixIconConstraints:
+            const BoxConstraints(minWidth: 36, maxHeight: 36),
+        filled: true,
+        fillColor:
+            isDark ? scheme.surfaceContainerHighest : const Color(0xFFF7F8FA),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        errorStyle: const TextStyle(fontSize: 12, height: 0.9),
+      ),
     );
+  }
+
+  Future<void> _doLogin(
+      String Function(String, [Map<String, String>]) t) async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _loading = true);
+    try {
+      final account = _accountCtrl.text.trim();
+      final password = _pwdCtrl.text.trim();
+      final r = await _svc.login(account, password);
+      if (!mounted) return;
+      await ApiClient.instance.saveToken(r.accessToken);
+      await ApiClient.instance.saveRefresh(r.refreshToken);
+      AppDialogs.toast(context, t('loginSuccess'));
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeShell()),
+        (route) => false,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      AppDialogs.toast(context, msg.isEmpty ? t('unknownError') : msg);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 }

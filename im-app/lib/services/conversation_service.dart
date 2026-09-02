@@ -36,6 +36,9 @@ class ConvItem {
   /// 会话 ID（雪花 ID 全程字符串，H5 上 int 会丢精度）
   String get id => conversation['id']?.toString() ?? '';
 
+  /// 是否小助手会话（助手是虚拟 uid -1；消息列表/通讯录用它显示「官方」标识）
+  bool get isAssistant => (conversation['peerId']?.toString() ?? '') == '-1';
+
   /// 会话头像（群头像 / 单聊对方头像），可能为空
   String get avatarUrl {
     final v = conversation['avatar'] ?? conversation['peerAvatar'];
@@ -52,13 +55,22 @@ class ConvItem {
     // 红包/转账：显示专门样式（不透出 JSON）
     if (type == 8) {
       final note = _moneyNote(m['content']);
-      return note.isEmpty ? t('svcRedPacket') : t('svcRedPacketNote', {'note': note});
+      return note.isEmpty
+          ? t('svcRedPacket')
+          : t('svcRedPacketNote', {'note': note});
     }
     if (type == 9) {
       final note = _moneyNote(m['content']);
-      return note.isEmpty ? t('svcTransfer') : t('svcTransferNote', {'note': note});
+      return note.isEmpty
+          ? t('svcTransfer')
+          : t('svcTransferNote', {'note': note});
     }
-    final typeMap = {2: t('svcImage'), 3: t('svcFile'), 4: t('svcVoice'), 5: t('svcVideo')};
+    final typeMap = {
+      2: t('svcImage'),
+      3: t('svcFile'),
+      4: t('svcVoice'),
+      5: t('svcVideo')
+    };
     final label = typeMap[type] ?? '';
     // 文本(type=1)直接拼接内容；图片/文件/语音/视频仅显示类型标签，不透出 URL/原始内容
     if (type == 1) return label + (m['content']?.toString() ?? '');

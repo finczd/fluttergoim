@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n/app_locale.dart';
 import '../services/wallet_store.dart';
 import 'bill_page.dart';
+import 'pay_ui.dart';
 import 'recharge_page.dart';
 import 'withdraw_page.dart';
 import '../theme/app_theme.dart';
@@ -104,12 +105,12 @@ class _WalletPageState extends State<WalletPage> {
               gradient: const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFFF5A623), Color(0xFFF7C77E)],
+                colors: PayUI.balanceGradient,
               ),
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFF5A623).withValues(alpha: 0.25),
+                  color: PayUI.balanceGradient.first.withValues(alpha: 0.25),
                   blurRadius: 20,
                   offset: const Offset(0, 8),
                 ),
@@ -179,7 +180,7 @@ class _WalletPageState extends State<WalletPage> {
                         size: 18),
                     label: Text(t('walletRecharge')),
                     style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFF5A623),
+                      backgroundColor: PayUI.primary,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
@@ -197,8 +198,8 @@ class _WalletPageState extends State<WalletPage> {
                     icon: const Icon(Icons.savings_outlined, size: 18),
                     label: Text(t('walletWithdraw')),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFFF5A623),
-                      side: const BorderSide(color: Color(0xFFF5A623)),
+                      foregroundColor: PayUI.primary,
+                      side: const BorderSide(color: PayUI.primary),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
@@ -276,15 +277,14 @@ class _WalletPageState extends State<WalletPage> {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color:
-                  (income ? const Color(0xFFE9564E) : const Color(0xFFF5A623))
-                      .withValues(alpha: 0.12),
+              color: (income ? const Color(0xFFE9564E) : PayUI.primary)
+                  .withValues(alpha: 0.12),
               shape: BoxShape.circle,
             ),
             child: Icon(
               income ? Icons.south_west : Icons.north_east,
               size: 18,
-              color: income ? const Color(0xFFE9564E) : const Color(0xFFF5A623),
+              color: income ? const Color(0xFFE9564E) : PayUI.primary,
             ),
           ),
           const SizedBox(width: 12),

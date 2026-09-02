@@ -3,9 +3,15 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/yourcompany/im-server/internal/config"
+	"github.com/yourcompany/im-server/internal/model"
 	"github.com/yourcompany/im-server/internal/pkg/errs"
+	"github.com/yourcompany/im-server/internal/store"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // ============ 智能小助手 ============
@@ -120,3 +126,67 @@ func AssistantNotify(ctx context.Context, userID int64, content string) error {
 
 func jsonMarshal(v interface{}) ([]byte, error)   { return json.Marshal(v) }
 func jsonUnmarshal(b []byte, v interface{}) error { return json.Unmarshal(b, v) }
+
+// AssistantAvatar 后台配置的小助手头像（未设置返回空）
+// GetAssistantConfig 不依赖 cfg（仅读 sys_config），传 nil 安全
+func AssistantAvatar(ctx context.Context) string {
+	return GetAssistantConfig(ctx, nil).Avatar
+}
+
+// ============ 后台「助手会话消息」管理 ============
+
+// AssistantConvItem 会话列表项（助手 ↔ 用户）
+type AssistantConvItem struct {
+	// 注意：UserID 本身就是 string，不能再加 ",string" 选项——
+	// Go 的 ,string 会把字符串值再 JSON 编码一层（值变成 "\"123\""），
+	// 前端原样传回后 ParseInt 失败 → 后台打开助手会话一直报「参数错误」。
+	UserID      string         `json:"userId"`
+	Nickname    string         `json:"nickname"`
+	Account     string         `json:"account"`
+	Avatar      string         `json:"avatar"`
+	LastMessage *model.Message `json:"lastMessage"`
+}
+
+// AssistantConvList 所有与小助手的会话（后台查看谁能看助手、最后一条消息）
+func AssistantConvList(ctx context.Context) ([]AssistantConvItem, error) {
+	var members []model.ConversationMember
+	if err := store.DB.Where("user_id = ?", -1).Find(&members).Error; err != nil {
+		return nil, err
+	}
+	out := make([]AssistantConvItem, 0, len(members))
+	for _, m := range members {
+		otherID := directOtherID(ctx, m.ConversationID, -1)
+		if otherID <= 0 {
+			continue
+		}
+		it := AssistantConvItem{UserID: fmt.Sprintf("%d", otherID)}
+		var u model.User
+		if err := store.DB.First(&u, otherID).Error; err == nil {
+			it.Nickname = u.Nickname
+			it.Account = u.Account
+			it.Avatar = u.Avatar
+		}
+		var last model.Message
+		if err := msgColl().FindOne(ctx,
+			bson.M{"conversation_id": m.ConversationID},
+			options.FindOne().SetSort(bson.D{{Key: "msg_id", Value: -1}})).Decode(&last); err == nil {
+			it.LastMessage = &last
+		}
+		out = append(out, it)
+	}
+	return out, nil
+}
+
+// AssistantMessages 某用户与助手的会话消息（复用 History；助手 uid=-1 是会话成员）
+// beforeMsgID>0 时向前翻页；返回按时间正序
+func AssistantMessages(ctx context.Context, userID, beforeMsgID, limit int64) ([]model.Message, error) {
+	if userID <= 0 {
+		return nil, &errs.Err{Code: 1001, Msg: "参数错误"}
+	}
+	// 已有会话直接返回；没有则补建（后台主动回复时也能用）
+	conv, err := CreateDirect(ctx, userID, -1)
+	if err != nil {
+		return nil, err
+	}
+	return History(ctx, -1, conv.ID, beforeMsgID, limit)
+}

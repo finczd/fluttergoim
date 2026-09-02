@@ -8,11 +8,11 @@ import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
+import 'pay_ui.dart';
 
-/// 提现收款方式绑定页（一人只能绑定一种，账号唯一）微信风格：
-///   微信：微信收款码图片 + 收款姓名
-///   支付宝：收款码图片 + 支付宝账号 + 姓名
-///   银行卡：卡号 + 开户银行 + 银行卡姓名
+/// 提现收款方式绑定页（一人只能绑定一种，账号唯一）。
+/// 按统一设计稿布局：顶部分段切换（支付宝/微信/银行卡）→ 白卡表单（标签在上、
+/// 描边输入框）→ 收款码大虚线上传框 → 底部主按钮 + 灰色提示。
 /// 接口：GET/PUT /api/v1/wallet/withdraw-account（服务端按 accountType 校验必填）。
 class WithdrawAccountPage extends StatefulWidget {
   const WithdrawAccountPage({super.key});
@@ -201,90 +201,89 @@ class _WithdrawAccountPageState extends State<WithdrawAccountPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
         children: [
-          // 绑定提示（白底卡）
-          _card(
-              child: Row(children: [
-            Icon(Icons.info_outline, size: 18, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 10),
-            Expanded(
-                child: Text(t('wdHint'),
-                    style: TextStyle(
-                        fontSize: 12, color: scheme.onSurfaceVariant))),
-          ])),
-          const SizedBox(height: 12),
-          // 绑定类型（白底列表单选）
-          _card(
-              padding: EdgeInsets.zero,
-              child: Column(children: [
-                _typeRow(1, Icons.chat_rounded, t('wdMethodWechat')),
-                Divider(height: 1, indent: 14, color: scheme.outlineVariant),
-                _typeRow(2, Icons.payment_outlined, t('wdMethodAlipay')),
-                Divider(height: 1, indent: 14, color: scheme.outlineVariant),
-                _typeRow(3, Icons.account_balance_outlined, t('wdMethodBank')),
-              ])),
+          // 绑定类型分段切换
+          PayUI.segmentTabs(
+            context: context,
+            items: [
+              (2, t('wdMethodAlipay'), Icons.payment_outlined),
+              (1, t('wdMethodWechat'), Icons.chat_rounded),
+              (3, t('wdMethodBank'), Icons.account_balance_outlined),
+            ],
+            selected: _type,
+            onChanged: (v) => setState(() => _type = v),
+          ),
           const SizedBox(height: 12),
           // 按类型渲染表单
-          if (_type == 1) ...[
-            _qrCard(title: t('wdWechatQrcode')),
-            const SizedBox(height: 12),
+          if (_type == 3) ...[
             _card(
-                padding: EdgeInsets.zero,
-                child: _rowInput(t('wdWechatName'), _wechatNameCtrl)),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  _outlinedField(t('wdRealName'), _bankAccNameCtrl),
+                  const SizedBox(height: 4),
+                  _tip(t('wdRealNameTip')),
+                  const SizedBox(height: 14),
+                  _outlinedField(t('wdBankCardNo'), _bankCardCtrl,
+                      keyboard: TextInputType.number),
+                  const SizedBox(height: 14),
+                  _outlinedField(t('wdBankName'), _bankNameCtrl),
+                ])),
+          ],
+          if (_type == 1) ...[
+            _card(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  _outlinedField(t('wdWechatName'), _wechatNameCtrl),
+                  const SizedBox(height: 4),
+                  _tip(t('wdRealNameTip')),
+                  const SizedBox(height: 14),
+                  Text(t('wdWechatQrcode'),
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 8),
+                  _qrBox(),
+                ])),
           ],
           if (_type == 2) ...[
-            _qrCard(title: t('wdAlipayQrcode')),
-            const SizedBox(height: 12),
             _card(
-                padding: EdgeInsets.zero,
-                child: Column(children: [
-                  _rowInput(t('wdAlipayAccount'), _alipayAccountCtrl,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  _outlinedField(t('wdAlipayName'), _alipayNameCtrl),
+                  const SizedBox(height: 4),
+                  _tip(t('wdRealNameTip')),
+                  const SizedBox(height: 14),
+                  _outlinedField(t('wdAlipayAccount'), _alipayAccountCtrl,
                       keyboard: TextInputType.emailAddress),
-                  Divider(height: 1, indent: 14, color: scheme.outlineVariant),
-                  _rowInput(t('wdAlipayName'), _alipayNameCtrl),
+                  const SizedBox(height: 14),
+                  Text(t('wdAlipayQrcode'),
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 8),
+                  _qrBox(),
                 ])),
           ],
-          if (_type == 3)
-            _card(
-                padding: EdgeInsets.zero,
-                child: Column(children: [
-                  _rowInput(t('wdBankCardNo'), _bankCardCtrl,
-                      keyboard: TextInputType.number),
-                  Divider(height: 1, indent: 14, color: scheme.outlineVariant),
-                  _rowInput(t('wdBankName'), _bankNameCtrl),
-                  Divider(height: 1, indent: 14, color: scheme.outlineVariant),
-                  _rowInput(t('wdBankAccountName'), _bankAccNameCtrl),
-                ])),
           const SizedBox(height: 24),
-          // 保存按钮（微信橙）
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: FilledButton(
-              onPressed: _saving ? null : _save,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFFA9D3B),
-                disabledBackgroundColor: const Color(0xFFF7C9A0),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-              ),
-              child: _saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
-                  : Text(t('wdSave'),
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w600)),
-            ),
+          // 保存按钮（全局统一主按钮）
+          PayUI.primaryButton(
+            label: t('wdBindNow'),
+            onPressed: _saving ? null : _save,
+            loading: _saving,
           ),
+          const SizedBox(height: 10),
+          Center(
+              child: Text(t('wdHint'),
+                  textAlign: TextAlign.center,
+                  style:
+                      TextStyle(fontSize: 11, color: scheme.onSurfaceVariant))),
         ],
       ),
     );
   }
 
-  /// 收款码上传卡：标题 + 居中方框（预览已绑图/新选图，点击选图）
-  Widget _qrCard({required String title}) {
+  /// 收款码大虚线上传框（空态=圆形浅蓝图标+提示文字，有图=整框预览，点击换图）
+  Widget _qrBox() {
     final t = AppLocalizations.of(context).t;
     final scheme = Theme.of(context).colorScheme;
     final isWechat = _type == 1;
@@ -296,120 +295,70 @@ class _WithdrawAccountPageState extends State<WithdrawAccountPage> {
     } else if (serverUrl.isNotEmpty) {
       preview = Image.network(_absUrl(serverUrl), fit: BoxFit.cover);
     }
-    return _card(
-        child: Column(children: [
-      Text(title, style: TextStyle(fontSize: 15, color: scheme.onSurface)),
-      const SizedBox(height: 10),
-      GestureDetector(
-        onTap: () => _pickQr(isWechat),
-        child: Container(
-          width: 130,
-          height: 130,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-                color: scheme.outlineVariant,
-                width: 1,
-                strokeAlign: BorderSide.strokeAlignInside),
-          ),
-          child: preview != null
-              ? preview
-              : Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.add_photo_alternate_outlined,
-                        size: 32, color: scheme.onSurfaceVariant),
-                    const SizedBox(height: 6),
-                    Text(t('wdPickQrcode'),
-                        style: TextStyle(
-                            fontSize: 11, color: scheme.onSurfaceVariant)),
-                  ],
+    return PayUI.dashedUploadBox(
+      context: context,
+      height: 170,
+      onTap: () => _pickQr(isWechat),
+      child: preview != null
+          ? SizedBox(
+              width: double.infinity,
+              height: 170,
+              child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10), child: preview),
+            )
+          : Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: PayUI.primary.withValues(alpha: 0.12),
                 ),
-        ),
-      ),
-    ]));
-  }
-
-  /// 绑定类型单选行（微信风格：左图标 + 名称 + 右圆形单选）
-  Widget _typeRow(int type, IconData icon, String label) {
-    final scheme = Theme.of(context).colorScheme;
-    final selected = _type == type;
-    return InkWell(
-      onTap: () => setState(() => _type = type),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        child: Row(
-          children: [
-            Icon(icon,
-                size: 22,
-                color: selected
-                    ? const Color(0xFFFA9D3B)
-                    : scheme.onSurfaceVariant),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(label,
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                      color: scheme.onSurface)),
-            ),
-            _radio(selected),
-          ],
-        ),
-      ),
+                child: const Icon(Icons.add_photo_alternate_outlined,
+                    size: 26, color: PayUI.primary),
+              ),
+              const SizedBox(height: 8),
+              Text(t('wdPickQrcode'),
+                  style:
+                      TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+            ]),
     );
   }
 
-  /// 圆形单选指示器
-  Widget _radio(bool selected) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: selected ? const Color(0xFFFA9D3B) : Colors.transparent,
-        border: Border.all(
-            color: selected ? const Color(0xFFFA9D3B) : scheme.outlineVariant,
-            width: selected ? 0 : 1.5),
-      ),
-      alignment: Alignment.center,
-      child: selected
-          ? const Icon(Icons.check, size: 13, color: Colors.white)
-          : null,
-    );
-  }
-
-  /// 白底行式输入（无描边、无灰底填充、isCollapsed 防裁剪，左标签右输入）
-  Widget _rowInput(String label, TextEditingController ctrl,
+  /// 标签在上 + 描边输入框（圆角 8，聚焦变主蓝）
+  Widget _outlinedField(String label, TextEditingController ctrl,
       {TextInputType? keyboard}) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: Row(
-        children: [
-          SizedBox(
-              width: 100,
-              child: Text(label,
-                  style: TextStyle(fontSize: 14, color: scheme.onSurface))),
-          Expanded(
-            child: TextField(
-              controller: ctrl,
-              keyboardType: keyboard,
-              style: TextStyle(fontSize: 15, color: scheme.onSurface),
-              decoration: const InputDecoration(
-                filled: false,
-                border: InputBorder.none,
-                isCollapsed: true,
-              ),
-            ),
-          ),
-        ],
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label,
+          style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
+      const SizedBox(height: 8),
+      TextField(
+        controller: ctrl,
+        keyboardType: keyboard,
+        style: TextStyle(fontSize: 15, color: scheme.onSurface),
+        decoration: InputDecoration(
+          filled: false,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: scheme.outlineVariant)),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: scheme.outlineVariant)),
+          focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: PayUI.primary, width: 1.5)),
+        ),
       ),
-    );
+    ]);
   }
+
+  /// 灰色小字提示
+  Widget _tip(String text) => Text(text,
+      style: TextStyle(
+          fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant));
 
   Widget _card({required Widget child, EdgeInsetsGeometry? padding}) =>
       Container(

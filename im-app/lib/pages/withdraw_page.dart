@@ -6,10 +6,13 @@ import '../services/wallet_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import 'pay_records_page.dart';
+import 'pay_ui.dart';
 import 'withdraw_account_page.dart';
 
-/// 提现页（离线人工审核通道）微信风格：
-/// 显示可提余额与手续费规则 → 输入金额 → 选择已绑定的收款方式 → 提交；
+/// 提现页（离线人工审核通道）。
+/// 按统一设计稿布局：顶部蓝渐变余额卡（账户余额白字 + 大数字 + 规则提示）→
+/// 白卡提现金额（标签在上 + ¥ 大字输入 + 全部按钮 + 手续费/实际到账 + 到账提示）→
+/// 白卡提现方式（标题 + 三行单选 + 修改收款信息入口）→ 底部主按钮。
 /// 服务端冻结余额并生成 withdraw_order，后台审核打款后结算。
 class WithdrawPage extends StatefulWidget {
   const WithdrawPage({super.key});
@@ -119,7 +122,7 @@ class _WithdrawPageState extends State<WithdrawPage> {
                         style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFFFA9D3B))),
+                            color: PayUI.primary)),
                   ),
                 ),
               ),
@@ -276,98 +279,128 @@ class _WithdrawPageState extends State<WithdrawPage> {
                           fontSize: 13, color: scheme.onSurfaceVariant))),
             ]))
           else ...[
-            // 可提余额（白底大卡）
+            // 蓝渐变余额卡
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: PayUI.balanceGradient,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(t('wdBalance'),
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.white.withValues(alpha: 0.85))),
+                    const SizedBox(height: 6),
+                    Text('¥ ${_balance.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                            fontSize: 30,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                    const SizedBox(height: 8),
+                    Text(
+                        t('wdRule', {
+                          'min': min.toStringAsFixed(0),
+                          'max': max.toStringAsFixed(0),
+                          'rate': (feeRate * 100).toStringAsFixed(
+                              feeRate * 100 == feeRate * 100.truncateToDouble()
+                                  ? 0
+                                  : 1),
+                          'feeMin': feeMin.toStringAsFixed(0),
+                        }),
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.75))),
+                  ]),
+            ),
+            const SizedBox(height: 12),
+            // 提现金额：标签在上 + ¥ 大字输入 + 全部按钮 + 手续费/到账
             _card(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                  Text(t('wdBalance'),
+                  Text(t('wdAmount'),
                       style: TextStyle(
-                          fontSize: 12, color: scheme.onSurfaceVariant)),
-                  const SizedBox(height: 6),
-                  Text('¥ ${_balance.toStringAsFixed(2)}',
-                      style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w700,
-                          color: scheme.onSurface)),
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
                   const SizedBox(height: 8),
-                  Text(
-                      t('wdRule', {
-                        'min': min.toStringAsFixed(0),
-                        'max': max.toStringAsFixed(0),
-                        'rate': (feeRate * 100).toStringAsFixed(
-                            feeRate * 100 == feeRate * 100.truncateToDouble()
-                                ? 0
-                                : 1),
-                        'feeMin': feeMin.toStringAsFixed(0),
-                      }),
+                  Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                    Text('¥',
+                        style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurface)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: TextField(
+                        controller: _amountCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        onChanged: (_) => setState(() {}),
+                        style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurface),
+                        decoration: InputDecoration(
+                          hintText: t('wdAmountHint'),
+                          hintStyle: TextStyle(
+                              fontSize: 16, color: scheme.outlineVariant),
+                          filled: false,
+                          border: InputBorder.none,
+                          isCollapsed: true,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        _amountCtrl.text = _balance.toStringAsFixed(2);
+                        setState(() {});
+                      },
+                      style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                      child: Text(t('wdAll'),
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: PayUI.primary)),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  Divider(height: 1, color: scheme.outlineVariant),
+                  const SizedBox(height: 10),
+                  _kv(t('wdFee'),
+                      '¥${_amount <= 0 ? '0.00' : _fee.toStringAsFixed(2)}'),
+                  const SizedBox(height: 6),
+                  _kv(t('wdActual'), '¥${actual.toStringAsFixed(2)}',
+                      bold: true),
+                  const SizedBox(height: 8),
+                  Text(t('wdArriveHint'),
                       style: TextStyle(
                           fontSize: 11, color: scheme.onSurfaceVariant)),
                 ])),
             const SizedBox(height: 12),
-            // 提现金额（白底行式，¥ 在输入左侧 + 全部按钮）
-            _card(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                child: Row(children: [
-                  Text(t('wdAmount'),
-                      style: TextStyle(fontSize: 15, color: scheme.onSurface)),
-                  const SizedBox(width: 12),
-                  Text('¥',
-                      style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: scheme.onSurface)),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: TextField(
-                      controller: _amountCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      onChanged: (_) => setState(() {}),
-                      style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: scheme.onSurface),
-                      decoration: InputDecoration(
-                        hintText: t('wdAmountHint'),
-                        hintStyle: TextStyle(
-                            fontSize: 15, color: scheme.outlineVariant),
-                        filled: false,
-                        border: InputBorder.none,
-                        isCollapsed: true,
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      _amountCtrl.text = _balance.toStringAsFixed(2);
-                      setState(() {});
-                    },
-                    style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                    child: Text(t('wdAll'),
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFFFA9D3B))),
-                  ),
-                ])),
-            const SizedBox(height: 12),
-            // 手续费 / 实际到账
-            _card(
-                child: Column(children: [
-              _kv(t('wdFee'),
-                  '¥${_amount <= 0 ? '0.00' : _fee.toStringAsFixed(2)}'),
-              Divider(height: 14, color: scheme.outlineVariant),
-              _kv(t('wdActual'), '¥${actual.toStringAsFixed(2)}', bold: true),
-            ])),
-            const SizedBox(height: 12),
-            // 收款方式（白底列表单选 + 修改入口）
+            // 提现方式：标题 + 三行单选 + 修改收款信息入口
             _card(
                 padding: EdgeInsets.zero,
                 child: Column(children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 4),
+                    child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(t('wdMethodTitle'),
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onSurface))),
+                  ),
                   _methodRow(1, Icons.chat_rounded, t('wdMethodWechat')),
                   Divider(height: 1, indent: 14, color: scheme.outlineVariant),
                   _methodRow(2, Icons.payment_outlined, t('wdMethodAlipay')),
@@ -399,28 +432,11 @@ class _WithdrawPageState extends State<WithdrawPage> {
                   ),
                 ])),
             const SizedBox(height: 24),
-            // 提交按钮（微信橙）
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: FilledButton(
-                onPressed: _submitting ? null : _submit,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFFA9D3B),
-                  disabledBackgroundColor: const Color(0xFFF7C9A0),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                child: _submitting
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : Text(t('wdSubmit'),
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600)),
-              ),
+            // 提交按钮（全局统一主按钮）
+            PayUI.primaryButton(
+              label: t('wdSubmit'),
+              onPressed: _submitting ? null : _submit,
+              loading: _submitting,
             ),
           ],
         ],
@@ -465,9 +481,7 @@ class _WithdrawPageState extends State<WithdrawPage> {
           children: [
             Icon(icon,
                 size: 22,
-                color: selected
-                    ? const Color(0xFFFA9D3B)
-                    : scheme.onSurfaceVariant),
+                color: selected ? PayUI.primary : scheme.onSurfaceVariant),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -501,24 +515,7 @@ class _WithdrawPageState extends State<WithdrawPage> {
   }
 
   /// 圆形单选指示器
-  Widget _radio(bool selected) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: selected ? const Color(0xFFFA9D3B) : Colors.transparent,
-        border: Border.all(
-            color: selected ? const Color(0xFFFA9D3B) : scheme.outlineVariant,
-            width: selected ? 0 : 1.5),
-      ),
-      alignment: Alignment.center,
-      child: selected
-          ? const Icon(Icons.check, size: 13, color: Colors.white)
-          : null,
-    );
-  }
+  Widget _radio(bool selected) => PayUI.radio(context, selected);
 
   Widget _card({required Widget child, EdgeInsetsGeometry? padding}) =>
       Container(

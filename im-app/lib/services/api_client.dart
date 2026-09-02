@@ -68,6 +68,12 @@ class ApiClient {
       _storage.write(key: _refreshKey, value: t);
   Future<String?> readRefresh() => _storage.read(key: _refreshKey);
 
+  /// 轻量本地偏好（非敏感 UI 状态，如公告关闭记录）
+  Future<String?> readPref(String key) => _storage.read(key: 'pref_$key');
+  Future<void> writePref(String key, String? v) => v == null || v.isEmpty
+      ? _storage.delete(key: 'pref_$key')
+      : _storage.write(key: 'pref_$key', value: v);
+
   /// 用 refreshToken 刷新 accessToken（成功返回 true；无 refresh / 已过期返回 false）
   Future<bool> refreshAccess() => _tryRefresh();
 
@@ -108,6 +114,11 @@ class ApiClient {
   Future<void> logout() async {
     final t = await readToken();
     await _clearAuth(); // 先清本地：access + refresh 一起删
+    // 清 UI 缓存（我的资料/通讯录/发现列表）：换账号登录时不能闪现上一个账号的资料
+    unawaited(writePref('profile', null));
+    unawaited(writePref('contacts', null));
+    unawaited(writePref('discoverApps', null));
+    unawaited(writePref('assistantAvatar', null));
     // 极光推送解绑 alias：避免注销后仍收到该账号的离线推送
     unawaited(PushService.instance.stop());
     // 停掉保活前台服务：通知栏消失，进程可被正常回收

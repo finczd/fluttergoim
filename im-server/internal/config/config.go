@@ -39,7 +39,11 @@ func loadDotEnv() {
 				if len(v) >= 2 {
 					if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
 						v = v[1 : len(v)-1]
+					} else {
+						v = stripInlineComment(v)
 					}
+				} else {
+					v = stripInlineComment(v)
 				}
 				if _, exists := os.LookupEnv(k); !exists {
 					_ = os.Setenv(k, v)
@@ -55,6 +59,17 @@ func loadDotEnv() {
 		}
 		wd = parent
 	}
+}
+
+// stripInlineComment 剥离 .env 值的行内注释（` #` / `\t#` / ` //`），与 godotenv 行为一致。
+// 只有注释标记前存在空白时才截断，避免误伤 URL 中的 `//`（如 mongodb://）。
+func stripInlineComment(v string) string {
+	for _, marker := range []string{" #", "\t#", " //", "\t//"} {
+		if i := strings.Index(v, marker); i >= 0 {
+			return strings.TrimSpace(v[:i])
+		}
+	}
+	return strings.TrimSpace(v)
 }
 
 // Config 全局配置（环境变量驱动）

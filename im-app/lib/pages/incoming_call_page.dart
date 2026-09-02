@@ -82,8 +82,14 @@ class _IncomingCallPageState extends State<IncomingCallPage>
     await CallService.instance.accept();
     appNavigatorKey.currentState?.push(MaterialPageRoute(
       builder: (_) => callType == 'video'
-          ? VideoCallPage(peerName: peerName, convId: convId)
-          : VoiceCallPage(peerName: peerName, convId: convId),
+          ? VideoCallPage(
+              peerName: peerName,
+              peerAvatar: widget.state.peerAvatar,
+              convId: convId)
+          : VoiceCallPage(
+              peerName: peerName,
+              peerAvatar: widget.state.peerAvatar,
+              convId: convId),
     ));
   }
 

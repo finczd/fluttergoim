@@ -18,6 +18,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import 'conv_settings_page.dart';
 import 'group_member_picker_page.dart';
+import 'image_viewer_page.dart';
 import 'red_packet_detail_page.dart';
 import 'red_packet_page.dart';
 import 'transfer_page.dart';
@@ -118,7 +119,19 @@ class _ChatPageState extends State<ChatPage> {
   // 长按全屏遮罩状态
   ChatMsg? _longPressedMsg;
 
+  // 头像：我方（profile 拉取）/ 群成员（按 senderId 查 _members）；单聊对方用 conv.avatarUrl
+  String _myAvatar = '';
+
   bool get isGroup => (widget.conv.conversation['type'] as num?)?.toInt() == 2;
+
+  /// 群聊按 senderId 查成员头像（单聊不走这里）
+  String _memberAvatar(String senderId) {
+    for (final m in _members) {
+      final uid = m['userId']?.toString() ?? m['id']?.toString() ?? '';
+      if (uid == senderId) return m['avatar']?.toString() ?? '';
+    }
+    return '';
+  }
 
   String _t(String key, [Map<String, String>? params]) =>
       AppLocalizations.of(context).t(key, params);
@@ -155,10 +168,22 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _init() async {
+    _loadMyAvatar();
     await _loadHistory();
     await _connectWs();
     _reportRead();
     if (isGroup) _loadMembers();
+  }
+
+  /// 我方头像（聊天窗口左右气泡都要显示真实头像）
+  Future<void> _loadMyAvatar() async {
+    try {
+      final r = await _api.get('/api/v1/user/profile');
+      final av =
+          ((r.data['data'] as Map<String, dynamic>)['avatar'])?.toString() ??
+              '';
+      if (mounted && av.isNotEmpty) setState(() => _myAvatar = av);
+    } catch (_) {}
   }
 
   /// 上报已读（取列表最后一条已收 msgId；失败忽略）
@@ -238,12 +263,24 @@ class _ChatPageState extends State<ChatPage> {
             });
           },
           onReconnected: () {
-            // 重连后做一次补拉
+            // 重连后做一次补拉（按 msgId/clientMsgId 去重后再合并，
+            // 避免 addAll 把本地已有的消息再插一遍 → 整条记录重复）
             _svc.sync(widget.conv.id, _lastSeq).then((list) {
               if (list.isEmpty || !mounted) return;
               final added = list.map(ChatMsg.fromServer).toList();
               added.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
-              setState(() => _msgs.addAll(added));
+              setState(() {
+                for (final m in added) {
+                  final dup = _msgs.any((x) =>
+                      (m.msgId != null &&
+                          m.msgId!.isNotEmpty &&
+                          x.msgId == m.msgId) ||
+                      (x.clientMsgId.isNotEmpty &&
+                          x.clientMsgId == m.clientMsgId));
+                  if (!dup) _msgs.add(m);
+                }
+                _msgs.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
+              });
               _scrollToBottom();
             });
           });
@@ -259,11 +296,16 @@ class _ChatPageState extends State<ChatPage> {
     if (seqNow > _lastSeq) _lastSeq = seqNow;
     if (mounted) {
       setState(() {
-        // 幂等去重
-        if (_msgs.any((x) =>
-            x.clientMsgId.isNotEmpty && x.clientMsgId == msg.clientMsgId)) {
-          return;
-        }
+        // 幂等去重：msgId 或 clientMsgId 任一命中即跳过。
+        // 只按 clientMsgId 判断有漏网场景（服务端/补拉数据不带 clientMsgId 时
+        // 永远匹配不上 → 同一条消息被重复插入 → 图片消息显示两张），
+        // 所以再按 msgId 兜一层。
+        final dup = _msgs.any((x) =>
+            (msg.msgId != null &&
+                msg.msgId!.isNotEmpty &&
+                x.msgId == msg.msgId) ||
+            (x.clientMsgId.isNotEmpty && x.clientMsgId == msg.clientMsgId));
+        if (dup) return;
         _msgs.add(msg);
         _msgs.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
       });
@@ -679,9 +721,12 @@ class _ChatPageState extends State<ChatPage> {
     Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => type == 'video'
             ? VideoCallPage(
-                peerName: widget.conv.conversationName, convId: widget.conv.id)
+                peerName: widget.conv.conversationName,
+                peerAvatar: widget.conv.avatarUrl,
+                convId: widget.conv.id)
             : VoiceCallPage(
                 peerName: widget.conv.conversationName,
+                peerAvatar: widget.conv.avatarUrl,
                 convId: widget.conv.id)));
   }
 
@@ -847,8 +892,13 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         final idx = _msgs.indexWhere((m) => m.clientMsgId == clientMsgId);
         if (idx >= 0) {
-          _msgs[idx].status = MsgStatus.sent;
-          _msgs[idx].msgId = resp['msgId']?.toString();
+          // 与文本 _send 一致：整体替换为服务端回显消息（含 msgId/seq/clientMsgId），
+          // 并推进 _lastSeq —— 否则 WS 回推/重连补拉会把这条图片消息当新消息
+          // 再插一遍，聊天记录里同一张图出现两次。
+          _msgs[idx] = ChatMsg.fromServer(resp);
+          final seqNow = (resp['seq'] as num?)?.toInt() ?? 0;
+          if (seqNow > 0) _lastSeq = max(_lastSeq, seqNow);
+          _msgs.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
         }
       });
     } catch (e) {
@@ -917,6 +967,10 @@ class _ChatPageState extends State<ChatPage> {
                                   isMine: m.senderId == widget.myId,
                                   senderName: _senderName(m.senderId),
                                   showSenderName: isGroup,
+                                  // 头像：单聊（含小助手）用对方会话头像，群聊按成员查
+                                  myAvatar: _myAvatar,
+                                  peerAvatar: widget.conv.avatarUrl,
+                                  senderAvatar: _memberAvatar(m.senderId),
                                   highlighted: _longPressedMsg?.clientMsgId ==
                                       m.clientMsgId,
                                   onLongPress: () => _showLongPressOverlay(m),
@@ -1115,6 +1169,9 @@ class _MsgRow extends StatelessWidget {
   final bool showSenderName;
   final bool moneyClaimed; // 红包/转账已领取
   final VoidCallback? onMoneyTap; // 红包/转账点击领取
+  final String myAvatar; // 我方头像 URL
+  final String peerAvatar; // 单聊对方头像 URL（含小助手后台配置头像）
+  final String senderAvatar; // 群聊该消息发送者头像 URL
 
   const _MsgRow({
     required this.msg,
@@ -1130,6 +1187,9 @@ class _MsgRow extends StatelessWidget {
     this.showSenderName = false,
     this.moneyClaimed = false,
     this.onMoneyTap,
+    this.myAvatar = '',
+    this.peerAvatar = '',
+    this.senderAvatar = '',
   });
 
   @override
@@ -1308,6 +1368,25 @@ class _MsgRow extends StatelessWidget {
   }
 
   Widget _avatar(Color color, String text) {
+    // 真实头像：我方 / 单聊对方（含小助手）/ 群成员，有 URL 就显示；失败回落色块
+    // （群聊标记 showSenderName 由父级按 isGroup 传入）
+    final url =
+        isMine ? myAvatar : (showSenderName ? senderAvatar : peerAvatar);
+    if (url.isNotEmpty) {
+      return ClipOval(
+        child: Image.network(
+          url,
+          width: 36,
+          height: 36,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _fallbackAvatar(color, text),
+        ),
+      );
+    }
+    return _fallbackAvatar(color, text);
+  }
+
+  Widget _fallbackAvatar(Color color, String text) {
     return Container(
       width: 36,
       height: 36,
@@ -1849,9 +1928,42 @@ class _ImageGridBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 设计稿：4 张缩略图网格 + 第 5 张角标 +N
-    final shown =
-        (urls.isEmpty ? List.generate(5, (_) => '') : urls).take(5).toList();
+    // 单图：直接渲染一张满宽方图。
+    // 不能走 2 列网格 —— 1 张图只占左格，右格留一块空白，看起来像"发了 1 张显示 2 张"。
+    if (urls.length == 1) {
+      return Container(
+        width: 200,
+        height: 200,
+        decoration: BoxDecoration(
+          color: context.cs.surface,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: _buildImageCell(context, urls.first),
+      );
+    }
+
+    // 无 URL（content 为空的异常图片消息）：单个灰色占位，不再铺 4 个空格子
+    if (urls.isEmpty) {
+      return Container(
+        width: 200,
+        height: 200,
+        decoration: BoxDecoration(
+          color: context.cs.surface,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Container(
+          color: const Color(0xFFE9ECEF),
+          alignment: Alignment.center,
+          child:
+              Icon(Icons.photo, color: context.cs.onSurfaceVariant, size: 28),
+        ),
+      );
+    }
+
+    // 多图（≥2 张）：2 列网格 + 第 5 张角标 +N
+    final shown = urls.take(5).toList();
     return Container(
       width: 240,
       decoration: BoxDecoration(
@@ -1866,41 +1978,12 @@ class _ImageGridBubble extends StatelessWidget {
         mainAxisSpacing: 2,
         crossAxisSpacing: 2,
         childAspectRatio: 1,
-        children: List.generate(shown.length.clamp(1, 4), (i) {
+        children: List.generate(shown.length.clamp(2, 4), (i) {
           final url = shown[i];
           return Stack(
             fit: StackFit.expand,
             children: [
-              // 需求2+3：真实加载图片（MinIO URL；localhost 换当前主机兜底）
-              url.isEmpty
-                  ? Container(
-                      color: const Color(0xFFE9ECEF),
-                      alignment: Alignment.center,
-                      child: Icon(Icons.photo,
-                          color: context.cs.onSurfaceVariant, size: 28),
-                    )
-                  : Image.network(
-                      _fixUrl(url),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(
-                        color: const Color(0xFFE9ECEF),
-                        alignment: Alignment.center,
-                        child: Icon(Icons.broken_image_outlined,
-                            color: context.cs.onSurfaceVariant, size: 24),
-                      ),
-                      loadingBuilder: (_, child, progress) => progress == null
-                          ? child
-                          : Container(
-                              color: const Color(0xFFE9ECEF),
-                              alignment: Alignment.center,
-                              child: const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              ),
-                            ),
-                    ),
+              _buildImageCell(context, url),
               if (i == 3 && shown.length > 4)
                 Container(
                   color: Colors.black.withValues(alpha: 0.45),
@@ -1916,6 +1999,46 @@ class _ImageGridBubble extends StatelessWidget {
             ],
           );
         }),
+      ),
+    );
+  }
+
+  /// 图片单元格：真实加载 + 点击看大图 + 加载中/失败占位（单图与网格共用）
+  Widget _buildImageCell(BuildContext context, String url) {
+    if (url.isEmpty) {
+      return Container(
+        color: const Color(0xFFE9ECEF),
+        alignment: Alignment.center,
+        child: Icon(Icons.photo, color: context.cs.onSurfaceVariant, size: 28),
+      );
+    }
+    return GestureDetector(
+      // 点击查看大图（全屏预览：双指/双击缩放 + 关闭按钮）
+      onTap: () {
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ImageViewerPage(url: _fixUrl(url)),
+        ));
+      },
+      child: Image.network(
+        _fixUrl(url),
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => Container(
+          color: const Color(0xFFE9ECEF),
+          alignment: Alignment.center,
+          child: Icon(Icons.broken_image_outlined,
+              color: context.cs.onSurfaceVariant, size: 24),
+        ),
+        loadingBuilder: (_, child, progress) => progress == null
+            ? child
+            : Container(
+                color: const Color(0xFFE9ECEF),
+                alignment: Alignment.center,
+                child: const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
       ),
     );
   }

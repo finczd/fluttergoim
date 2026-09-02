@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yourcompany/im-server/internal/config"
 	"github.com/yourcompany/im-server/internal/middleware"
@@ -88,7 +91,11 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 				Value interface{} `json:"value"`
 			}
 			c.ShouldBindJSON(&body)
-			service.SysConfigSet(c.Request.Context(), key, body.Value)
+			// 不能吞错：写库失败必须返回错误，否则后台显示"已保存"但配置实际没落库
+			if err := service.SysConfigSet(c.Request.Context(), key, body.Value); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 500, "message": "保存失败: " + err.Error()})
+				return
+			}
 			service.AdminLog(c.Request.Context(), middleware.CurrentUserID(c), "config.set", key, c.ClientIP(), body)
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
 		})
@@ -157,6 +164,28 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 			}
 			service.AdminLog(c.Request.Context(), middleware.CurrentUserID(c), "assistant.config", "save", c.ClientIP(), nil)
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+		})
+		admin.GET("/assistant/conversations", func(c *gin.Context) {
+			list, err := service.AssistantConvList(c.Request.Context())
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": list})
+		})
+		admin.GET("/assistant/messages", func(c *gin.Context) {
+			uid, _ := strconv.ParseInt(c.Query("userId"), 10, 64)
+			before, _ := strconv.ParseInt(c.Query("beforeMsgId"), 10, 64)
+			limit := int64(50)
+			if v, err := strconv.ParseInt(c.Query("limit"), 10, 64); err == nil && v > 0 && v <= 100 {
+				limit = v
+			}
+			list, err := service.AssistantMessages(c.Request.Context(), uid, before, limit)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": list})
 		})
 		admin.POST("/assistant/push", func(c *gin.Context) {
 			var body struct {
@@ -622,17 +651,17 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 				// 两种 payload 都兼容：
 				//   A) 新版标准：mode in {range|list|rule} + 对应字段
 				//   B) 前端旧版：ids []string + type + remark（统一视为「列表录入」）
-				Mode    string   `json:"mode"` // range | list | rule
-				From    int64    `json:"from"`
-				To      int64    `json:"to"`
-				List    []string `json:"list"`
-				Prefix  string   `json:"prefix"`
-				Digits  int      `json:"digits"`
-				Count   int      `json:"count"`
-				Remark  string   `json:"remark"`
-				Price   float64  `json:"price"`
-				Source  int      `json:"source"`
-				Type    int      `json:"type"` // 1 普通 / 2 豹子号 / 3 顺子号 / 4 VIP
+				Mode   string   `json:"mode"` // range | list | rule
+				From   int64    `json:"from"`
+				To     int64    `json:"to"`
+				List   []string `json:"list"`
+				Prefix string   `json:"prefix"`
+				Digits int      `json:"digits"`
+				Count  int      `json:"count"`
+				Remark string   `json:"remark"`
+				Price  float64  `json:"price"`
+				Source int      `json:"source"`
+				Type   int      `json:"type"` // 1 普通 / 2 豹子号 / 3 顺子号 / 4 VIP
 
 				// 兼容字段：ids 与 list 等价
 				Ids []string `json:"ids"`
@@ -788,6 +817,44 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": res})
+		})
+
+		// ===== 服务重启（系统检测页按钮） =====
+		// 前提：服务器用 systemd 托管（deploy/bt_deploy.sh 生成的 im-api / im-gateway 单元，
+		// Restart=always），systemctl restart 由守护进程拉起新进程。
+		// 本地 Windows 开发环境没有 systemctl，直接返回提示。
+		admin.POST("/system/restart", func(c *gin.Context) {
+			var body struct {
+				Target string `json:"target"` // api | gateway
+			}
+			if err := c.ShouldBindJSON(&body); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+				return
+			}
+			var unit string
+			switch strings.ToLower(strings.TrimSpace(body.Target)) {
+			case "api":
+				unit = "im-api"
+			case "gateway", "wss":
+				unit = "im-gateway"
+			default:
+				c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误：target 须为 api 或 gateway"})
+				return
+			}
+			if runtime.GOOS == "windows" {
+				c.JSON(http.StatusOK, gin.H{"code": 400, "message": "当前是 Windows 开发环境（非 systemd 托管），请在服务管理器/启动脚本中手动重启"})
+				return
+			}
+			// 先返回响应再重启：restart 会杀掉本进程（target=api 时），
+			// 延迟 800ms 确保响应已经写回客户端。
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "重启指令已下发，服务将在数秒内恢复（systemd Restart=always 自动拉起）"})
+			go func() {
+				time.Sleep(800 * time.Millisecond)
+				if out, err := exec.Command("systemctl", "restart", unit).CombinedOutput(); err != nil {
+					jsonLog := "restart " + unit + " failed: " + err.Error() + " " + string(out)
+					println(jsonLog)
+				}
+			}()
 		})
 
 		// 文件上传（管理员）：接收 file 字段 + dir；与用户 /api/v1/upload 逻辑一致

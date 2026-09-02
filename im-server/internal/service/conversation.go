@@ -80,7 +80,7 @@ type ConvItem struct {
 	Mute             bool               `json:"mute"`
 	Pinned           bool               `json:"pinned"`
 	ConversationName string             `json:"conversationName"` // 单聊显示对方昵称
-	PeerID           int64              `json:"peerId,string"`     // 单聊对方雪花用户 ID（PC 转账 toUserId 精确识别收款人）
+	PeerID           int64              `json:"peerId,string"`    // 单聊对方雪花用户 ID（PC 转账 toUserId 精确识别收款人）
 	PeerOnline       bool               `json:"peerOnline"`       // 单聊对方是否在线
 	PeerOnlineDev    []string           `json:"peerOnlineDev"`    // 对方在线设备
 	PeerOnlineZh     string             `json:"peerOnlineZh"`     // 对方在线类型中文（手机在线/H5在线/电脑在线）
@@ -161,6 +161,10 @@ func ConvList(ctx context.Context, userID int64) ([]*ConvItem, error) {
 					// 小助手虚拟账号（名称固定"小助手"，靓号 ID 固定 10000——需求12）
 					item.ConversationName = "小助手"
 					item.PeerShortID = "10000"
+					// 后台设置的小助手头像下发到会话列表/聊天页
+					if av := AssistantAvatar(ctx); av != "" {
+						item.Conversation.Avatar = av
+					}
 				} else {
 					if u, err := GetUserDetail(ctx, otherID); err == nil {
 						item.ConversationName = u.Nickname

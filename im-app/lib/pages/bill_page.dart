@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n/app_locale.dart';
 import '../services/moment_service.dart';
 import '../theme/app_theme.dart';
+import 'pay_ui.dart';
 
 /// 我的账单（交易记录独立页：时间筛选 + 分页加载）
 class BillPage extends StatefulWidget {
@@ -251,15 +252,14 @@ class _BillPageState extends State<BillPage> {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color:
-                  (income ? const Color(0xFFE9564E) : const Color(0xFFF5A623))
-                      .withValues(alpha: 0.12),
+              color: (income ? const Color(0xFFE9564E) : PayUI.primary)
+                  .withValues(alpha: 0.12),
               shape: BoxShape.circle,
             ),
             child: Icon(
               income ? Icons.south_west : Icons.north_east,
               size: 18,
-              color: income ? const Color(0xFFE9564E) : const Color(0xFFF5A623),
+              color: income ? const Color(0xFFE9564E) : PayUI.primary,
             ),
           ),
           const SizedBox(width: 12),

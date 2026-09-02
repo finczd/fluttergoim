@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -36,8 +39,25 @@ class _MePageState extends State<MePage> {
   @override
   void initState() {
     super.initState();
+    _loadCachedProfile();
     _load();
     _refreshBalance();
+  }
+
+  /// 先读本地缓存的资料，首帧直接渲染昵称/头像，
+  /// 修复「快速切到'我的'先显示'未登录'/默认头像，接口回来才变」。
+  /// 网络返回后再覆盖刷新（缓存只做展示兜底，不阻断更新）。
+  Future<void> _loadCachedProfile() async {
+    try {
+      final raw = await _api.readPref('profile');
+      if (raw == null || raw.isEmpty || !mounted) return;
+      final cached = jsonDecode(raw);
+      if (cached is Map<String, dynamic> &&
+          _profile == null &&
+          (cached['id']?.toString() ?? '').isNotEmpty) {
+        setState(() => _profile = cached);
+      }
+    } catch (_) {}
   }
 
   /// 钱包余额走后端（"我的钱包"行 trailing 展示）。
@@ -58,7 +78,11 @@ class _MePageState extends State<MePage> {
   Future<void> _load() async {
     try {
       final p = await _svc.profile();
-      if (mounted) setState(() => _profile = p);
+      if (mounted) {
+        setState(() => _profile = p);
+        // 资料写入本地缓存，下次进 App / 切 tab 首帧即有昵称头像
+        unawaited(_api.writePref('profile', jsonEncode(p)));
+      }
     } catch (_) {}
   }
 
@@ -126,8 +150,12 @@ class _MePageState extends State<MePage> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                  onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const ProfilePage())),
+                  onTap: () async {
+                    // 编辑资料返回后刷新（IndexedStack 常驻后 initState 不再重跑，必须手动刷）
+                    await Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const ProfilePage()));
+                    if (mounted) _load();
+                  },
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 18),

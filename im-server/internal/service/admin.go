@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -78,26 +81,29 @@ type AuthFlags struct {
 	OnlineDevice string `json:"onlineDevice"`
 	// 需求9：默认头像（新注册用户使用，后台可配）
 	DefaultAvatar string `json:"defaultAvatar"`
+	// 小助手头像（通讯录官方入口显示，后台「智能小助手」可配）
+	AssistantAvatar string `json:"assistantAvatar"`
 }
 
 func GetAuthFlags(ctx context.Context, cfg *config.Config) AuthFlags {
 	return AuthFlags{
-		AuthMode:      strVal(SysConfigGet(ctx, "auth_mode", cfg.AuthMode)),
-		InviteCodeOn:  boolVal(SysConfigGet(ctx, "invite_code_enabled", cfg.InviteCodeOn)),
-		RegisterOn:    boolVal(SysConfigGet(ctx, "register_enabled", cfg.RegisterOn)),
-		E2EOn:         boolVal(SysConfigGet(ctx, "e2e_enabled", cfg.E2EOn)),
-		AppName:       strVal(SysConfigGet(ctx, "app_name", "ChatPulse")),
-		AppLogo:       strVal(SysConfigGet(ctx, "app_logo", "")),
-		BrandName:     strVal(SysConfigGet(ctx, "brand_name", "ChatPulse")),
-		BrandLogo:     strVal(SysConfigGet(ctx, "brand_logo", "")),
-		Announcement:  strVal(SysConfigGet(ctx, "announcement", "欢迎使用 ChatPulse! 请注意账号安全，不要泄露验证码。")),
-		AppVersion:    strVal(SysConfigGet(ctx, "app_version", "1.0.0")),
-		UpdateLog:     strVal(SysConfigGet(ctx, "update_log", "")),
-		AndroidURL:    strVal(SysConfigGet(ctx, "android_url", "")),
-		IOSURL:        strVal(SysConfigGet(ctx, "ios_url", "")),
-		HotUpdateURL:  strVal(SysConfigGet(ctx, "hot_update_url", "")),
-		OnlineDevice:  strVal(SysConfigGet(ctx, "online_device", "")),
-		DefaultAvatar: strVal(SysConfigGet(ctx, "default_avatar", "")),
+		AuthMode:        strVal(SysConfigGet(ctx, "auth_mode", cfg.AuthMode)),
+		InviteCodeOn:    boolVal(SysConfigGet(ctx, "invite_code_enabled", cfg.InviteCodeOn)),
+		RegisterOn:      boolVal(SysConfigGet(ctx, "register_enabled", cfg.RegisterOn)),
+		E2EOn:           boolVal(SysConfigGet(ctx, "e2e_enabled", cfg.E2EOn)),
+		AppName:         strVal(SysConfigGet(ctx, "app_name", "ChatPulse")),
+		AppLogo:         strVal(SysConfigGet(ctx, "app_logo", "")),
+		BrandName:       strVal(SysConfigGet(ctx, "brand_name", "ChatPulse")),
+		BrandLogo:       strVal(SysConfigGet(ctx, "brand_logo", "")),
+		Announcement:    strVal(SysConfigGet(ctx, "announcement", "欢迎使用 ChatPulse! 请注意账号安全，不要泄露验证码。")),
+		AppVersion:      strVal(SysConfigGet(ctx, "app_version", "1.0.0")),
+		UpdateLog:       strVal(SysConfigGet(ctx, "update_log", "")),
+		AndroidURL:      strVal(SysConfigGet(ctx, "android_url", "")),
+		IOSURL:          strVal(SysConfigGet(ctx, "ios_url", "")),
+		HotUpdateURL:    strVal(SysConfigGet(ctx, "hot_update_url", "")),
+		OnlineDevice:    strVal(SysConfigGet(ctx, "online_device", "")),
+		DefaultAvatar:   strVal(SysConfigGet(ctx, "default_avatar", "")),
+		AssistantAvatar: GetAssistantConfig(ctx, cfg).Avatar,
 	}
 }
 
@@ -232,10 +238,10 @@ func AdminUserUpdate(ctx context.Context, id int64, nickname, avatar string, rol
 			var rs model.ReservedShortID
 			if err := store.DB.Where("short_id = ?", sid).First(&rs).Error; err == nil {
 				store.DB.Model(&rs).Updates(map[string]interface{}{
-					"used_by":  id,
-					"used_at":  time.Now(),
-					"status":   model.ReservedShortIDUsed,
-					"account":  "", // 展示时 JOIN user
+					"used_by": id,
+					"used_at": time.Now(),
+					"status":  model.ReservedShortIDUsed,
+					"account": "", // 展示时 JOIN user
 				})
 			}
 		}
@@ -510,18 +516,18 @@ func AdminGroupMembers(ctx context.Context, groupID int64, page, size int) ([]ma
 	for _, m := range mems {
 		u := userMap[m.UserID]
 		list = append(list, map[string]any{
-			"id":           m.ID,
+			"id":             m.ID,
 			"conversationId": m.ConversationID,
-			"userId":       m.UserID,
-			"role":         m.Role,
+			"userId":         m.UserID,
+			"role":           m.Role,
 			"memberNickname": m.Nickname,
-			"mute":         m.Mute,
-			"joinedAt":     m.JoinedAt,
-			"account":      u.Account,
-			"nickname":     u.Nickname,
-			"avatar":       u.Avatar,
-			"shortId":      model.StrVal(u.ShortID),
-			"status":       u.Status,
+			"mute":           m.Mute,
+			"joinedAt":       m.JoinedAt,
+			"account":        u.Account,
+			"nickname":       u.Nickname,
+			"avatar":         u.Avatar,
+			"shortId":        model.StrVal(u.ShortID),
+			"status":         u.Status,
 		})
 	}
 	return list, total, nil
@@ -609,16 +615,16 @@ func AdminReservedShortIDList(ctx context.Context, kw string, status, source int
 	list := make([]map[string]any, 0, len(rows))
 	for _, r := range rows {
 		row := map[string]any{
-			"id":         r.ID,
-			"shortId":    r.ShortID,
-			"source":     r.Source,
-			"type":       r.Type,
-			"status":     r.Status,
-			"remark":     r.Remark,
-			"price":      r.Price,
-			"usedBy":     r.UsedBy,
-			"usedAt":     r.UsedAt,
-			"createdAt":  r.CreatedAt,
+			"id":        r.ID,
+			"shortId":   r.ShortID,
+			"source":    r.Source,
+			"type":      r.Type,
+			"status":    r.Status,
+			"remark":    r.Remark,
+			"price":     r.Price,
+			"usedBy":    r.UsedBy,
+			"usedAt":    r.UsedAt,
+			"createdAt": r.CreatedAt,
 		}
 		if u, ok := uMap[r.UsedBy]; ok {
 			row["userNickname"] = u.Nickname
@@ -805,6 +811,7 @@ func AdminReservedShortIDDelete(ctx context.Context, id int64) error {
 //   - 用户原 short_id 若也命中 reserved_short_id 池 → 旧那条自动回收（status=1, used_by=0, used_at=NULL）；
 //   - 新靓号若被其他用户占用（极端竞争）→ 回滚并返回错误；
 //   - 分配成功后：reserved.status=3 used_by=userId used_at=now；users.short_id = r.ShortID。
+//
 // 返回：{ nickname, account, shortId, userId } 供前端即时刷新"绑定账号"列
 func AdminReservedShortIDAssign(ctx context.Context, id, userID int64) (map[string]any, error) {
 	if id <= 0 || userID <= 0 {
@@ -876,9 +883,9 @@ func AdminReservedShortIDAssign(ctx context.Context, id, userID int64) (map[stri
 			var oldRS model.ReservedShortID
 			if err := tx.Where("short_id = ? AND used_by = ?", oldSID, lockedU.ID).First(&oldRS).Error; err == nil {
 				if err := tx.Model(&oldRS).Updates(map[string]any{
-					"status":   model.ReservedShortIDOpen,
-					"used_by":  0,
-					"used_at":  nil,
+					"status":  model.ReservedShortIDOpen,
+					"used_by": 0,
+					"used_at": nil,
 				}).Error; err != nil {
 					return err
 				}
@@ -908,9 +915,9 @@ func AdminReservedShortIDAssign(ctx context.Context, id, userID int64) (map[stri
 		if err := tx.Model(&model.ReservedShortID{}).
 			Where("id = ?", lockedR.ID).
 			Updates(map[string]any{
-				"status":   model.ReservedShortIDUsed,
-				"used_by":  lockedU.ID,
-				"used_at":  &now,
+				"status":  model.ReservedShortIDUsed,
+				"used_by": lockedU.ID,
+				"used_at": &now,
 			}).Error; err != nil {
 			return err
 		}
@@ -958,9 +965,9 @@ func AdminReservedShortIDRelieve(ctx context.Context, id int64) error {
 		if err := tx.Model(&model.ReservedShortID{}).
 			Where("id = ?", lockedR.ID).
 			Updates(map[string]any{
-				"status":   model.ReservedShortIDOpen,
-				"used_by":  0,
-				"used_at":  nil,
+				"status":  model.ReservedShortIDOpen,
+				"used_by": 0,
+				"used_at": nil,
 			}).Error; err != nil {
 			return err
 		}
@@ -978,101 +985,139 @@ func AdminReservedShortIDRelieve(ctx context.Context, id int64) error {
 
 // ============ 系统健康检测 ============
 
-// AdminHealthCheck 单项检测；key=all 时返回全部
+// procStartedAt API 进程启动时间（包初始化时记录，用于运行时长展示）
+var procStartedAt = time.Now()
+
+// hcCheck 单项检测结果：前端系统检测页直接消费
+// status: ok=正常 warn=警告 err=异常
+type hcCheck struct {
+	Status    string            `json:"status"`
+	Message   string            `json:"message"`
+	Details   map[string]string `json:"details,omitempty"`
+	LatencyMs int64             `json:"latencyMs"`
+}
+
+// AdminHealthCheck 单项检测；key=all 时返回全部。
+// 检测项：mysql / redis / mongo / minio / api / wss / jpush / version
+// 全部基于真实连接探测（.env 配置已在进程启动时加载进 cfg / store）。
 func AdminHealthCheck(ctx context.Context, cfg *config.Config, key string) (map[string]any, error) {
-	checks := map[string]func() (ok bool, detail any, errMsg string){
-		"mysql": func() (bool, any, string) {
+	checks := map[string]func() hcCheck{
+		"mysql": func() hcCheck {
 			sqlDB, e := store.DB.DB()
 			if e != nil {
-				return false, nil, e.Error()
+				return hcCheck{"err", "MySQL 连接池获取失败: " + e.Error(), nil, 0}
 			}
 			if e := sqlDB.PingContext(ctx); e != nil {
-				return false, nil, e.Error()
+				return hcCheck{"err", "MySQL 连接失败: " + e.Error(), nil, 0}
 			}
 			var v string
 			store.DB.Raw("SELECT VERSION()").Scan(&v)
-			return true, map[string]any{"version": v}, ""
+			st := sqlDB.Stats()
+			return hcCheck{"ok", "连接正常", map[string]string{
+				"版本": v, "活跃连接": fmt.Sprintf("%d", st.InUse), "空闲连接": fmt.Sprintf("%d", st.Idle),
+			}, 0}
 		},
-		"redis": func() (bool, any, string) {
+		"redis": func() hcCheck {
 			if store.RDB == nil {
-				return false, nil, "redis 未初始化"
+				return hcCheck{"err", "Redis 未初始化", nil, 0}
 			}
-			pong, e := store.RDB.Ping(ctx).Result()
-			if e != nil {
-				return false, nil, e.Error()
+			if e := store.RDB.Ping(ctx).Err(); e != nil {
+				return hcCheck{"err", "Redis 连接失败: " + e.Error(), map[string]string{"地址": cfg.RedisAddr}, 0}
 			}
-			return true, map[string]any{"pong": pong}, ""
+			return hcCheck{"ok", "连接正常", map[string]string{"地址": cfg.RedisAddr}, 0}
 		},
-		"mongo": func() (bool, any, string) {
+		"mongo": func() hcCheck {
 			if store.Mongo == nil {
-				return false, nil, "mongo 未初始化"
+				return hcCheck{"err", "MongoDB 未初始化", nil, 0}
 			}
 			if e := store.Mongo.Client().Ping(ctx, nil); e != nil {
-				return false, nil, e.Error()
+				return hcCheck{"err", "MongoDB 连接失败: " + e.Error(), nil, 0}
 			}
-			names, _ := store.Mongo.Client().ListDatabaseNames(ctx, bson.M{})
-			return true, map[string]any{"databases": names, "currentDB": store.Mongo.Name()}, ""
+			return hcCheck{"ok", "连接正常", map[string]string{"数据库": store.Mongo.Name()}, 0}
 		},
-		"minio": func() (bool, any, string) {
-			ok2, info, msg := checkMinio(cfg)
-			return ok2, info, msg
+		"minio": func() hcCheck {
+			return checkMinio(ctx, cfg)
 		},
-		"wss": func() (bool, any, string) {
-			if store.RDB == nil {
-				return false, nil, "redis 未初始化"
+		"api": func() hcCheck {
+			// 能响应本次请求即代表 API 进程在线
+			return hcCheck{"ok", "API 服务在线", map[string]string{
+				"NodeID": cfg.NodeID,
+				"HTTP端口": cfg.HTTPPort,
+				"启动时间":   procStartedAt.Format("2006-01-02 15:04:05"),
+				"已运行":    time.Since(procStartedAt).Round(time.Second).String(),
+				"Go版本":   runtime.Version(),
+				"运行环境":   cfg.AppEnv,
+			}, 0}
+		},
+		"wss": func() hcCheck {
+			// gateway 与 api 建议同机部署：探活本机 WS 端口最直接
+			addr := net.JoinHostPort("127.0.0.1", cfg.WSPort)
+			d := net.Dialer{Timeout: 800 * time.Millisecond}
+			conn, err := d.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				return hcCheck{"err", "WS 端口未监听（gateway 未启动或端口不一致）: " + err.Error(),
+					map[string]string{"本机WS端口": cfg.WSPort}, 0}
 			}
-			keys, e := store.RDB.Keys(ctx, "online:*").Result()
-			if e != nil {
-				return false, nil, e.Error()
+			conn.Close()
+			online := "未知"
+			if store.RDB != nil {
+				if keys, e := store.RDB.Keys(ctx, "online:*").Result(); e == nil {
+					online = fmt.Sprintf("%d", len(keys))
+				}
 			}
-			return true, map[string]any{"online": len(keys)}, ""
+			return hcCheck{"ok", "Gateway 在线（本机节点）", map[string]string{
+				"本机WS端口": cfg.WSPort, "在线连接": online,
+			}, 0}
 		},
-		"version": func() (bool, any, string) {
-			_ = ctx
-			return true, map[string]any{
-				"env":          cfg.AppEnv,
-				"nodeId":       cfg.NodeID,
-				"httpPort":     cfg.HTTPPort,
-				"wsPort":       cfg.WSPort,
-				"mongoDB":      cfg.MongoDB,
-				"redisAddr":    cfg.RedisAddr,
-				"authMode":     cfg.AuthMode,
-				"registerOn":   cfg.RegisterOn,
-				"inviteCodeOn": cfg.InviteCodeOn,
-				"e2eOn":        cfg.E2EOn,
-				"accessNodes":  cfg.AccessNodes != "",
-			}, ""
+		"jpush": func() hcCheck {
+			c := GetJPushConfig(ctx)
+			d := map[string]string{
+				"启用":     fmt.Sprintf("%v", c.Enabled),
+				"AppKey": c.AppKey,
+				"APNs生产": fmt.Sprintf("%v", c.ApnsProduction),
+			}
+			if !c.Enabled {
+				return hcCheck{"warn", "极光推送未启用（离线消息将走 App 内通知）", d, 0}
+			}
+			if c.AppKey == "" || c.MasterSecret == "" {
+				return hcCheck{"err", "已启用但 AppKey / MasterSecret 未配置完整", d, 0}
+			}
+			if len(c.MasterSecret) < 8 {
+				d["AppKey"] = d["AppKey"] + "（MasterSecret 长度异常，请检查）"
+			} else {
+				d["MasterSecret"] = strings.Repeat("*", 8) + "（已配置）"
+			}
+			return hcCheck{"ok", "推送配置完整（未做真实下发测试）", d, 0}
 		},
-		"go": func() (bool, any, string) {
-			var v string
-			store.DB.Raw("SELECT 1").Scan(&v) // 保底
-			return true, map[string]any{
-				"dbDriver":        "gorm/mysql",
-				"mongoAvailable":  store.Mongo != nil,
-				"redisAvailable":  store.RDB != nil,
-				"minioEndpoint":   cfg.MinIOEndpoint,
-				"jwtAccessHours":  cfg.JWTAccessTTLHours,
-				"jwtRefreshDays":  cfg.JWTRefreshTTLDays,
-			}, ""
+		"version": func() hcCheck {
+			return hcCheck{"ok", "环境配置（.env 已加载）", map[string]string{
+				"NodeID":  cfg.NodeID,
+				"运行环境":    cfg.AppEnv,
+				"HTTP端口":  cfg.HTTPPort,
+				"WS端口":    cfg.WSPort,
+				"Redis":   cfg.RedisAddr,
+				"MongoDB": cfg.MongoDB,
+				"MinIO":   cfg.MinIOEndpoint,
+				"JWT访问时长": fmt.Sprintf("%dh", cfg.JWTAccessTTLHours),
+				"JWT刷新时长": fmt.Sprintf("%dd", cfg.JWTRefreshTTLDays),
+				"开放注册":    fmt.Sprintf("%v", cfg.RegisterOn),
+				"邀请码注册":   fmt.Sprintf("%v", cfg.InviteCodeOn),
+			}, 0}
 		},
-	}
-	keys := make([]string, 0, len(checks))
-	for k := range checks {
-		keys = append(keys, k)
 	}
 	run := func(k string) map[string]any {
-		fn, ok := checks[k]
-		if !ok {
-			return map[string]any{"ok": false, "error": "未知检测项", "items": keys}
-		}
 		start := time.Now()
-		ok2, detail, msg := fn()
-		return map[string]any{
-			"ok":        ok2,
-			"latencyMs": time.Since(start).Milliseconds(),
-			"detail":    detail,
-			"error":     msg,
+		var res hcCheck
+		if fn, ok := checks[k]; ok {
+			res = fn()
+		} else {
+			res = hcCheck{"err", "未知检测项: " + k, nil, 0}
 		}
+		res.LatencyMs = time.Since(start).Milliseconds()
+		b, _ := json.Marshal(res)
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		return m
 	}
 	key = strings.ToLower(strings.TrimSpace(key))
 	if key == "all" || key == "" {
@@ -1085,26 +1130,32 @@ func AdminHealthCheck(ctx context.Context, cfg *config.Config, key string) (map[
 	return map[string]any{key: run(key)}, nil
 }
 
-// checkMinio 不做真实连接（避免依赖 minio client），只汇报 endpoint/bucket 配置是否完整。
-// 若项目后续接入真实 minio 上传/下载，可在此处替换为 client.ListBuckets 连通性检测。
-func checkMinio(cfg *config.Config) (bool, any, string) {
+// checkMinio 真实连通性检测：GET /minio/health/live（1s 超时）+ 配置完整性。
+func checkMinio(ctx context.Context, cfg *config.Config) hcCheck {
 	endpoint := cfg.MinIOEndpoint
-	bucket := cfg.MinIOBucket
 	if endpoint == "" {
-		return true, map[string]any{"enabled": false}, ""
+		return hcCheck{"warn", "MinIO 未配置", nil, 0}
 	}
-	detail := map[string]any{
-		"endpoint":     endpoint,
-		"bucket":       bucket,
-		"accessKeySet": cfg.MinIOAccessKey != "",
-		"secretKeySet": cfg.MinIOSecretKey != "",
+	detail := map[string]string{
+		"Endpoint": endpoint,
+		"Bucket":   cfg.MinIOBucket,
 	}
-	allSet := bucket != "" && cfg.MinIOAccessKey != "" && cfg.MinIOSecretKey != ""
-	if !allSet {
-		return false, detail, "minio 配置不完整（缺少 bucket / accessKey / secretKey 之一）"
+	if cfg.MinIOBucket == "" || cfg.MinIOAccessKey == "" || cfg.MinIOSecretKey == "" {
+		return hcCheck{"err", "MinIO 配置不完整（缺少 bucket / accessKey / secretKey 之一）", detail, 0}
 	}
-	return true, detail, ""
+	base := endpoint
+	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		base = "http://" + base
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/minio/health/live", nil)
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	resp, err := client.Do(req)
+	if err != nil {
+		return hcCheck{"err", "MinIO 健康接口不可达: " + err.Error(), detail, 0}
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return hcCheck{"err", fmt.Sprintf("MinIO 健康检查返回 %d", resp.StatusCode), detail, 0}
+	}
+	return hcCheck{"ok", "存储服务可访问", detail, 0}
 }
-
-// 未使用占位，避免 fmt 导入告警（HealthCheck/AdminUserUpdate 用到了 fmt 的保留路径）
-var _ = fmt.Sprintf

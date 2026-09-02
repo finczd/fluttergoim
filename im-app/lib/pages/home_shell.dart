@@ -8,6 +8,7 @@ import '../services/call_service.dart';
 import '../services/keep_alive_service.dart';
 import '../services/push_service.dart';
 import '../services/sound_service.dart';
+import '../services/unread_store.dart';
 import '../services/wallet_store.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
@@ -91,7 +92,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
     return Scaffold(
-      body: _pages[_index],
+      // IndexedStack 保活 4 个 tab：切换时不销毁/重建页面，
+      // 修复「快速点'我的'先闪'未登录'再加载头像昵称」「发现页每次切 tab 都重新加载」。
+      // 代价是 4 页 initState 在进入首页时并发执行一次（各自拉一次接口），可接受。
+      body: IndexedStack(index: _index, children: _pages),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
@@ -139,29 +143,38 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             Stack(
               clipBehavior: Clip.none,
               children: [
-                Icon(active ? iconOn : iconOff,
-                    size: 24,
-                    color: active
-                        ? AppTheme.primary
-                        : context.cs.onSurfaceVariant),
+                // 需求1："消息" tab 未读红点（ChatListPage 拉会话列表后上报总数）
+                if (i == 0)
+                  ValueListenableBuilder<int>(
+                    valueListenable: UnreadStore.instance.total,
+                    builder: (_, unread, __) => Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Icon(active ? iconOn : iconOff,
+                            size: 24,
+                            color: active
+                                ? AppTheme.primary
+                                : context.cs.onSurfaceVariant),
+                        if (unread > 0)
+                          Positioned(
+                            right: -7,
+                            top: -7,
+                            child: _badge(unread),
+                          ),
+                      ],
+                    ),
+                  )
+                else
+                  Icon(active ? iconOn : iconOff,
+                      size: 24,
+                      color: active
+                          ? AppTheme.primary
+                          : context.cs.onSurfaceVariant),
                 if (i == 1 && _friendReqCount > 0)
                   Positioned(
                     right: -7,
                     top: -7,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: AppTheme.unreadBadge,
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: Text(
-                          _friendReqCount > 99 ? '99+' : '$_friendReqCount',
-                          style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                    ),
+                    child: _badge(_friendReqCount),
                   ),
               ],
             ),
@@ -176,6 +189,21 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _badge(int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: AppTheme.unreadBadge,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Text(count > 99 ? '99+' : '$count',
+          style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: Colors.white)),
     );
   }
 }

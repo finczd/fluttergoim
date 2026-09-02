@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../l10n/app_locale.dart';
+import '../services/api_client.dart';
 import '../services/friend_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
@@ -13,6 +15,14 @@ class EditProfilePage extends StatefulWidget {
   State<EditProfilePage> createState() => _EditProfilePageState();
 }
 
+/// 取异常的**后端原始提示**（去掉 Dart 的 "Exception: " 前缀），失败时回退 fallback。
+String _errMsg(Object e, String fallback) {
+  var s = e.toString().trim();
+  if (s.startsWith('Exception:')) s = s.substring('Exception:'.length).trim();
+  if (s.startsWith('DioException')) s = fallback;
+  return s.isEmpty ? fallback : s;
+}
+
 class _EditProfilePageState extends State<EditProfilePage> {
   final _svc = FriendService();
   final _nickname = TextEditingController();
@@ -20,6 +30,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   String _avatar = '';
   bool _loading = true;
   bool _saving = false;
+  bool _uploadingAvatar = false; // 头像上传中：禁用点击 + 显示菊花
   String _msg = '';
 
   @override
@@ -42,7 +53,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         setState(() {
           _nickname.text = p['nickname']?.toString() ?? '';
           _avatar = p['avatar']?.toString() ?? '';
-          _bio.text = p['bio']?.toString() ?? '';
+          _bio.text = p['signature']?.toString() ?? '';
           _loading = false;
         });
       }
@@ -59,12 +70,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
     try {
       final r = await _svc.updateProfile(
         nickname: _nickname.text.trim(),
-        bio: _bio.text.trim(),
+        signature: _bio.text.trim(),
         avatar: _avatar,
       );
       if (mounted) {
         final t = AppLocalizations.of(context).t;
-        setState(() => _msg = r ? t('editProfileSaved') : t('editProfileSaveFailed'));
+        setState(() =>
+            _msg = r ? t('editProfileSaved') : t('editProfileSaveFailed'));
         if (r) {
           AppDialogs.toast(context, t('editProfileSaved'));
           Navigator.of(context).pop(true);
@@ -91,8 +103,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         actions: [
           TextButton(
             onPressed: _saving ? null : _save,
-            child: Text(
-                _saving ? t('editProfileSaving') : t('editProfileSave'),
+            child: Text(_saving ? t('editProfileSaving') : t('editProfileSave'),
                 style: const TextStyle(
                     fontSize: 15,
                     color: AppTheme.primary,
@@ -105,12 +116,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                // 头像（点击换头像：MinIO 上传 V2.0）
+                // 头像（点击选图 → 上传 MinIO → 仅本地预览，保存时与昵称/签名一起 PUT）
                 Center(
                   child: GestureDetector(
-                    onTap: () =>
-                        AppDialogs.toast(
-                            context, t('editProfileAvatarUploadTip')),
+                    onTap: _uploadingAvatar ? null : _pickAvatar,
                     child: Stack(
                       children: [
                         Container(
@@ -128,6 +137,22 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                   errorBuilder: (_, __, ___) => _initialText())
                               : _initialText(),
                         ),
+                        if (_uploadingAvatar)
+                          Positioned.fill(
+                            child: Container(
+                              decoration: const BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                              ),
+                              alignment: Alignment.center,
+                              child: const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
+                              ),
+                            ),
+                          ),
                         Positioned(
                           right: 0,
                           bottom: 0,
@@ -163,6 +188,39 @@ class _EditProfilePageState extends State<EditProfilePage> {
               ],
             ),
     );
+  }
+
+  /// 头像：相册选图 → MinIO 上传 → 仅本地预览 URL。
+  /// 与昵称/签名一起在用户点「保存」时一并 PUT（避免选完图不保存直接退页产生的脏数据）。
+  /// 失败回滚到旧头像，toast 提示。
+  Future<void> _pickAvatar() async {
+    if (_uploadingAvatar) return;
+    final t = AppLocalizations.of(context).t;
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 85,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _uploadingAvatar = true);
+    final oldAvatar = _avatar;
+    try {
+      final up = await ApiClient.instance.uploadFile(
+        picked.path,
+        picked.name.isEmpty ? 'avatar.jpg' : picked.name,
+        dir: 'avatar/',
+      );
+      if (!mounted) return;
+      setState(() => _avatar = (up['url'] ?? '').toString());
+      AppDialogs.toast(context, t('editProfileAvatarUploaded'));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _avatar = oldAvatar); // 失败回滚
+      AppDialogs.toast(context, _errMsg(e, t('editProfileAvatarUploadFailed')));
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
   }
 
   Widget _initialText() => Text(

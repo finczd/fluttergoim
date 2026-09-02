@@ -84,6 +84,19 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 					"mimeType": header.Header.Get("Content-Type"),
 				}})
 			})
+			// 手机端扫码成功：pending → scanned（PC 端轮询显示"已扫码，请在手机上确认"）
+			user.POST("/auth/qr/scanned", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				var body struct {
+					Ticket string `json:"ticket"`
+				}
+				c.ShouldBindJSON(&body)
+				if err := service.QrMarkScanned(c.Request.Context(), cfg, body.Ticket, uid); err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+			})
 			user.POST("/auth/qr/confirm", func(c *gin.Context) {
 				uid := middleware.CurrentUserID(c)
 				var body struct {

@@ -1,0 +1,86 @@
+# ============================================================
+# im 项目单域名伪静态（一个网站，三个前端子目录 + 后端反代）
+# 用法：宝塔 → 网站 → 你的站点 → 伪静态 → 整体粘贴保存
+# 域名：hezi.fentukaifa.com    站点根目录：/www/wwwroot/hezi.fentukaifa.com
+#
+# ⚠️ 三个前端目录名按你服务器实际名字改：
+#    /pc    → im-pc/    （PC 工作台）
+#    /admin → im-admin/ （管理后台）
+#    /h5    → im-h5/    （H5 移动端）
+# 目录里必须已有构建好的 index.html
+# ============================================================
+
+# ---------- 1. PC 工作台 ----------
+location ^~ /pc/ {
+    alias /www/wwwroot/hezi.fentukaifa.com/im-pc/;
+    index index.html;
+    try_files $uri $uri/ /pc/index.html;
+}
+# 访问 /pc（不带斜杠）自动跳 /pc/
+location = /pc {
+    return 301 /pc/;
+}
+
+# ---------- 2. 管理后台 ----------
+location ^~ /admin/ {
+    alias /www/wwwroot/hezi.fentukaifa.com/im-admin/;
+    index index.html;
+    try_files $uri $uri/ /admin/index.html;
+}
+location = /admin {
+    return 301 /admin/;
+}
+
+# ---------- 3. H5 移动端 ----------
+location ^~ /h5/ {
+    alias /www/wwwroot/hezi.fentukaifa.com/im-h5/;
+    index index.html;
+    try_files $uri $uri/ /h5/index.html;
+}
+location = /h5 {
+    return 301 /h5/;
+}
+
+# ============================================================
+# 下面三段是后端接口反代，如果这个站不需要后端可以整段删掉
+# ============================================================
+
+# ---------- 4. REST API 反代（8080） ----------
+# proxy_pass 末尾【不带 /】，原样透传 /api/v1/... 完整路径
+location ^~ /api/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 60s;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+}
+
+# ---------- 5. WebSocket 反代（gateway 9090，路径 /ws） ----------
+location = /ws {
+    proxy_pass http://127.0.0.1:9090;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+}
+
+# ---------- 6. MinIO 图片反代（19000，/im-files/ 原样透传） ----------
+location ^~ /im-files/ {
+    proxy_pass http://127.0.0.1:19000;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_read_timeout 300s;
+}

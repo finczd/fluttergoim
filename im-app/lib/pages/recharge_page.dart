@@ -10,10 +10,13 @@ import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import 'pay_records_page.dart';
+import 'pay_ui.dart';
 
-/// 充值页（离线人工审核通道）微信风格：
-/// 用户选支付方式 → 展示平台收款码/收款账户（银行卡信息可复制）→ 输入金额
-/// → 上传支付凭证截图 → 提交；管理后台「充值订单」审核通过后余额自动到账。
+/// 充值页（离线人工审核通道）。
+/// 按统一设计稿布局：顶部分段切换（微信/支付宝/银行卡）→ 白卡收款码（居中图 +
+/// 「保存二维码」胶囊按钮弹全屏大图 + 收款账户行可复制）→ 充值金额卡 →
+/// 转账凭证大虚线上传框 → 底部主按钮 + 灰色到账提示。
+/// 单号/备注不再展示，提交时传空（服务端字段可选）。
 /// 接口：im-server recharge_withdraw.go。
 class RechargePage extends StatefulWidget {
   const RechargePage({super.key});
@@ -25,8 +28,6 @@ class RechargePage extends StatefulWidget {
 class _RechargePageState extends State<RechargePage> {
   final _api = ApiClient.instance;
   final _amountCtrl = TextEditingController();
-  final _txNoCtrl = TextEditingController();
-  final _remarkCtrl = TextEditingController();
   final _picker = ImagePicker();
 
   bool _loading = true;
@@ -44,8 +45,6 @@ class _RechargePageState extends State<RechargePage> {
   @override
   void dispose() {
     _amountCtrl.dispose();
-    _txNoCtrl.dispose();
-    _remarkCtrl.dispose();
     super.dispose();
   }
 
@@ -91,6 +90,19 @@ class _RechargePageState extends State<RechargePage> {
     return '';
   }
 
+  String _methodName(int method) {
+    final t = AppLocalizations.of(context).t;
+    switch (method) {
+      case 1:
+        return t('rcPayMethodWechat');
+      case 2:
+        return t('rcPayMethodAlipay');
+      case 3:
+        return t('rcPayMethodBank');
+    }
+    return '';
+  }
+
   Future<void> _pickProof() async {
     try {
       final x = await _picker.pickImage(
@@ -119,21 +131,19 @@ class _RechargePageState extends State<RechargePage> {
       final name = 'proof_${DateTime.now().millisecondsSinceEpoch}.jpg';
       final up = await _api.uploadFile(_proofPath!, name, dir: 'pay/proofs');
       final proofUrl = (up['url'] ?? '').toString();
-      // 提交充值订单
+      // 提交充值订单（单号/备注 UI 已移除，传空）
       final r = await _api.post('/api/v1/wallet/recharge/submit', data: {
         'amount': amount,
         'payMethod': _payMethod,
         'proofImage': proofUrl,
-        'payTxNo': _txNoCtrl.text.trim(),
-        'remark': _remarkCtrl.text.trim(),
+        'payTxNo': '',
+        'remark': '',
       });
       final body = r.data as Map<String, dynamic>;
       if ((body['code'] as num?)?.toInt() == 0) {
         if (!mounted) return;
         AppDialogs.toast(context, t('rcSubmitOk'));
         _amountCtrl.clear();
-        _txNoCtrl.clear();
-        _remarkCtrl.clear();
         setState(() => _proofPath = null);
         _load();
       } else {
@@ -155,6 +165,25 @@ class _RechargePageState extends State<RechargePage> {
     if (mounted) AppDialogs.toast(context, t('rcCopied'));
   }
 
+  /// 全屏大图查看收款码（零依赖：用户自行截图保存）
+  void _showQrDialog(String url) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog.fullscreen(
+        backgroundColor: Colors.black.withValues(alpha: 0.92),
+        child: GestureDetector(
+          onTap: () => Navigator.pop(ctx),
+          child: Center(
+            child: InteractiveViewer(
+              maxScale: 4,
+              child: Image.network(url, fit: BoxFit.contain),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
@@ -167,6 +196,7 @@ class _RechargePageState extends State<RechargePage> {
     }
     final enabled = _cfg['enabled'] == true;
     final tips = (_cfg['rechargeTips'] ?? '').toString();
+    final qrUrl = _absUrl(_qrcodeUrl(_payMethod));
     final isDark = scheme.brightness == Brightness.dark;
     return Scaffold(
       // 深色模式回退主题纯黑背景，浅色保持微信灰
@@ -200,248 +230,207 @@ class _RechargePageState extends State<RechargePage> {
                           fontSize: 13, color: scheme.onSurfaceVariant))),
             ]))
           else ...[
-            // 支付方式（微信风格：白底列表单选）
-            _card(
-                padding: EdgeInsets.zero,
-                child: Column(children: [
-                  _methodRow(1, Icons.chat_rounded, t('rcPayMethodWechat')),
-                  Divider(height: 1, indent: 14, color: scheme.outlineVariant),
-                  _methodRow(2, Icons.payment_outlined, t('rcPayMethodAlipay')),
-                  Divider(height: 1, indent: 14, color: scheme.outlineVariant),
-                  _methodRow(
-                      3, Icons.account_balance_outlined, t('rcPayMethodBank')),
-                ])),
+            // 支付方式分段切换
+            PayUI.segmentTabs(
+              context: context,
+              items: [
+                (1, t('rcPayMethodWechat'), Icons.chat_rounded),
+                (2, t('rcPayMethodAlipay'), Icons.payment_outlined),
+                (3, t('rcPayMethodBank'), Icons.account_balance_outlined),
+              ],
+              selected: _payMethod,
+              onChanged: (v) => setState(() => _payMethod = v),
+            ),
             const SizedBox(height: 12),
-            // 收款码 + 收款账户（银行卡信息可复制）
+            // 收款码卡：居中大图 + 保存二维码胶囊 + 银行卡收款账户
             _card(
-                child: Column(children: [
-              Text(
-                _payMethod == 1
-                    ? t('rcPayMethodWechat')
-                    : _payMethod == 2
-                        ? t('rcPayMethodAlipay')
-                        : t('rcPayMethodBank'),
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: scheme.onSurface),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                width: 180,
-                height: 180,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: _qrcodeUrl(_payMethod).isNotEmpty
-                    ? Image.network(_absUrl(_qrcodeUrl(_payMethod)),
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => Icon(Icons.qr_code_2,
-                            size: 56, color: scheme.onSurfaceVariant))
-                    : Icon(Icons.qr_code_2,
-                        size: 56, color: scheme.onSurfaceVariant),
-              ),
-              const SizedBox(height: 10),
-              Text(t('rcScanTips'),
-                  textAlign: TextAlign.center,
-                  style:
-                      TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
-              // 银行卡：收款账户信息（每项可复制）
-              if (_payMethod == 3) ...[
-                const SizedBox(height: 12),
-                Divider(height: 1, color: scheme.outlineVariant),
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Column(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      _copyRow(
-                          t('rcBankName'),
-                          (_cfg['receiveBankInfo']?['bankName'] ?? '')
-                              .toString()),
-                      _copyRow(
-                          t('rcCardNo'),
-                          (_cfg['receiveBankInfo']?['cardNo'] ?? '')
-                              .toString()),
-                      _copyRow(
-                          t('rcPayeeName'),
-                          (_cfg['receiveBankInfo']?['accountName'] ?? '')
-                              .toString()),
-                    ],
-                  ),
-                ),
-              ],
-              if (tips.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(tips,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 12, color: scheme.onSurfaceVariant)),
-              ],
-            ])),
-            const SizedBox(height: 12),
-            // 金额（白底行式输入，¥ 在输入左侧）
-            _card(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                child: Row(children: [
-                  Text(t('rcAmount'),
-                      style: TextStyle(fontSize: 15, color: scheme.onSurface)),
-                  const SizedBox(width: 12),
-                  Text('¥',
+                  Text(_methodName(_payMethod),
                       style: TextStyle(
-                          fontSize: 18,
+                          fontSize: 15,
                           fontWeight: FontWeight.w600,
                           color: scheme.onSurface)),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: TextField(
-                      controller: _amountCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: scheme.onSurface),
-                      decoration: InputDecoration(
-                        hintText: t('rcAmountHint'),
-                        hintStyle: TextStyle(
-                            fontSize: 15, color: scheme.outlineVariant),
-                        filled: false,
-                        border: InputBorder.none,
-                        isCollapsed: true,
+                  const SizedBox(height: 12),
+                  Container(
+                    width: 180,
+                    height: 180,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: qrUrl.isNotEmpty
+                        ? Image.network(qrUrl,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => Icon(Icons.qr_code_2,
+                                size: 56, color: scheme.onSurfaceVariant))
+                        : Icon(Icons.qr_code_2,
+                            size: 56, color: scheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 12),
+                  // 保存二维码（点击弹全屏大图，供用户截图保存）
+                  if (qrUrl.isNotEmpty)
+                    GestureDetector(
+                      onTap: () => _showQrDialog(qrUrl),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: PayUI.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.download_rounded,
+                              size: 14, color: PayUI.primary),
+                          const SizedBox(width: 4),
+                          Text(t('rcSaveQrcode'),
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: PayUI.primary)),
+                        ]),
                       ),
                     ),
-                  ),
+                  const SizedBox(height: 10),
+                  Text(t('rcScanTips'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  // 银行卡：收款账户信息（每项可复制）
+                  if (_payMethod == 3) ...[
+                    const SizedBox(height: 12),
+                    Divider(height: 1, color: scheme.outlineVariant),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Column(
+                        children: [
+                          _copyRow(
+                              t('rcBankName'),
+                              (_cfg['receiveBankInfo']?['bankName'] ?? '')
+                                  .toString()),
+                          _copyRow(
+                              t('rcCardNo'),
+                              (_cfg['receiveBankInfo']?['cardNo'] ?? '')
+                                  .toString()),
+                          _copyRow(
+                              t('rcPayeeName'),
+                              (_cfg['receiveBankInfo']?['accountName'] ?? '')
+                                  .toString()),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (tips.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(tips,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  ],
                 ])),
             const SizedBox(height: 12),
-            // 支付凭证（白底卡：标题 + 上传方框）
+            // 充值金额：标签在上 + ¥ 大字输入
+            _card(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(t('rcAmount'),
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 8),
+                  Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                    Text('¥',
+                        style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurface)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: TextField(
+                        controller: _amountCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurface),
+                        decoration: InputDecoration(
+                          hintText: t('rcAmountHint'),
+                          hintStyle: TextStyle(
+                              fontSize: 16, color: scheme.outlineVariant),
+                          filled: false,
+                          border: InputBorder.none,
+                          isCollapsed: true,
+                        ),
+                      ),
+                    ),
+                  ]),
+                ])),
+            const SizedBox(height: 12),
+            // 转账凭证：大虚线上传框
             _card(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                   Text(t('rcProof'),
-                      style: TextStyle(fontSize: 15, color: scheme.onSurface)),
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
                   const SizedBox(height: 10),
-                  GestureDetector(
+                  PayUI.dashedUploadBox(
+                    context: context,
+                    height: 170,
                     onTap: _pickProof,
-                    child: Container(
-                      width: 110,
-                      height: 110,
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: scheme.outlineVariant,
-                            width: 1,
-                            strokeAlign: BorderSide.strokeAlignInside),
-                      ),
-                      child: _proofPath != null
-                          ? ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.file(File(_proofPath!),
-                                  fit: BoxFit.cover))
-                          : Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.add_photo_alternate_outlined,
-                                    size: 30, color: scheme.onSurfaceVariant),
-                                const SizedBox(height: 6),
-                                Text(t('rcProofPick'),
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        color: scheme.onSurfaceVariant)),
-                              ],
-                            ),
-                    ),
+                    child: _proofPath != null
+                        ? SizedBox(
+                            width: double.infinity,
+                            height: 170,
+                            child: ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: Image.file(File(_proofPath!),
+                                    fit: BoxFit.cover)))
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 52,
+                                height: 52,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: PayUI.primary.withValues(alpha: 0.12),
+                                ),
+                                child: const Icon(
+                                    Icons.add_photo_alternate_outlined,
+                                    size: 26,
+                                    color: PayUI.primary),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(t('rcProofPick'),
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: scheme.onSurfaceVariant)),
+                            ],
+                          ),
                   ),
                 ])),
-            const SizedBox(height: 12),
-            // 单号 + 备注（白底行式）
-            _card(
-                padding: EdgeInsets.zero,
-                child: Column(children: [
-                  _rowInput(t('rcTxNo'), _txNoCtrl, t('rcTxNoHint')),
-                  Divider(height: 1, indent: 14, color: scheme.outlineVariant),
-                  _rowInput(t('rcRemark'), _remarkCtrl, t('rcRemarkHint')),
-                ])),
             const SizedBox(height: 24),
-            // 提交按钮（微信橙）
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: FilledButton(
-                onPressed: _submitting ? null : _submit,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFFA9D3B),
-                  disabledBackgroundColor: const Color(0xFFF7C9A0),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                child: _submitting
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : Text(t('rcSubmit'),
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600)),
-              ),
+            // 提交按钮（全局统一主按钮）
+            PayUI.primaryButton(
+              label: t('rcSubmit'),
+              onPressed: _submitting ? null : _submit,
+              loading: _submitting,
             ),
+            const SizedBox(height: 10),
+            // 到账提示（按钮下方灰色提示行）
+            Center(
+                child: Text(t('rcArriveHint'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 11, color: scheme.onSurfaceVariant))),
           ],
         ],
       ),
-    );
-  }
-
-  /// 支付方式单选行（微信风格：左图标 + 名称 + 右圆形单选）
-  Widget _methodRow(int method, IconData icon, String label) {
-    final scheme = Theme.of(context).colorScheme;
-    final selected = _payMethod == method;
-    return InkWell(
-      onTap: () => setState(() => _payMethod = method),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        child: Row(
-          children: [
-            Icon(icon,
-                size: 22,
-                color: selected
-                    ? const Color(0xFFFA9D3B)
-                    : scheme.onSurfaceVariant),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(label,
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                      color: scheme.onSurface)),
-            ),
-            _radio(selected),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 圆形单选指示器
-  Widget _radio(bool selected) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: selected ? const Color(0xFFFA9D3B) : Colors.transparent,
-        border: Border.all(
-            color: selected ? const Color(0xFFFA9D3B) : scheme.outlineVariant,
-            width: selected ? 0 : 1.5),
-      ),
-      alignment: Alignment.center,
-      child: selected
-          ? const Icon(Icons.check, size: 13, color: Colors.white)
-          : null,
     );
   }
 
@@ -483,36 +472,6 @@ class _RechargePageState extends State<RechargePage> {
                     style: TextStyle(
                         fontSize: 11, color: scheme.onSurfaceVariant)),
               ]),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 白底行式输入（无描边、无灰底填充、isCollapsed 防 hint 裁剪）
-  Widget _rowInput(String label, TextEditingController ctrl, String hint) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: Row(
-        children: [
-          SizedBox(
-              width: 76,
-              child: Text(label,
-                  style: TextStyle(fontSize: 14, color: scheme.onSurface))),
-          Expanded(
-            child: TextField(
-              controller: ctrl,
-              style: TextStyle(fontSize: 14, color: scheme.onSurface),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle:
-                    TextStyle(fontSize: 14, color: scheme.outlineVariant),
-                filled: false,
-                border: InputBorder.none,
-                isCollapsed: true,
-              ),
             ),
           ),
         ],

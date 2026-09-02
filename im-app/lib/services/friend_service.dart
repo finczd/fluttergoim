@@ -95,11 +95,12 @@ class FriendService {
   }
 
   /// 更新资料（昵称/签名/头像）
+  /// 签名用可空参数：null=不改；空串=清空签名（服务端 signature 为指针语义）
   Future<bool> updateProfile(
-      {String? nickname, String? bio, String? avatar}) async {
+      {String? nickname, String? signature, String? avatar}) async {
     final data = <String, dynamic>{};
     if (nickname != null && nickname.isNotEmpty) data['nickname'] = nickname;
-    if (bio != null) data['bio'] = bio;
+    if (signature != null) data['signature'] = signature;
     if (avatar != null && avatar.isNotEmpty) data['avatar'] = avatar;
     final r = await _dio.put('/api/v1/user/profile',
         data: data,

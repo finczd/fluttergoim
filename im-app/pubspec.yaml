@@ -23,6 +23,8 @@ dependencies:
   image_picker: ^1.1.2       # 相册选图发送（需求3：图片发送）
   permission_handler: ^11.3.1 # 运行时权限申请（音视频通话的麦克风/摄像头）
   jpush_flutter: 3.5.6       # 极光推送（离线消息系统通知，Android 厂商通道 + iOS APNs）
+  flutter_local_notifications: ^17.2.4  # 本地通知（App 在线/后台时 WS 收到新消息 → 通知栏提示；
+                                        # 极光只推离线用户，App 挂着 WS 时服务端不推，需本地补）
   flutter_foreground_task: ^11.0.1 # Android 前台服务保活（防进程被杀，配合 WS 长连接）
   audioplayers: ^6.0.0       # 铃声/提示音播放（新消息/来电/加好友）
   # 阶段 V2.0：腾讯云实时音视频（官方插件，不自己造轮子）
@@ -36,6 +38,7 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^4.0.0
   flutter_launcher_icons: ^0.13.1   # 一键生成各密度 APP 图标
+  flutter_native_splash: ^2.4.1     # 一键生成启动图（Android + iOS）
 
 flutter:
   uses-material-design: true
@@ -52,3 +55,16 @@ flutter_launcher_icons:
   ios: true
   image_path: "assets/icon/app_icon.png"
   min_sdk_android: 21
+
+# 启动图：logo 源图放 assets/icon/splash_logo.png（建议 1024x1024 PNG，
+# 透明背景，logo 主体居中、四周留白约 30%，Android 12+ 会按圆形裁剪）
+# 改完执行：dart run flutter_native_splash:create
+flutter_native_splash:
+  color: "#ffffff"                      # 启动背景色（改成你主色调）
+  image: assets/icon/splash_logo.png    # 居中 logo
+  android: true
+  ios: true
+  web: false
+  android_12:                           # Android 12+ 新版启动 API，必须单独配
+    color: "#ffffff"
+    image: assets/icon/splash_logo.png

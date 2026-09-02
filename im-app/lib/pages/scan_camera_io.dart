@@ -1,18 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../l10n/app_locale.dart';
 
-/// native 摄像头扫码（mobile_scanner）
-/// - 先用 permission_handler 显式申请 CAMERA 权限。
-/// - 非 ready 态（加载/权限/错误）一律不挂载 MobileScanner widget：
-///   重试时先把 UI 切出 ready 态（旧相机 widget 随帧卸载），再 dispose 旧
-///   controller，避免 controller 在 widget 仍挂载时被平台级销毁（竞态）。
-/// - 每次重试都重新创建 MobileScannerController，避免旧 controller 在失败状态卡住。
-/// - 被拒绝/永久拒绝：引导重新授权或去系统设置开启。
-/// - init_failed 时在页面展示底层异常详情（errorCode + message），
-///   便于区分「相机被其它应用（如 TRTC 通话）占用 / 无后摄 / 插件问题」。
+/// native 摄像头扫码（mobile_scanner 6.x）
+/// 核心策略：**显式 start，不依赖 autoStart + errorBuilder 的被动报错**。
+/// 6.x 的 start() 会把平台初始化异常吞进 controller.value.error（不外抛），
+/// 且平台层启动可能挂死（无回调无异常）——autoStart 模式下这两种情况
+/// 都会让页面永远停在「初始化中」。因此：
+/// - autoStart: false，挂载后主动 await controller.start() + 8s 超时；
+///   超时 = 启动挂死（典型原因：相机被其它应用/通话占用），直接进重试/报错。
+/// - start 返回后显式检查 value.error / isRunning，拿到真实错误详情。
+/// - 权限 status/request 全程 try/catch（部分 ROM 会抛，抛异常就永久转圈）。
+/// - 加载态显示当前步骤（检查权限/释放相机/启动第 N 次），页面内可见排障。
+/// - 非 ready 态一律不挂载 MobileScanner widget，重试先卸载旧 widget 再
+///   dispose 旧 controller，避免平台级竞态。
 class ScanCamera extends StatefulWidget {
   final ValueChanged<String> onScan;
   const ScanCamera({super.key, required this.onScan});
@@ -25,11 +30,12 @@ class _ScanCameraState extends State<ScanCamera> {
   MobileScannerController? _controller;
   String _lastError =
       ''; // '', 'permission_denied', 'permanently_denied', 'init_failed'
-  String _lastErrorDetail = ''; // 底层异常详情（errorCode + message，截断 120 字符）
-  bool _checkingPermission = true;
+  String _lastErrorDetail = ''; // 底层异常详情（截断 160 字符）
+  bool _checkingPermission = true; // 加载/过渡态（含相机启动中）
+  String _step = ''; // 加载态步骤：perm / release / starting / retry
   int _autoRetry = 0; // 自动重试次数（CameraX 瞬时初始化失败很常见）
   bool _disposed = false; // 页面已销毁，所有异步回调 setState 前必须先判断
-  bool _starting = false; // _start 并发守卫（errorBuilder 多次回调 / 连点重试）
+  bool _starting = false; // _start 并发守卫
 
   @override
   void initState() {
@@ -45,6 +51,11 @@ class _ScanCameraState extends State<ScanCamera> {
     super.dispose();
   }
 
+  void _setStep(String s) {
+    if (_disposed || !mounted) return;
+    setState(() => _step = s);
+  }
+
   Future<void> _start({bool manual = true}) async {
     if (_starting || _disposed) return;
     _starting = true;
@@ -58,31 +69,41 @@ class _ScanCameraState extends State<ScanCamera> {
         _checkingPermission = true;
         _lastError = '';
         _lastErrorDetail = '';
+        _step = 'release';
         _controller = null;
       });
-      // 等一帧确保旧 MobileScanner widget 完成卸载，再做平台级 dispose；
-      // 即使期间页面已销毁，也要把旧 controller 释放掉（否则泄漏）
+      // 等一帧确保旧 MobileScanner widget 完成卸载，再做平台级 dispose
       await WidgetsBinding.instance.endOfFrame;
       await old?.dispose();
       if (_disposed || !mounted) return;
-      // 释放相机需要一点时间，给 CameraX 一个缓冲（国产 ROM 上 300ms 经常不够）
+      // 释放相机需要时间，给 CameraX 一个缓冲（国产 ROM 上 300ms 经常不够）
       await Future<void>.delayed(const Duration(milliseconds: 600));
       if (_disposed || !mounted) return;
 
-      // 1. 先检查权限
-      final status = await Permission.camera.status;
-      if (_disposed || !mounted) return;
-      if (status.isGranted) {
-        _initScanner();
+      // 1. 检查权限（部分 ROM 的 status/request 会抛异常，必须兜底，
+      //    否则 _starting 复位后 UI 永远停在加载态且无任何提示）
+      _setStep('perm');
+      PermissionStatus status;
+      try {
+        status = await Permission.camera.status;
+      } catch (e) {
+        _showInitError('权限状态查询异常: $e');
         return;
       }
-
-      // 2. 申请权限
-      final req = await Permission.camera.request();
       if (_disposed || !mounted) return;
-      if (req.isGranted) {
-        _initScanner();
-      } else if (req.isPermanentlyDenied) {
+      PermissionStatus effective = status;
+      if (!status.isGranted) {
+        try {
+          effective = await Permission.camera.request();
+        } catch (e) {
+          _showInitError('权限申请异常: $e');
+          return;
+        }
+        if (_disposed || !mounted) return;
+      }
+      if (effective.isGranted) {
+        await _launchCamera();
+      } else if (effective.isPermanentlyDenied) {
         setState(() {
           _lastError = 'permanently_denied';
           _checkingPermission = false;
@@ -98,62 +119,65 @@ class _ScanCameraState extends State<ScanCamera> {
     }
   }
 
-  void _initScanner() {
+  /// 创建控制器（autoStart:false）→ 挂载 → 显式 start（8s 超时）→ 检查结果
+  Future<void> _launchCamera() async {
     if (_disposed || !mounted) return;
-    _controller = MobileScannerController(
-      autoStart: true,
+    final ctrl = MobileScannerController(
+      autoStart: false,
       facing: CameraFacing.back,
       formats: const [BarcodeFormat.qrCode],
       detectionSpeed: DetectionSpeed.noDuplicates,
     );
-    setState(() => _checkingPermission = false);
-  }
-
-  void _openSettings() => openAppSettings();
-
-  /// 底层异常摘要，截断到 120 字符
-  String _clipDetail(String text) {
-    if (text.length <= 120) return text;
-    return text.substring(0, 120);
-  }
-
-  /// 权限类错误判定：mobile_scanner 的 genericError 文案不含 permission/denied，
-  /// 只有 permissionDenied / 系统拒绝类错误才会被识别为权限问题
-  bool _isPermissionError(String message) {
-    final msg = message.toLowerCase();
-    return msg.contains('permission') || msg.contains('denied');
-  }
-
-  /// 摄像头错误：权限类直接报错；初始化类先自动重试 3 次再报错。
-  /// 进入本方法后 UI 立即离开 ready 态（卸载 MobileScanner），
-  /// 杜绝 errorBuilder 在错误态每次 rebuild 重复注册回调、重复调度重试。
-  void _onCameraError(bool denied, String detail) {
-    if (_disposed || !mounted) return;
-    debugPrint('[Scan] camera error: $detail');
-    if (denied) {
-      if (_lastError == 'permission_denied') return; // 已在错误态，避免重复 setState
-      setState(() {
-        _lastError = 'permission_denied';
-        _lastErrorDetail = _clipDetail(detail);
-        _checkingPermission = false;
-      });
+    setState(() {
+      _controller = ctrl;
+      _checkingPermission = false; // 进入 ready 态，MobileScanner 挂载
+      _step = 'starting';
+    });
+    // 等 widget 完成挂载（start 内部等 attach，这里主动等一帧更稳）
+    await WidgetsBinding.instance.endOfFrame;
+    if (_disposed || !mounted) {
+      await ctrl.dispose();
       return;
     }
-    // 已有重试/启动在途（UI 已切到加载态），忽略重复的错误回调
-    if (_checkingPermission) return;
+    try {
+      // 平台层挂死时 start 永不返回 → 超时兜底（autoStart 模式下这就是
+      // 「一直在初始化」的元凶，现在 8 秒内必定给出结论）
+      await ctrl.start().timeout(const Duration(seconds: 8));
+    } on TimeoutException {
+      _showInitError('启动超时：8 秒无回调（相机可能被其它应用占用，'
+          '或上次相机未释放完成）');
+      return;
+    } catch (e) {
+      _showInitError('启动异常: $e');
+      return;
+    }
+    if (_disposed || !mounted) return;
+    // 6.x 的 start() 吞掉初始化异常（只写入 value.error），这里显式检查
+    final err = ctrl.value.error;
+    if (err != null) {
+      _showInitError('$err');
+    } else if (!ctrl.value.isRunning) {
+      _showInitError('启动未完成（isRunning=false，无异常回调）');
+    }
+  }
+
+  /// 初始化失败统一入口：3 次自动重试（间隔 0.8/1.8/3s），仍失败则报错 + 详情
+  void _showInitError(String detail) {
+    if (_disposed || !mounted) return;
+    debugPrint('[Scan] init error: $detail');
     if (_autoRetry < 3) {
       _autoRetry += 1;
       final delay = _autoRetry == 1 ? 800 : (_autoRetry == 2 ? 1800 : 3000);
-      debugPrint('[Scan] auto retry #$_autoRetry in ${delay}ms');
-      // 先切到加载态卸载相机 widget，再走干净的重试路径
-      setState(() => _checkingPermission = true);
+      setState(() {
+        _checkingPermission = true; // 先卸载相机 widget，再走干净的重试路径
+        _step = 'retry';
+      });
       Future<void>.delayed(Duration(milliseconds: delay), () {
         if (_disposed || !mounted) return;
         _start(manual: false);
       });
       return;
     }
-    if (_lastError == 'init_failed') return; // 已在最终错误态
     setState(() {
       _lastError = 'init_failed';
       _lastErrorDetail = _clipDetail(detail);
@@ -161,12 +185,67 @@ class _ScanCameraState extends State<ScanCamera> {
     });
   }
 
+  /// errorBuilder 兜底（权限类错误从错误流来的场景）
+  void _onCameraError(bool denied, String detail) {
+    if (_disposed || !mounted) return;
+    debugPrint('[Scan] camera error: $detail');
+    if (denied) {
+      if (_lastError == 'permission_denied') return;
+      setState(() {
+        _lastError = 'permission_denied';
+        _lastErrorDetail = _clipDetail(detail);
+        _checkingPermission = false;
+      });
+      return;
+    }
+    // 重试/启动在途（加载态）时交给显式 start 的检查路径，避免重复调度
+    if (_checkingPermission) return;
+    _showInitError(detail);
+  }
+
+  String _clipDetail(String text) {
+    if (text.length <= 160) return text;
+    return text.substring(0, 160);
+  }
+
+  /// 相机被占用类错误的友好提示（详情文本特征匹配）
+  bool get _detailBusy {
+    final d = _lastErrorDetail.toLowerCase();
+    return d.contains('in use') ||
+        d.contains('inuse') ||
+        d.contains('busy') ||
+        d.contains('占用');
+  }
+
+  String get _stepText {
+    switch (_step) {
+      case 'perm':
+        return '正在检查相机权限…';
+      case 'release':
+        return '正在释放相机…';
+      case 'starting':
+        return _autoRetry > 0 ? '正在启动摄像头（自动重试 $_autoRetry/3）…' : '正在启动摄像头…';
+      case 'retry':
+        return '启动失败，正在自动重试（$_autoRetry/3）…';
+    }
+    return '正在初始化…';
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
     if (_checkingPermission) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white54),
+      // 加载态：显示当前步骤，让用户/截图能看出卡在哪一步
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(color: Colors.white54),
+            const SizedBox(height: 14),
+            Text(_stepText,
+                style: const TextStyle(color: Colors.white38, fontSize: 12)),
+          ],
+        ),
       );
     }
 
@@ -218,6 +297,13 @@ class _ScanCameraState extends State<ScanCamera> {
     if (raw.isNotEmpty) widget.onScan(raw);
   }
 
+  /// 权限类错误判定：mobile_scanner 的 genericError 文案不含 permission/denied，
+  /// 只有 permissionDenied / 系统拒绝类错误才会被识别为权限问题
+  bool _isPermissionError(String message) {
+    final msg = message.toLowerCase();
+    return msg.contains('permission') || msg.contains('denied');
+  }
+
   Widget _buildError(bool permissionDenied, {String? customMessage}) {
     final t = AppLocalizations.of(context).t;
     return Center(
@@ -247,6 +333,15 @@ class _ScanCameraState extends State<ScanCamera> {
               style: const TextStyle(
                   color: Colors.white38, fontSize: 13, height: 1.5),
             ),
+            // 相机被占用：追加友好提示（通话/TRTC 刚结束的场景最常见）
+            if (!permissionDenied && customMessage == null && _detailBusy) ...[
+              const SizedBox(height: 8),
+              const Text(
+                '相机可能被其它功能占用（如通话刚结束），请完全退出相关页面后重试',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ],
             // 排障辅助：显示底层真实错误（不进 i18n 词典，仅 init_failed 时出现）
             if (!permissionDenied &&
                 customMessage == null &&
@@ -278,4 +373,6 @@ class _ScanCameraState extends State<ScanCamera> {
       ),
     );
   }
+
+  void _openSettings() => openAppSettings();
 }

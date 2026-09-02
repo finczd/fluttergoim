@@ -14,8 +14,13 @@ import 'trtc_engine.dart';
 /// 修复：按钮固定底部；全屏显示远端画面，右上角小窗显示本地预览；进房前申请麦克风/摄像头权限
 class VideoCallPage extends StatefulWidget {
   final String peerName;
+  final String peerAvatar;
   final String? convId; // 会话 ID（房间号）
-  const VideoCallPage({super.key, required this.peerName, this.convId});
+  const VideoCallPage(
+      {super.key,
+      required this.peerName,
+      this.peerAvatar = '',
+      this.convId});
 
   @override
   State<VideoCallPage> createState() => _VideoCallPageState();
@@ -333,12 +338,14 @@ class _VideoCallPageState extends State<VideoCallPage> {
                     ),
                   ),
                 ),
-                // 中央：对方姓名 + 通话时长
+                // 中央：对方头像 + 姓名 + 通话时长（需求4：拨打界面显示对方昵称+头像）
                 Align(
                   alignment: const Alignment(0, -0.55),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      _peerAvatarBadge(),
+                      const SizedBox(height: 10),
                       Text(widget.peerName,
                           style: const TextStyle(
                               color: Colors.white,
@@ -374,6 +381,45 @@ class _VideoCallPageState extends State<VideoCallPage> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 对方头像（无头像或加载失败回退首字母圆形）
+  Widget _peerAvatarBadge() {
+    final initial =
+        widget.peerName.isEmpty ? '?' : widget.peerName.characters.first;
+    return Container(
+      width: 64,
+      height: 64,
+      decoration: BoxDecoration(
+        color: AppTheme.primary,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 16,
+              offset: const Offset(0, 4)),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      alignment: Alignment.center,
+      child: widget.peerAvatar.isNotEmpty
+          ? Image.network(
+              widget.peerAvatar,
+              width: 64,
+              height: 64,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Text(initial,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 26,
+                      fontWeight: FontWeight.w600)),
+            )
+          : Text(initial,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w600)),
     );
   }
 

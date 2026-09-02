@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../widgets/app_dialogs.dart';
+import 'qr_confirm_page.dart';
 import 'scan_camera_io.dart' if (dart.library.html) 'scan_camera_web.dart';
 
 /// 移动端扫一扫（需求1）：扫 PC 端二维码 → 解析 ticket → 确认登录
@@ -35,7 +36,44 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
     return uri.queryParameters['ticket'] ?? raw.trim();
   }
 
-  /// 手机端确认登录：POST /auth/qr/confirm（需登录态）
+  /// 扫码成功：先上报"已扫描"（PC 端显示"已扫码，请在手机上确认"），
+  /// 再进入二次确认页（微信式），用户点确认才真正 confirm 登录。
+  Future<void> _onScanned(String raw) async {
+    final ticket = _extractTicket(raw);
+    if (ticket.isEmpty || _processing) return;
+    setState(() {
+      _processing = true;
+      _msg = '';
+    });
+    try {
+      final r = await _api.post('/api/v1/auth/qr/scanned',
+          data: {'ticket': ticket});
+      final code = (r.data as Map<String, dynamic>)['code'];
+      if (!mounted) return;
+      if (code != 0) {
+        final t = AppLocalizations.of(context).t;
+        setState(() => _msg = t('scanQrLoginFailed'));
+        AppDialogs.toast(context, _msg);
+        setState(() => _processing = false);
+        return;
+      }
+      if (mounted) setState(() => _processing = false);
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => QrConfirmPage(ticket: ticket)));
+    } catch (e) {
+      if (mounted) {
+        final t = AppLocalizations.of(context).t;
+        setState(() {
+          _processing = false;
+          _msg = t('scanQrLoginError',
+              {'error': e.toString().replaceFirst('Exception: ', '')});
+        });
+      }
+    }
+  }
+
+  /// H5 兜底：手动粘贴 ticket 直接确认（浏览器无摄像头场景保留旧路径）
   Future<void> _confirm(String ticket) async {
     if (ticket.isEmpty || _processing) return;
     setState(() {
@@ -81,9 +119,9 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
     );
   }
 
-  /// native：摄像头扫码
+  /// native：摄像头扫码 → 标记已扫描 → 二次确认页
   Widget _buildCamera() {
-    return ScanCamera(onScan: (raw) => _confirm(_extractTicket(raw)));
+    return ScanCamera(onScan: _onScanned);
   }
 
   /// H5：输入框粘贴 ticket（浏览器无摄像头权限时兜底）
