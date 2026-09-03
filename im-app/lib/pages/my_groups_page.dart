@@ -86,22 +86,18 @@ class _MyGroupsPageState extends State<MyGroupsPage> {
         ),
         child: Row(
           children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: AppTheme.primary,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                  g.conversationName.isEmpty
-                      ? t('myGroupsInitial')
-                      : g.conversationName.characters.first,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600)),
+            // 群头像：优先显示群头像图，无图回落首字母（修复通讯录群聊不显示群头像）
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: g.avatarUrl.isNotEmpty
+                  ? Image.network(
+                      g.avatarUrl,
+                      width: 44,
+                      height: 44,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _letterAvatar(g),
+                    )
+                  : _letterAvatar(g),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -131,6 +127,26 @@ class _MyGroupsPageState extends State<MyGroupsPage> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 无群头像时的首字母占位
+  Widget _letterAvatar(ConvItem g) {
+    final t = AppLocalizations.of(context).t;
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: AppTheme.primary,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+          g.conversationName.isEmpty
+              ? t('myGroupsInitial')
+              : g.conversationName.characters.first,
+          style: const TextStyle(
+              color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
     );
   }
 }

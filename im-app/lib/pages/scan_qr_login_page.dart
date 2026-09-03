@@ -1,10 +1,16 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
+import '../services/conversation_service.dart';
+import '../services/friend_service.dart';
 import '../widgets/app_dialogs.dart';
+import 'chat_page.dart';
+import 'group_join_confirm_page.dart';
 import 'qr_confirm_page.dart';
+import 'user_qr_profile_page.dart';
 import 'scan_camera_io.dart' if (dart.library.html) 'scan_camera_web.dart';
 
 /// 移动端扫一扫（需求1）：扫 PC 端二维码 → 解析 ticket → 确认登录
@@ -36,18 +42,115 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
     return uri.queryParameters['ticket'] ?? raw.trim();
   }
 
+  /// 识别群二维码深链（chatpulse://group?id=<会话ID>）→ 返回会话 ID，非群码返回 null
+  String? _parseGroupConvId(String raw) {
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null) return null;
+    if (uri.scheme == 'chatpulse' && uri.host == 'group') {
+      final id = uri.queryParameters['id'] ?? '';
+      return id.isEmpty ? null : id;
+    }
+    return null;
+  }
+
+  /// 识别个人二维码深链（chatpulse://user?uid=<用户ID>）→ 返回用户 ID，非个人码返回 null
+  String? _parseUserUid(String raw) {
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null) return null;
+    if (uri.scheme == 'chatpulse' && uri.host == 'user') {
+      final uid = uri.queryParameters['uid'] ?? '';
+      return uid.isEmpty ? null : uid;
+    }
+    return null;
+  }
+
+  /// 扫个人二维码：好友直接进好友资料页，非好友显示「添加到通讯录」（微信逻辑）
+  Future<void> _openUserProfile(String uid) async {
+    if (!mounted) return;
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => UserQrProfilePage(uid: uid)));
+  }
+
+  /// 扫群二维码进群：先拉群信息预览 → 二次确认页（微信式）→ 确认后加入
+  Future<void> _joinGroup(String convId) async {
+    final t = AppLocalizations.of(context).t;
+    setState(() => _processing = true);
+    try {
+      final svc = ConversationService();
+      // 第一步：群信息预览（群名/头像/成员数），不加入
+      final preview = await svc.groupPreview(convId);
+      if (!mounted) return;
+      setState(() => _processing = false);
+      // 第二步：二次确认页，点「加入群聊」才真正加入
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => GroupJoinConfirmPage(
+              data: preview,
+              onConfirm: () async {
+                try {
+                  final conv = await svc.joinGroup(convId);
+                  String myId = '';
+                  try {
+                    final p = await FriendService().profile();
+                    myId = p['id']?.toString() ?? '';
+                  } catch (_) {}
+                  if (!mounted) return;
+                  final name = conv['nameZh']?.toString() ??
+                      conv['nameEn']?.toString() ??
+                      '';
+                  final item = ConvItem.fromJson(
+                      {'conversation': conv, 'conversationName': name});
+                  await Navigator.of(context).pushReplacement(MaterialPageRoute(
+                      builder: (_) => ChatPage(conv: item, myId: myId)));
+                } catch (e) {
+                  if (mounted) {
+                    // 超时/连接类错误给可读提示，不 dump 原始 DioException
+                    final errText =
+                        e is DioException && ApiClient.isTransient(e)
+                            ? t('bootLoadFailed')
+                            : e.toString().replaceFirst('Exception: ', '');
+                    AppDialogs.toast(
+                        context, t('groupQrJoinFailed', {'error': errText}));
+                  }
+                  rethrow;
+                }
+              })));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _processing = false);
+        // 预览失败：超时/连接类错误给可读提示
+        final errText = e is DioException && ApiClient.isTransient(e)
+            ? t('bootLoadFailed')
+            : e.toString().replaceFirst('Exception: ', '');
+        AppDialogs.toast(context, t('groupQrJoinFailed', {'error': errText}));
+      }
+    }
+  }
+
   /// 扫码成功：先上报"已扫描"（PC 端显示"已扫码，请在手机上确认"），
   /// 再进入二次确认页（微信式），用户点确认才真正 confirm 登录。
   Future<void> _onScanned(String raw) async {
+    if (_processing) return;
+    // 群二维码优先路由：chatpulse://group?id=xxx → 进群
+    final groupConvId = _parseGroupConvId(raw);
+    if (groupConvId != null) {
+      await _joinGroup(groupConvId);
+      return;
+    }
+    // 个人二维码：chatpulse://user?uid=xxx → 好友资料/添加好友
+    final userUid = _parseUserUid(raw);
+    if (userUid != null) {
+      await _openUserProfile(userUid);
+      return;
+    }
     final ticket = _extractTicket(raw);
-    if (ticket.isEmpty || _processing) return;
+    if (ticket.isEmpty) return;
     setState(() {
       _processing = true;
       _msg = '';
     });
     try {
-      final r = await _api.post('/api/v1/auth/qr/scanned',
-          data: {'ticket': ticket});
+      final r =
+          await _api.post('/api/v1/auth/qr/scanned', data: {'ticket': ticket});
       final code = (r.data as Map<String, dynamic>)['code'];
       if (!mounted) return;
       if (code != 0) {
@@ -59,8 +162,8 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
       }
       if (mounted) setState(() => _processing = false);
       if (!mounted) return;
-      await Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => QrConfirmPage(ticket: ticket)));
+      await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => QrConfirmPage(ticket: ticket)));
     } catch (e) {
       if (mounted) {
         final t = AppLocalizations.of(context).t;
@@ -87,8 +190,7 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
       if (mounted) {
         final t = AppLocalizations.of(context).t;
         setState(() {
-          _msg =
-              code == 0 ? t('scanQrLoginConfirmed') : t('scanQrLoginFailed');
+          _msg = code == 0 ? t('scanQrLoginConfirmed') : t('scanQrLoginFailed');
         });
         AppDialogs.toast(context, _msg);
       }
@@ -139,13 +241,16 @@ class _ScanQrLoginPageState extends State<ScanQrLoginPage> {
             ),
             child: Column(
               children: [
-                const Icon(Icons.qr_code_scanner, size: 64, color: Colors.white54),
+                const Icon(Icons.qr_code_scanner,
+                    size: 64, color: Colors.white54),
                 const SizedBox(height: 12),
                 Text(t('scanQrLoginNoCamera'),
-                    style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                    style:
+                        const TextStyle(color: Colors.white70, fontSize: 13)),
                 Text(t('scanQrLoginManualHint'),
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                    style:
+                        const TextStyle(color: Colors.white38, fontSize: 12)),
               ],
             ),
           ),

@@ -46,6 +46,9 @@ class _WithdrawPageState extends State<WithdrawPage> {
   Future<void> _load() async {
     Map<String, dynamic> cfg = {};
     Map<String, dynamic> wa = {};
+    // 余额与配置**并发**拉取：本页"全部提现"会用余额直接填充金额，
+    // 必须是服务端最新值——用落盘快照（可能过期）会填出一个提现失败的金额。
+    final walletFuture = WalletStore.instance.refresh();
     try {
       final r = await _api.get('/api/v1/pay/config');
       if ((r.data['code'] as num?)?.toInt() == 0) {
@@ -58,6 +61,7 @@ class _WithdrawPageState extends State<WithdrawPage> {
         wa = (r.data['data'] as Map<String, dynamic>? ?? {});
       }
     } catch (_) {}
+    await walletFuture; // 页面要展示余额，必须等它回来再 setState
     // 默认选中已绑定的方式
     final boundType = (wa['accountType'] as num?)?.toInt() ?? 0;
     if (mounted) {

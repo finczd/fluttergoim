@@ -183,7 +183,8 @@ class _AccountSecurityPageState extends State<AccountSecurityPage> {
                   leading: const Icon(Icons.delete_forever_outlined,
                       color: AppTheme.danger),
                   title: Text(t('acctSecDeleteAccount'),
-                      style: const TextStyle(fontSize: 15, color: AppTheme.danger)),
+                      style: const TextStyle(
+                          fontSize: 15, color: AppTheme.danger)),
                   trailing: Icon(Icons.chevron_right,
                       size: 18, color: context.cs.onSurfaceVariant),
                   onTap: _deleteAccount,

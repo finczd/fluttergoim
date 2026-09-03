@@ -1,0 +1,27 @@
+{
+  "name": "chatpulse-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "deploy-pack": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-pack.ps1"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "marked": "^18.0.11",
+    "node-cron": "^4.6.0",
+    "nuxt": "^3.14.0",
+    "qrcode": "^1.5.4",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node-cron": "^3.0.11"
+  }
+}

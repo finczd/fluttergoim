@@ -523,6 +523,7 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 			q.Kw = c.Query("kw")
 			q.From, _ = strconv.ParseInt(c.Query("from"), 10, 64)
 			q.To, _ = strconv.ParseInt(c.Query("to"), 10, 64)
+			q.Type, _ = strconv.Atoi(c.Query("type"))
 			page, _ := strconv.Atoi(c.Query("page"))
 			size, _ := strconv.Atoi(c.Query("size"))
 			msgs, total, err := service.AdminMessageQuery(c.Request.Context(), &q, page, size)
@@ -531,6 +532,30 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"list": msgs, "total": total}})
+		})
+
+		// 屏蔽/恢复消息（后台审计：屏蔽后用户端历史/同步不再下发）
+		admin.POST("/messages/:msgId/block", func(c *gin.Context) {
+			msgID, err := strconv.ParseInt(c.Param("msgId"), 10, 64)
+			if err != nil || msgID <= 0 {
+				c.JSON(http.StatusOK, gin.H{"code": 400, "message": "参数错误"})
+				return
+			}
+			var body struct {
+				Blocked *bool `json:"blocked"`
+			}
+			_ = c.ShouldBindJSON(&body)
+			blocked := body.Blocked == nil || *body.Blocked // 默认 true=屏蔽
+			if err := service.AdminMessageBlock(c.Request.Context(), msgID, blocked); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 500, "message": "操作失败"})
+				return
+			}
+			action := "message.block"
+			if !blocked {
+				action = "message.unblock"
+			}
+			service.AdminLog(c.Request.Context(), middleware.CurrentUserID(c), action, c.Param("msgId"), c.ClientIP(), nil)
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
 		})
 
 		// 数据统计
@@ -805,6 +830,62 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 				c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
 				return
 			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+		})
+
+		// ===== 自定义邀请码（一码关联多好友，注册自动加好友） =====
+		admin.GET("/invite-friend-codes", func(c *gin.Context) {
+			list, err := service.InviteFriendList(c.Request.Context())
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 500, "message": "查询失败"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": list})
+		})
+		admin.POST("/invite-friend-codes", func(c *gin.Context) {
+			var body struct {
+				Code      string   `json:"code" binding:"required"`
+				FriendIDs []string `json:"friendIds"` // 字符串形式的用户 ID（int64 精度安全）
+				Remark    string   `json:"remark"`
+			}
+			if err := c.ShouldBindJSON(&body); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+				return
+			}
+			ic, err := service.InviteFriendCreate(c.Request.Context(), body.Code, body.FriendIDs, body.Remark)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+				return
+			}
+			service.AdminLog(c.Request.Context(), middleware.CurrentUserID(c), "invite_code.create", body.Code, c.ClientIP(), nil)
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": ic})
+		})
+		admin.PUT("/invite-friend-codes/:id", func(c *gin.Context) {
+			id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+			var body struct {
+				Code      *string  `json:"code"`
+				FriendIDs []string `json:"friendIds"`
+				Remark    *string  `json:"remark"`
+				Enabled   *int     `json:"enabled"`
+			}
+			if err := c.ShouldBindJSON(&body); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+				return
+			}
+			if err := service.InviteFriendUpdate(c.Request.Context(), id, body.Code, body.FriendIDs, body.Remark, body.Enabled); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+				return
+			}
+			service.AdminLog(c.Request.Context(), middleware.CurrentUserID(c), "invite_code.update", strconv.FormatInt(id, 10), c.ClientIP(), nil)
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+		})
+		admin.DELETE("/invite-friend-codes/:id", func(c *gin.Context) {
+			id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+			if err := service.InviteFriendDelete(c.Request.Context(), id); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 500, "message": "删除失败"})
+				return
+			}
+			service.AdminLog(c.Request.Context(), middleware.CurrentUserID(c), "invite_code.delete", strconv.FormatInt(id, 10), c.ClientIP(), nil)
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
 		})
 

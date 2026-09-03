@@ -4,14 +4,20 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/call_service.dart';
+import '../services/feature_flags.dart';
 import '../services/friend_service.dart';
+import '../services/update_service.dart';
+import '../services/user_cache.dart';
+import '../widgets/update_dialog.dart';
 import 'keep_alive_guide_page.dart';
 import '../services/wallet_store.dart';
 import '../services/ws_service.dart';
+import '../widgets/lang_picker.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import 'favorites_page.dart';
@@ -42,6 +48,8 @@ class _MePageState extends State<MePage> {
     _loadCachedProfile();
     _load();
     _refreshBalance();
+    // 功能开关（零钱/邀请码）：后台可实时开关，进入本页刷新一次
+    FeatureFlags.instance.load();
   }
 
   /// 先读本地缓存的资料，首帧直接渲染昵称/头像，
@@ -75,7 +83,7 @@ class _MePageState extends State<MePage> {
     await Future.wait([_load(), _refreshBalance()]);
   }
 
-  Future<void> _load() async {
+  Future<void> _load({int retry = 0}) async {
     try {
       final p = await _svc.profile();
       if (mounted) {
@@ -83,7 +91,15 @@ class _MePageState extends State<MePage> {
         // 资料写入本地缓存，下次进 App / 切 tab 首帧即有昵称头像
         unawaited(_api.writePref('profile', jsonEncode(p)));
       }
-    } catch (_) {}
+    } catch (e) {
+      // 首次请求偶发超时（服务端瞬时慢，与登录/进群超时同款）→ 自动重试，
+      // 否则"我的"页会一直显示"未登录"，直到手动下拉刷新
+      if (retry < 2 && mounted) {
+        await Future.delayed(Duration(milliseconds: 600 * (retry + 1)));
+        if (!mounted) return;
+        return _load(retry: retry + 1);
+      }
+    }
   }
 
   Future<void> _logout() async {
@@ -110,6 +126,10 @@ class _MePageState extends State<MePage> {
     // ApiClient.logout 内部已改成"先清本地 token，再通知服务端"，
     // 所以这里压到 2s 也只是放弃服务端通知，不影响本地已登出。
     await _api.logout().timeout(const Duration(seconds: 2), onTimeout: () {});
+    UserCache.clear(); // 清用户信息缓存：换账号登录不能复用上一个会话的数据
+    // 钱包：清内存余额（磁盘快照已由 logout→LocalStore.clearUserData 清）。
+    // 不清的话换账号登录后、refresh() 返回前会短暂显示上一个人的余额。
+    WalletStore.instance.reset();
     if (!mounted) return;
     // 用 pushAndRemoveUntil 清栈，避免回退键还能回到已登出的首页
     Navigator.of(context).pushAndRemoveUntil(
@@ -125,6 +145,8 @@ class _MePageState extends State<MePage> {
     final name = p?['nickname']?.toString() ?? t('meNotLoggedIn');
     final account = p?['account']?.toString() ?? '';
     final shortId = p?['shortId']?.toString() ?? '';
+    // 靓号标识：short_id 来自后台靓号池（已分配）→ ID 前显示红色「靓ID」徽标
+    final isVipShort = p?['vipShortId'] == true && shortId.isNotEmpty;
 
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
@@ -181,18 +203,42 @@ class _MePageState extends State<MePage> {
                               const SizedBox(height: 5),
                               Row(
                                 children: [
-                                  Flexible(
-                                    child: Text(
-                                      shortId.isNotEmpty
-                                          ? 'ID: $shortId'
-                                          : t('meAccount',
-                                              {'account': account}),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                          fontSize: 13,
-                                          color: scheme.onSurfaceVariant),
+                                  // 靓号徽标：红色框住「靓ID：123456」
+                                  if (isVipShort) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 1.5),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(
+                                            color: const Color(0xFFE5484D),
+                                            width: 1),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        t('vipIdBadge', {'id': shortId}),
+                                        style: const TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFFE5484D)),
+                                      ),
                                     ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  // 靓号时徽标已含「靓ID：xxx」，不再重复显示普通 ID
+                                  Flexible(
+                                    child: isVipShort
+                                        ? const SizedBox.shrink()
+                                        : Text(
+                                            shortId.isNotEmpty
+                                                ? 'ID: $shortId'
+                                                : t('meAccount',
+                                                    {'account': account}),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                                fontSize: 13,
+                                                color: scheme.onSurfaceVariant),
+                                          ),
                                   ),
                                   const SizedBox(width: 6),
                                   InkWell(
@@ -233,35 +279,46 @@ class _MePageState extends State<MePage> {
               _groupLabel(t('meMyServices')),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _card([
-                  _row(Icons.account_balance_wallet_outlined, t('meWallet'),
-                      color: AppTheme.transfer,
-                      // 余额用监听而不是快照：后台改了余额 / 领了红包后不用手动 setState（B-20）
-                      trailingWidget: ValueListenableBuilder<double>(
-                        valueListenable: WalletStore.instance.balanceNotifier,
-                        builder: (_, v, __) => Text(
-                            '¥ ${WalletStore.instance.fmt(v)}',
-                            style: TextStyle(
-                                fontSize: 13,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant)),
-                      ), onTap: () async {
-                    await Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const WalletPage()));
-                    // 从零钱页返回后强刷一次（在零钱页可能刚发生收支）
-                    if (mounted) _refreshBalance();
-                  }),
-                  _row(Icons.favorite_border_rounded, t('meFavorites'),
-                      color: AppTheme.pink, onTap: () {
-                    Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => const FavoritesPage()));
-                  }),
-                  _row(Icons.share_outlined, t('meInviteCode'),
-                      color: AppTheme.green, onTap: () {
-                    AppDialogs.toast(context, t('meInviteCodeToast'));
-                  }),
-                ]),
+                // 功能开关实时驱动：后台关闭「零钱/邀请码」后立即隐藏对应入口
+                child: AnimatedBuilder(
+                    animation: Listenable.merge([
+                      FeatureFlags.instance.walletOn,
+                      FeatureFlags.instance.inviteOn,
+                    ]),
+                    builder: (_, __) => _card([
+                          if (FeatureFlags.instance.walletOn.value)
+                            _row(Icons.account_balance_wallet_outlined,
+                                t('meWallet'),
+                                color: AppTheme.transfer,
+                                // 余额用监听而不是快照：后台改了余额 / 领了红包后不用手动 setState（B-20）
+                                trailingWidget: ValueListenableBuilder<double>(
+                                  valueListenable:
+                                      WalletStore.instance.balanceNotifier,
+                                  builder: (_, v, __) => Text(
+                                      '¥ ${WalletStore.instance.fmt(v)}',
+                                      style: TextStyle(
+                                          fontSize: 13,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant)),
+                                ), onTap: () async {
+                              await Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                      builder: (_) => const WalletPage()));
+                              // 从零钱页返回后强刷一次（在零钱页可能刚发生收支）
+                              if (mounted) _refreshBalance();
+                            }),
+                          _row(Icons.favorite_border_rounded, t('meFavorites'),
+                              color: AppTheme.pink, onTap: () {
+                            Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => const FavoritesPage()));
+                          }),
+                          if (FeatureFlags.instance.inviteOn.value)
+                            _row(Icons.share_outlined, t('meInviteCode'),
+                                color: AppTheme.green, onTap: () {
+                              AppDialogs.toast(context, t('meInviteCodeToast'));
+                            }),
+                        ])),
               ),
               // 设置（账号安全/切换语言/检测更新/设置）
               _groupLabel(t('meSettings')),
@@ -324,80 +381,14 @@ class _MePageState extends State<MePage> {
     );
   }
 
-  /// 右侧显示「另一种语言」：中文时显示 English，英文时显示 简体中文
+  /// 右侧显示当前语言（语言入口已改为弹窗菜单选择）
   String _otherLangLabel(BuildContext context) {
     final loc = AppLocalizations.of(context).locale;
-    final t = AppLocalizations.of(context).t;
-    return loc.languageCode == 'zh' ? t('langEn') : t('langZh');
+    return AppLocalizations.langNativeName(loc);
   }
 
-  /// 语言选择弹窗（支持后期扩展多种语言）
-  void _showLangPicker(BuildContext context) {
-    final provider = LocaleProvider.of(context);
-    final loc = AppLocalizations.of(context).locale;
-    final t = AppLocalizations.of(context).t;
-    final options = [
-      (const Locale('zh', 'CN'), t('langZh')),
-      (const Locale('en', 'US'), t('langEn')),
-    ];
-    final scheme = Theme.of(context).colorScheme;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                margin: const EdgeInsets.only(top: 8),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: scheme.outlineVariant,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                child: Text(t('meChooseLanguage'),
-                    style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
-                        color: scheme.onSurface)),
-              ),
-              ...options.map((e) => InkWell(
-                    onTap: () {
-                      provider?.setLocale(e.$1);
-                      Navigator.of(ctx).pop();
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 14),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(e.$2,
-                                style: TextStyle(
-                                    fontSize: 16, color: scheme.onSurface)),
-                          ),
-                          if (loc.languageCode == e.$1.languageCode)
-                            Icon(Icons.check, color: scheme.primary, size: 22),
-                        ],
-                      ),
-                    ),
-                  )),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  /// 语言选择弹窗（跟随系统 + 四语），实现见 widgets/lang_picker.dart（登录/注册/扫码页共用）
+  void _showLangPicker(BuildContext context) => showLangPicker(context);
 
   Widget _groupLabel(String text) {
     final scheme = Theme.of(context).colorScheme;
@@ -539,33 +530,58 @@ class AboutPage extends StatefulWidget {
 
 class _AboutPageState extends State<AboutPage> {
   final _api = ApiClient.instance;
-  static const _currentVersion = '0.1.0';
+  // 本地版本基准：统一走 UpdateService（由 apply_config 自动同步，勿手改）
+  String get _currentVersion => UpdateService.currentVersion;
+
+  /// 后台配置的软件名（无配置回落默认名）——政策文案/简介统一替换
+  String get _appName => _brandName.isNotEmpty ? _brandName : 'ChatPulse';
+
   String _version = '';
   String _updateLog = '';
   String _androidUrl = '';
   String _iosUrl = '';
   String _brandName = '';
+  String _brandLogo = ''; // 后台配置的品牌 logo（appLogo/brandLogo）
 
   @override
   void initState() {
     super.initState();
+    _loadCached(); // 缓存直出：品牌/版本信息首帧即显，不空屏等待
     _load();
+  }
+
+  /// 先渲染本地缓存的品牌与版本配置，网络回来后覆盖刷新
+  Future<void> _loadCached() async {
+    try {
+      final raw = await _api.readPref('authConfig');
+      if (raw == null || raw.isEmpty || !mounted) return;
+      final d = jsonDecode(raw);
+      if (d is Map) _applyConfig(Map<String, dynamic>.from(d));
+    } catch (_) {}
+  }
+
+  void _applyConfig(Map<String, dynamic> d) {
+    setState(() {
+      _version = d['appVersion']?.toString() ?? '';
+      _updateLog = d['updateLog']?.toString() ?? '';
+      _androidUrl = d['androidUrl']?.toString() ?? '';
+      _iosUrl = d['iosUrl']?.toString() ?? '';
+      _brandName = (d['brandName'] ?? d['appName'] ?? '').toString();
+      _brandLogo = (d['brandLogo'] ?? d['appLogo'] ?? '').toString();
+    });
   }
 
   Future<void> _load() async {
     try {
+      // 品牌信息（名称/logo）与版本配置同接口，这里一次拉全
       final r = await _api.get('/api/v1/auth/config');
       final d =
           (r.data as Map<String, dynamic>)['data'] as Map<String, dynamic>? ??
               {};
-      if (mounted) {
-        setState(() {
-          _version = d['appVersion']?.toString() ?? '';
-          _updateLog = d['updateLog']?.toString() ?? '';
-          _androidUrl = d['androidUrl']?.toString() ?? '';
-          _iosUrl = d['iosUrl']?.toString() ?? '';
-          _brandName = (d['brandName'] ?? d['appName'] ?? '').toString();
-        });
+      if (mounted && d.isNotEmpty) {
+        _applyConfig(d);
+        // 配置类内容"请求一次缓存即可"：落盘，下次进页直出
+        unawaited(_api.writePref('authConfig', jsonEncode(d)));
       }
     } catch (_) {}
   }
@@ -580,7 +596,22 @@ class _AboutPageState extends State<AboutPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Center(child: AppTheme.brandAvatar(size: 72)),
+          // 品牌 logo：读取后台配置，无配置回落默认品牌头像
+          Center(
+            child: _brandLogo.isNotEmpty
+                ? ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: Image.network(
+                      _brandLogo,
+                      width: 72,
+                      height: 72,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) =>
+                          AppTheme.brandAvatar(size: 72),
+                    ),
+                  )
+                : AppTheme.brandAvatar(size: 72),
+          ),
           const SizedBox(height: 12),
           Center(
             child: Text(_brandName.isEmpty ? t('meAbout') : _brandName,
@@ -638,7 +669,7 @@ class _AboutPageState extends State<AboutPage> {
                         color: scheme.onSurface)),
                 const SizedBox(height: 8),
                 Text(
-                  t('meAboutDesc'),
+                  t('meAboutDesc').replaceAll('ChatPulse', _appName),
                   style: TextStyle(
                       fontSize: 13,
                       color: scheme.onSurfaceVariant,
@@ -667,21 +698,24 @@ class _AboutPageState extends State<AboutPage> {
                   Navigator.of(context).push(MaterialPageRoute(
                       builder: (_) => PolicyPage(
                           title: t('mePrivacyPolicy'),
-                          content: kPrivacyPolicy)));
+                          content: kPrivacyPolicy,
+                          appName: _appName)));
                 }),
                 Divider(height: 1, indent: 50, color: scheme.outlineVariant),
                 _infoRow(Icons.gavel_outlined, t('meTermsOfService'), () {
                   Navigator.of(context).push(MaterialPageRoute(
                       builder: (_) => PolicyPage(
                           title: t('meTermsOfService'),
-                          content: kTermsOfService)));
+                          content: kTermsOfService,
+                          appName: _appName)));
                 }),
               ],
             ),
           ),
           const SizedBox(height: 24),
           Center(
-            child: Text('Copyright © ChatPulse',
+            child: Text(
+                'Copyright © ${_brandName.isEmpty ? 'ChatPulse' : _brandName}',
                 style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
           ),
           const SizedBox(height: 16),
@@ -694,84 +728,21 @@ class _AboutPageState extends State<AboutPage> {
     );
   }
 
-  /// 检测更新：拉取后台配置，对比版本号并提示下载
+  /// 检测更新：拉后台配置，有新版本弹新版更新弹窗（外部浏览器下载）
   Future<void> _checkUpdate() async {
-    await _load();
+    // 重新拉一次保证拿到最新后台配置
+    final info = await UpdateService.fetch();
     if (!mounted) return;
     final t = AppLocalizations.of(context).t;
-    if (_version.isEmpty) {
+    if (info == null || info.version.isEmpty) {
       AppDialogs.toast(context, t('meGetVersionFailed'));
       return;
     }
-    final hasUrl = _androidUrl.isNotEmpty || _iosUrl.isNotEmpty;
-    final isNew = _version != _currentVersion;
-    if (isNew && hasUrl) {
-      _showUpdateDialog();
-    } else {
+    final shown = await UpdateDialog.showIfAvailable(context, info);
+    if (!shown && mounted) {
       AppDialogs.toast(
           context, t('meAlreadyLatestVersion', {'version': _currentVersion}));
     }
-  }
-
-  void _showUpdateDialog() {
-    final t = AppLocalizations.of(context).t;
-    final scheme = Theme.of(context).colorScheme;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: scheme.surface,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.radiusMd)),
-        title: Text(t('meNewVersionFound')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(t('meCurrentVersion', {'version': _currentVersion}),
-                style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant)),
-            const SizedBox(height: 4),
-            Text(t('meLatestVersion', {'version': _version}),
-                style: TextStyle(
-                    fontSize: 14,
-                    color: scheme.primary,
-                    fontWeight: FontWeight.w600)),
-            if (_updateLog.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text(t('meWhatsNewColon'),
-                  style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSurface)),
-              const SizedBox(height: 6),
-              Text(_updateLog,
-                  style: TextStyle(
-                      fontSize: 13,
-                      color: scheme.onSurfaceVariant,
-                      height: 1.6)),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text(t('meLater'),
-                style: TextStyle(color: scheme.onSurfaceVariant)),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              // 目前仅提示下载链接；如需跳转浏览器，可在此接入 url_launcher
-              AppDialogs.toast(
-                  context,
-                  t('meDownloadViaLink',
-                      {'url': _androidUrl.isNotEmpty ? _androidUrl : _iosUrl}));
-            },
-            style: FilledButton.styleFrom(backgroundColor: scheme.primary),
-            child: Text(t('meDownloadNow')),
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _infoRow(IconData icon, String label, VoidCallback onTap,
@@ -804,11 +775,16 @@ class _AboutPageState extends State<AboutPage> {
   }
 
   Widget _linkRow(IconData icon, String label, String url) {
-    final t = AppLocalizations.of(context).t;
     final scheme = Theme.of(context).colorScheme;
     return InkWell(
-      onTap: () =>
-          AppDialogs.toast(context, t('meOpenInBrowser', {'url': url})),
+      onTap: () async {
+        // 直接调系统外部浏览器打开下载地址
+        final uri = Uri.tryParse(url);
+        if (uri == null || !uri.hasScheme) return;
+        try {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } catch (_) {}
+      },
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),

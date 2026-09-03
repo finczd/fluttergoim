@@ -48,9 +48,9 @@ class MomentService {
     final body = r.data as Map<String, dynamic>? ?? {};
     final code = (body['code'] as num?)?.toInt() ?? 0;
     if (code != 0) {
-      throw Exception((body['message'] ??
-              AppLocalizations.instance.t('svcClaimFailed'))
-          .toString());
+      throw Exception(
+          (body['message'] ?? AppLocalizations.instance.t('svcClaimFailed'))
+              .toString());
     }
     return ((body['data'] as Map<String, dynamic>?) ?? {});
   }
@@ -61,9 +61,9 @@ class MomentService {
     final body = r.data as Map<String, dynamic>? ?? {};
     final code = (body['code'] as num?)?.toInt() ?? 0;
     if (code != 0) {
-      throw Exception((body['message'] ??
-              AppLocalizations.instance.t('svcQueryFailed'))
-          .toString());
+      throw Exception(
+          (body['message'] ?? AppLocalizations.instance.t('svcQueryFailed'))
+              .toString());
     }
     return ((body['data'] as Map<String, dynamic>?) ?? {});
   }

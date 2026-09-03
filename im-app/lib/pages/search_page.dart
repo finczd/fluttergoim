@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/conversation_service.dart';
+import '../services/local_store.dart';
 import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
 
@@ -16,13 +19,36 @@ class _SearchPageState extends State<SearchPage> {
   final _svc = ConversationService();
   final _ctrl = TextEditingController();
   List<Map<String, dynamic>> _results = [];
+
+  /// 本地搜索历史（最新的在前，落盘保存；退出登录时清空）
+  List<String> _history = [];
   int _total = 0;
   bool _searched = false;
   bool _loading = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final list = await LocalStore.loadSearchHistory();
+      if (mounted) setState(() => _history = list);
+    } catch (_) {}
+  }
+
+  Future<void> _clearHistory() async {
+    await LocalStore.clearSearchHistory();
+    if (mounted) setState(() => _history = []);
+  }
+
   Future<void> _search() async {
     final kw = _ctrl.text.trim();
     if (kw.isEmpty) return;
+    // 记录搜索历史（去重、最新在前、最多 10 条），下次进页还在
+    unawaited(LocalStore.addSearchHistory(kw));
     setState(() {
       _loading = true;
       _searched = true;
@@ -52,6 +78,67 @@ class _SearchPageState extends State<SearchPage> {
     };
     return (typeMap[(m['type'] as num?)?.toInt()] ?? '') +
         (m['content']?.toString() ?? '');
+  }
+
+  /// 还没搜索时：有历史就展示历史（点一下直接搜），没有才显示引导文案
+  Widget _buildHistoryOrTip() {
+    final t = AppLocalizations.of(context).t;
+    if (_history.isEmpty) {
+      return Center(
+          child: Text(t('searchEmptyTip'),
+              style: TextStyle(color: context.cs.onSurfaceVariant)));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 8, 4),
+          child: Row(
+            children: [
+              Text(t('searchHistory'),
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: context.cs.onSurfaceVariant)),
+              const Spacer(),
+              TextButton(
+                onPressed: _clearHistory,
+                child: Text(t('searchClearHistory'),
+                    style:
+                        const TextStyle(fontSize: 13, color: AppTheme.primary)),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            itemCount: _history.length,
+            separatorBuilder: (_, __) =>
+                Divider(height: 1, color: context.cs.outlineVariant),
+            itemBuilder: (_, i) {
+              final kw = _history[i];
+              return ListTile(
+                dense: true,
+                leading: Icon(Icons.history,
+                    size: 18, color: context.cs.onSurfaceVariant),
+                title: Text(kw,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontSize: 14, color: context.cs.onSurface)),
+                onTap: () {
+                  _ctrl.text = kw;
+                  _ctrl.selection = TextSelection.fromPosition(
+                      TextPosition(offset: kw.length));
+                  _search();
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -102,9 +189,7 @@ class _SearchPageState extends State<SearchPage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : !_searched
-              ? Center(
-                  child: Text(t('searchEmptyTip'),
-                      style: TextStyle(color: context.cs.onSurfaceVariant)))
+              ? _buildHistoryOrTip()
               : _results.isEmpty
                   ? Center(
                       child: Text(t('searchNoResults'),

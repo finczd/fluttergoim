@@ -98,8 +98,9 @@ class _FavoritesPageState extends State<FavoritesPage> {
                               const Icon(Icons.star,
                                   size: 14, color: Color(0xFFFFB800)),
                               const SizedBox(width: 4),
-                              Text(t('favoritesConversation',
-                                  {'id': '${m['conversationId']}'}),
+                              Text(
+                                  t('favoritesConversation',
+                                      {'id': '${m['conversationId']}'}),
                                   style: TextStyle(
                                       fontSize: 12,
                                       color: context.cs.onSurfaceVariant)),

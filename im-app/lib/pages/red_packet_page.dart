@@ -396,12 +396,21 @@ class _RedPacketPageState extends State<RedPacketPage> {
           const SizedBox(width: 14),
           SizedBox(
             width: 80,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-                color: scheme.onSurface,
+            // label 变化时（拼手气 ↔ 普通红包）淡入淡出，避免文字瞬切闪烁
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              switchInCurve: Curves.easeOut,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder: (child, animation) =>
+                  FadeTransition(opacity: animation, child: child),
+              child: Text(
+                label,
+                key: ValueKey(label),
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: scheme.onSurface,
+                ),
               ),
             ),
           ),
@@ -459,13 +468,22 @@ class _RedPacketPageState extends State<RedPacketPage> {
           Text('¥',
               style: TextStyle(
                   fontSize: 22, fontWeight: FontWeight.w700, color: color)),
-          Text(
-            totalText,
-            style: TextStyle(
-              fontSize: 40,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
-              color: color,
+          // 合计金额变化时淡入淡出，避免瞬切闪烁
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: (child, animation) =>
+                FadeTransition(opacity: animation, child: child),
+            child: Text(
+              totalText,
+              key: ValueKey(totalText),
+              style: TextStyle(
+                fontSize: 40,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5,
+                color: color,
+              ),
             ),
           ),
         ],

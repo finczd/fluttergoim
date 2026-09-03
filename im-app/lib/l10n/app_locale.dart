@@ -1,6 +1,10 @@
 import 'package:flutter/widgets.dart';
 
-/// 极简国际化：仅支持 zh-CN / en-US，避免引入 intl/flutter_localizations 依赖
+import '../services/api_client.dart';
+import 'app_locale_ja.dart';
+import 'app_locale_zht.dart';
+
+/// 极简国际化：支持 zh-CN / zh-TW(繁体) / en-US / ja，避免引入 intl 依赖
 class AppLocalizations {
   final Locale locale;
   const AppLocalizations(this.locale);
@@ -10,6 +14,79 @@ class AppLocalizations {
   static AppLocalizations? _g;
   static AppLocalizations get instance =>
       _g ?? const AppLocalizations(Locale('zh', 'CN'));
+
+  /// 支持的语言（语言切换按钮的循环顺序）：
+  /// 简体中文 → English → 日本語 → 繁體中文 → 简体中文
+  static const List<Locale> supportedLangs = [
+    Locale('zh', 'CN'),
+    Locale('en', 'US'),
+    Locale('ja'),
+    Locale('zh', 'TW'),
+  ];
+
+  /// 循环切换中的"下一个语言"（语言按钮显示目标语言，见登录页胶囊）
+  static Locale nextLocale(Locale cur) {
+    var i = supportedLangs.indexOf(cur);
+    if (i < 0) {
+      i = supportedLangs.indexWhere((l) => l.languageCode == cur.languageCode);
+    }
+    if (i < 0) i = 0;
+    return supportedLangs[(i + 1) % supportedLangs.length];
+  }
+
+  /// 设备语言 → supportedLangs 匹配（zh 按 TW/HK/MO 区分简繁；未匹配回落简体中文）
+  static Locale matchSystemLocale() =>
+      resolveLocale(WidgetsBinding.instance.platformDispatcher.locale);
+
+  /// 任意 Locale 归一到四语之一
+  static Locale resolveLocale(Locale l) {
+    if (l.languageCode == 'zh') {
+      final isTraditional = l.countryCode == 'TW' ||
+          l.countryCode == 'HK' ||
+          l.countryCode == 'MO';
+      return isTraditional
+          ? const Locale('zh', 'TW')
+          : const Locale('zh', 'CN');
+    }
+    for (final s in supportedLangs) {
+      if (s.languageCode == l.languageCode) return s;
+    }
+    return const Locale('zh', 'CN');
+  }
+
+  /// Locale ↔ 持久化键（zh_CN / en_US / ja / zh_TW）
+  static String localeKey(Locale l) =>
+      '${l.languageCode}_${l.countryCode ?? ''}';
+
+  static Locale? localeFromKey(String key) {
+    for (final s in supportedLangs) {
+      if (localeKey(s) == key) return s;
+    }
+    return null;
+  }
+
+  /// 语言"母语名"：固定显示该语言自己的写法，不随界面语言变化
+  static String langNativeName(Locale l) {
+    if (l.languageCode == 'zh') {
+      final isTraditional = l.countryCode == 'TW' ||
+          l.countryCode == 'HK' ||
+          l.countryCode == 'MO';
+      return isTraditional ? '繁體中文' : '简体中文';
+    }
+    if (l.languageCode == 'ja') return '日本語';
+    return 'English';
+  }
+
+  /// 词典键：zh 需按地区区分简体/繁体（TW/HK/MO → zhT）
+  String get _langKey {
+    if (locale.languageCode == 'zh') {
+      final isTraditional = locale.countryCode == 'TW' ||
+          locale.countryCode == 'HK' ||
+          locale.countryCode == 'MO';
+      return isTraditional ? 'zhT' : 'zh';
+    }
+    return locale.languageCode;
+  }
 
   static AppLocalizations of(BuildContext ctx) {
     final p = ctx.dependOnInheritedWidgetOfExactType<_LocaleScope>();
@@ -108,6 +185,7 @@ class AppLocalizations {
       'chatListDelete': '删除',
       'chatListDeleted': '已删除会话',
       'chatListEmpty': '暂无会话',
+      'chatListLoadFailed': '会话列表加载失败',
       'chatListGroupInitial': '群',
       'chatListMute': '免打扰',
       'chatListMuteOn': '已开启免打扰',
@@ -137,6 +215,8 @@ class AppLocalizations {
       'chatQuotePrefix': '引用：{content}',
       'chatQuotedMsg': '引用了一条消息',
       'chatRead': '已读',
+      'chatHistoryLoadFailed': '消息加载失败',
+      'chatRetryLoad': '重新加载',
       'chatRecallFailed': '撤回失败（超过2分钟或无权限）',
       'chatRecalled': '已撤回',
       'chatRedPacketCount': '{type} · {count}个',
@@ -147,6 +227,7 @@ class AppLocalizations {
       'chatSavedToWalletAmount': '已存入零钱 ¥{amount}',
       'chatStatusDesktopOnline': '电脑在线',
       'chatStatusMobileOnline': '手机在线',
+      'chatStatusOnline': '在线',
       'chatStatusOffline': '离线',
       'chatTapToAccept': '点击收款',
       'chatTapToAnswer': '点击回拨',
@@ -169,6 +250,92 @@ class AppLocalizations {
       'contactsAssistantUnavailable': '小助手暂不可用',
       'officialTag': '官方',
       'contactsEmptyFriends': '暂无好友，搜索添加吧',
+      'contactsLoadFailed': '通讯录加载失败',
+      'contactsRetry': '重新加载',
+      'contactsRefreshFailed': '刷新失败，已保留当前列表',
+      'bootLoadFailed': '网络连接失败，请检查网络后重试',
+      'bootAutoRetryIn': '{s} 秒后自动重试…',
+      'groupManageTitle': '群聊管理',
+      'groupSwitchQrJoin': '二维码进群',
+      'groupSwitchQrJoinSub': '开启后成员可扫码加入群聊',
+      'groupSwitchPrivacy': '成员隐私',
+      'groupSwitchPrivacySub': '开启后普通成员不可查看群成员列表',
+      'groupSwitchMuteAll': '全员禁言',
+      'groupSwitchMuteAllSub': '开启后仅群主和管理员可以发言',
+      'groupSwitchAllowInvite': '允许成员邀请',
+      'groupSwitchAllowInviteSub': '允许普通成员邀请好友进群',
+      'groupQrSection': '群二维码',
+      'groupQrRow': '群二维码',
+      'groupQrTitle': '群二维码',
+      'groupQrHint': '群成员使用「扫一扫」识别该二维码，即可加入本群（需开启二维码进群）',
+      'groupQrJoinFailed': '进群失败：{error}',
+      'groupAdminsSection': '群管理员',
+      'groupAddAdmin': '添加管理员',
+      'groupAddAdminPick': '选择成员设为管理员',
+      'groupRemoveAdmin': '移除',
+      'groupNoAdminCandidate': '暂无可设为管理员的成员',
+      'groupMembersManageEntry': '群成员管理',
+      'groupSettingsSaved': '已保存',
+      'groupSettingsSaveFailed': '保存失败，请重试',
+      'groupMembersTitle': '群成员 ({count})',
+      'groupRoleOwner': '群主',
+      // 群事件系统提示（type=6 灰色小字条）
+      'groupSysInvite': '{actor} 邀请 {target} 加入了群聊',
+      'groupSysJoin': '{target} 通过扫码加入了群聊',
+      'groupSysQuit': '{target} 退出了群聊',
+      'groupSysKick': '{actor} 将 {target} 移出了群聊',
+      'groupSysMute': '{actor} 禁言了 {target} {m} 分钟',
+      'groupSysUnmute': '{actor} 解除了对 {target} 的禁言',
+      'groupSysMuteAllOn': '{actor} 开启了全员禁言',
+      'groupSysMuteAllOff': '{actor} 解除了全员禁言',
+      // 输入栏禁言置灰提示
+      'chatMutedAllBanner': '本群已开启全员禁言',
+      'chatMutedBanner': '你已被禁言，暂时无法发言',
+      // 扫码进群二次确认页
+      'groupJoinConfirmTitle': '加入群聊',
+      'groupJoinConfirmButton': '加入群聊',
+      'groupJoinMemberCount': '{n} 位成员',
+      'groupJoinUnnamed': '未命名群聊',
+      // 扫个人二维码落地页
+      'userQrAddBtn': '添加到通讯录',
+      'userQrMyself': '这是自己的二维码',
+      'groupRoleAdmin': '管理员',
+      'groupMutedTag': '禁言中',
+      'groupMe': '我',
+      'groupInviteBtn': '邀请成员',
+      'groupInvitePickTitle': '选择好友',
+      'groupInviteSuccess': '邀请成功',
+      'groupInviteFailed': '邀请失败',
+      'groupNoFriendsToInvite': '没有可邀请的好友',
+      'groupRemoveMember': '移出群聊',
+      'groupRemoveConfirmTitle': '移出群聊',
+      'groupRemoveConfirmMsg': '确定将 {name} 移出本群？',
+      'groupRemoveConfirmBtn': '移出',
+      'groupRemoveSuccess': '已移出',
+      'groupRemoveFailed': '移除失败',
+      'groupMute': '禁言',
+      'groupMutePickTitle': '选择禁言时长',
+      'groupMute10m': '10 分钟',
+      'groupMute1h': '1 小时',
+      'groupMute8h': '8 小时',
+      'groupMute1d': '1 天',
+      'groupMute7d': '7 天',
+      'groupMuteSuccess': '已禁言',
+      'groupMuteFailed': '操作失败',
+      'groupUnmute': '解除禁言',
+      'groupUnmuteSuccess': '已解除禁言',
+      'groupSetAdmin': '设为管理员',
+      'groupUnsetAdmin': '取消管理员',
+      'groupSetAdminSuccess': '已设为管理员',
+      'groupUnsetAdminSuccess': '已取消管理员',
+      'groupSetAdminFailed': '操作失败',
+      'groupPrivacyHint': '群主已开启成员隐私',
+      'groupRenameTitle': '修改群名',
+      'groupRenameHint': '输入新的群名称',
+      'groupRenameSaved': '群名已更新',
+      'groupRenameFailed': '修改失败',
+      'groupAvatarUpdated': '群头像已更新',
+      'groupAvatarUpdateFailed': '头像上传失败',
       'contactsFriendRequestLabel': '好友申请',
       'contactsFriendRequests': '好友申请 ({count})',
       'contactsFriends': '好友 ({count})',
@@ -226,6 +393,11 @@ class AppLocalizations {
       'convSetNotSet': '未设置',
       'convSetOffline': '离线',
       'convSetOnline': '在线',
+      'convSetLastSeen': '最近上线 {time}',
+      'timeJustNow': '刚刚',
+      'timeMinAgo': '{n}分钟前',
+      'timeHourAgo': '{n}小时前',
+      'timeDayAgo': '{n}天前',
       'convSetPersonalProfile': '个人资料',
       'convSetPinChat': '置顶聊天',
       'convSetPinnedMessages': '置顶消息',
@@ -300,6 +472,7 @@ class AppLocalizations {
       'incomingCallVideo': '视频通话',
       'incomingCallVoice': '语音通话',
       'inviteCode': '邀请码',
+      'vipIdBadge': '靓ID：{id}',
       'kaAutoStartAction': '前往自启动设置',
       'kaAutoStartDevice': '当前设备：{device}',
       'kaAutoStartTitle': '自启动 / 后台权限',
@@ -320,6 +493,10 @@ class AppLocalizations {
       'kaTitle': '消息保活设置',
       'langEn': 'English',
       'langZh': '简体中文',
+      'langJa': '日本語',
+      'langZhT': '繁體中文',
+      'apiChecking': '检测中',
+      'apiDown': '连接失败',
       'loggingIn': '登录中…',
       'login': '登录',
       'me': '我的',
@@ -333,6 +510,7 @@ class AppLocalizations {
       'meAndroidDownload': 'Android 下载',
       'meCheckUpdate': '检测更新',
       'meChooseLanguage': '选择语言',
+      'langFollowSystem': '跟随系统',
       'meCopied': '已复制',
       'meCurrentVersion': '当前版本：{version}',
       'meDownloadNow': '立即下载',
@@ -597,10 +775,12 @@ class AppLocalizations {
       'qrConfirmTitle': '扫码确认',
       'qrConfirmFailed': '确认失败',
       'searchAction': '搜索',
+      'searchClearHistory': '清空',
       'searchConvLabel': '会话 #{id}',
       'searchEmptyTip': '输入关键词搜索聊天记录',
       'searchFile': '[文件]',
       'searchHint': '搜索聊天记录',
+      'searchHistory': '搜索历史',
       'searchImage': '[图片]',
       'searchNoResults': '未找到相关消息',
       'searchResultCount': '共 {count} 条相关消息',
@@ -777,6 +957,7 @@ class AppLocalizations {
       'loginAccountRequired': '请输入账号',
       'loginAccountTooShort': '账号至少 3 位',
       'loginPwdRequired': '请输入密码',
+      'cancel': '取消',
       'loginPwdTooShort': '密码至少 6 位',
       'loginSuccess': '登录成功',
       'unknownError': '未知错误',
@@ -789,23 +970,21 @@ class AppLocalizations {
     },
     'en': {
       'account': 'Phone / Account',
-      'acctSecChangeFailed': 'Failed to change password',
-      'acctSecChangeFailedRetry': 'Failed to change password, please try again',
+      'acctSecChangeFailed': 'Change failed',
+      'acctSecChangeFailedRetry': 'Change failed, retry',
       'acctSecChangePassword': 'Change Password',
       'acctSecConfirmChange': 'Confirm',
       'acctSecConfirmPwdHint': 'Confirm new password',
       'acctSecDeleteAccount': 'Delete Account',
       'acctSecDeleteAccountMsg':
-          'Your account will be deactivated and you won\\\'t be able to log in. This action cannot be undone. Continue?',
+          'Account will be disabled and cannot log in. This cannot be undone. Continue?',
       'acctSecDeleteConfirm': 'Delete',
-      'acctSecDeleteFailed': 'Failed to delete account',
-      'acctSecDeleteFailedRetry': 'Failed to delete account, please try again',
-      'acctSecNewPwdHint':
-          'New password (8-20 characters, letters and numbers)',
+      'acctSecDeleteFailed': 'Delete failed',
+      'acctSecDeleteFailedRetry': 'Delete failed, retry',
+      'acctSecNewPwdHint': 'New password (8-20, letters & digits)',
       'acctSecOldPwdHint': 'Current password',
       'acctSecPwdChanged': 'Password changed',
-      'acctSecPwdInvalid':
-          'Password must be 8-20 characters with both letters and numbers',
+      'acctSecPwdInvalid': '8-20 chars with letters and digits',
       'acctSecPwdMismatch': 'New passwords do not match',
       'acctSecTitle': 'Account Security',
       'addFriendDefaultMsg':
@@ -815,7 +994,7 @@ class AppLocalizations {
       'addFriendNoUser': 'No users found',
       'addFriendSearchHint': 'Account / nickname / phone / email',
       'addFriendSend': 'Send',
-      'addFriendSendFailed': 'Failed to send. You may already be friends',
+      'addFriendSendFailed': 'Send failed (may already be friends)',
       'addFriendSent': 'Request sent',
       'addFriendTitle': 'Add Friend',
       'addFriendUser': 'User',
@@ -826,7 +1005,7 @@ class AppLocalizations {
       'billTitle': 'Bills',
       'billToNow': 'to now',
       'billTotalCount': '{count} records',
-      'chatAcceptFailedRetry': 'Failed to accept, please try again',
+      'chatAcceptFailedRetry': 'Accept failed, retry',
       'chatAccepted': 'Accepted',
       'chatActionCopy': 'Copy',
       'chatActionFavorite': 'Favorite',
@@ -846,7 +1025,7 @@ class AppLocalizations {
       'chatCallMissed': 'Missed {type} call',
       'chatCallOngoing': 'In call',
       'chatCallRejected': '{type} call declined',
-      'chatCallSingleOnly': 'Calls are supported in one-on-one chats only',
+      'chatCallSingleOnly': 'Calls in one-on-one chats only',
       'chatCallVideo': 'Video',
       'chatCallVoice': 'Voice',
       'chatCallWithDuration': '{type} call {duration}',
@@ -875,7 +1054,7 @@ class AppLocalizations {
       'chatImageSendFailed': 'Failed to send image: {error}',
       'chatInsufficientBalanceNeed':
           'Insufficient balance: need ¥{need}, available ¥{bal}',
-      'chatInsufficientSendFailed': 'Insufficient balance, failed to send',
+      'chatInsufficientSendFailed': 'Insufficient balance, send failed',
       'chatInvalidAmount': 'Invalid amount',
       'chatListAddFriend': 'Add Friend',
       'chatListCancel': 'Cancel',
@@ -883,6 +1062,7 @@ class AppLocalizations {
       'chatListDelete': 'Delete',
       'chatListDeleted': 'Conversation deleted',
       'chatListEmpty': 'No conversations',
+      'chatListLoadFailed': 'Failed to load conversations',
       'chatListGroupInitial': 'G',
       'chatListMute': 'Mute',
       'chatListMuteOn': 'Muted',
@@ -903,8 +1083,8 @@ class AppLocalizations {
       'chatNormalRedPacket': 'Regular red packet',
       'chatOK': 'Got it',
       'chatOpen': 'Open',
-      'chatPeerCanceled': 'The other party canceled',
-      'chatPeerRejected': 'The other party declined',
+      'chatPeerCanceled': 'Canceled',
+      'chatPeerRejected': 'Declined',
       'chatPickMention': 'Select a member',
       'chatPinFailed': 'Failed to pin',
       'chatPinned': 'Pinned',
@@ -912,39 +1092,124 @@ class AppLocalizations {
       'chatQuotePrefix': 'Quote: {content}',
       'chatQuotedMsg': 'Quoted a message',
       'chatRead': 'Read',
-      'chatRecallFailed':
-          'Recall failed (older than 2 minutes or no permission)',
+      'chatHistoryLoadFailed': 'Failed to load messages',
+      'chatRetryLoad': 'Retry',
+      'chatRecallFailed': 'Recall failed (>2min or no permission)',
       'chatRecalled': 'Recalled',
       'chatRedPacketCount': '{type} · {count} packets',
-      'chatRedPacketGone': 'The red packet has been fully claimed',
+      'chatRedPacketGone': 'Red packet fully claimed',
       'chatRedPacketGreeting': 'Best wishes!',
       'chatReplyHint': 'Reply to {name}...',
       'chatSavedToWallet': 'Added to wallet',
       'chatSavedToWalletAmount': '¥{amount} added to wallet',
       'chatStatusDesktopOnline': 'Online (desktop)',
       'chatStatusMobileOnline': 'Online (mobile)',
+      'chatStatusOnline': 'Online',
       'chatStatusOffline': 'Offline',
       'chatTapToAccept': 'Tap to accept',
       'chatTapToAnswer': 'Tap to call back',
-      'chatWaitingAccept': 'Waiting for the recipient to accept',
+      'chatWaitingAccept': 'Waiting to accept',
       'chatTapToClaim': 'Tap to claim',
       'chatTapToOpen': 'Tap to open',
       'chatTransferAccepted': 'Transfer accepted',
-      'chatTransferClaimedBefore': 'This transfer was already accepted',
+      'chatTransferClaimedBefore': 'Already accepted',
       'chatTransferredToYou': 'Transferred to you',
       'chatViewClaimDetail': 'View claim details',
-      'chatVoiceComingSoon': 'Voice messages are coming soon',
+      'chatVoiceComingSoon': 'Voice messages coming soon',
       'chatWechatRedPacket': 'Red packet',
       'chatWechatTransfer': 'Transfer',
       'chatYesterdayAt': 'Yesterday {time}',
       'confirmPassword': 'Confirm password',
-      'contactAdmin': 'Please contact admin to reset password',
+      'contactAdmin': 'Contact admin to reset password',
       'contacts': 'Contacts',
       'contactsAgree': 'Accept',
       'contactsAssistant': 'Assistant',
-      'contactsAssistantUnavailable': 'Assistant is unavailable right now',
+      'contactsAssistantUnavailable': 'Assistant unavailable',
       'officialTag': 'Official',
-      'contactsEmptyFriends': 'No friends yet. Search to add some',
+      'contactsEmptyFriends': 'No friends yet. Search to add',
+      'contactsLoadFailed': 'Failed to load contacts',
+      'contactsRetry': 'Retry',
+      'contactsRefreshFailed': 'Refresh failed. Showing saved list',
+      'bootLoadFailed': 'Network unavailable. Check your connection and retry',
+      'bootAutoRetryIn': 'Auto retry in {s}s…',
+      'groupManageTitle': 'Group Settings',
+      'groupSwitchQrJoin': 'Join via QR Code',
+      'groupSwitchQrJoinSub': 'Members can join by scanning the QR code',
+      'groupSwitchPrivacy': 'Member Privacy',
+      'groupSwitchPrivacySub': 'Regular members cannot view the member list',
+      'groupSwitchMuteAll': 'Mute All',
+      'groupSwitchMuteAllSub': 'Only owner and admins can send messages',
+      'groupSwitchAllowInvite': 'Allow Member Invites',
+      'groupSwitchAllowInviteSub': 'Regular members can invite friends to join',
+      'groupQrSection': 'Group QR Code',
+      'groupQrRow': 'Group QR Code',
+      'groupQrTitle': 'Group QR Code',
+      'groupQrHint':
+          'Members can scan this QR code to join the group (Join via QR must be enabled)',
+      'groupQrJoinFailed': 'Failed to join: {error}',
+      'groupAdminsSection': 'Group Admins',
+      'groupAddAdmin': 'Add Admin',
+      'groupAddAdminPick': 'Select a member as admin',
+      'groupRemoveAdmin': 'Remove',
+      'groupNoAdminCandidate': 'No members can be promoted',
+      'groupMembersManageEntry': 'Manage Members',
+      'groupSettingsSaved': 'Saved',
+      'groupSettingsSaveFailed': 'Save failed. Try again',
+      'groupMembersTitle': 'Members ({count})',
+      'groupRoleOwner': 'Owner',
+      'groupSysInvite': '{actor} invited {target} to the group',
+      'groupSysJoin': '{target} joined the group via QR code',
+      'groupSysQuit': '{target} left the group',
+      'groupSysKick': '{actor} removed {target} from the group',
+      'groupSysMute': '{actor} muted {target} for {m} min',
+      'groupSysUnmute': '{actor} unmuted {target}',
+      'groupSysMuteAllOn': '{actor} enabled mute-all',
+      'groupSysMuteAllOff': '{actor} disabled mute-all',
+      'chatMutedAllBanner': 'Mute-all is on in this group',
+      'chatMutedBanner': 'You are muted and cannot send messages',
+      'groupJoinConfirmTitle': 'Join Group',
+      'groupJoinConfirmButton': 'Join Group',
+      'groupJoinMemberCount': '{n} members',
+      'groupJoinUnnamed': 'Unnamed Group',
+      'userQrAddBtn': 'Add to Contacts',
+      'userQrMyself': 'This is your own QR code',
+      'groupRoleAdmin': 'Admin',
+      'groupMutedTag': 'Muted',
+      'groupMe': 'Me',
+      'groupInviteBtn': 'Invite',
+      'groupInvitePickTitle': 'Select Friends',
+      'groupInviteSuccess': 'Invited',
+      'groupInviteFailed': 'Invite failed',
+      'groupNoFriendsToInvite': 'No friends to invite',
+      'groupRemoveMember': 'Remove from Group',
+      'groupRemoveConfirmTitle': 'Remove from Group',
+      'groupRemoveConfirmMsg': 'Remove {name} from this group?',
+      'groupRemoveConfirmBtn': 'Remove',
+      'groupRemoveSuccess': 'Removed',
+      'groupRemoveFailed': 'Remove failed',
+      'groupMute': 'Mute',
+      'groupMutePickTitle': 'Mute Duration',
+      'groupMute10m': '10 minutes',
+      'groupMute1h': '1 hour',
+      'groupMute8h': '8 hours',
+      'groupMute1d': '1 day',
+      'groupMute7d': '7 days',
+      'groupMuteSuccess': 'Muted',
+      'groupMuteFailed': 'Action failed',
+      'groupUnmute': 'Unmute',
+      'groupUnmuteSuccess': 'Unmuted',
+      'groupSetAdmin': 'Set as Admin',
+      'groupUnsetAdmin': 'Dismiss Admin',
+      'groupSetAdminSuccess': 'Admin set',
+      'groupUnsetAdminSuccess': 'Admin dismissed',
+      'groupSetAdminFailed': 'Action failed',
+      'groupPrivacyHint': 'Owner has enabled member privacy',
+      'groupRenameTitle': 'Rename Group',
+      'groupRenameHint': 'Enter a new group name',
+      'groupRenameSaved': 'Group name updated',
+      'groupRenameFailed': 'Rename failed',
+      'groupAvatarUpdated': 'Group avatar updated',
+      'groupAvatarUpdateFailed': 'Avatar upload failed',
       'contactsFriendRequestLabel': 'Friend Request',
       'contactsFriendRequests': 'Friend Requests ({count})',
       'contactsFriends': 'Friends ({count})',
@@ -965,9 +1230,9 @@ class AppLocalizations {
       'convSetAnnouncementTitle': 'View / Edit group announcement',
       'convSetBlacklistConfirm': 'Block',
       'convSetBlacklistMsg':
-          'After blocking, you will no longer receive messages from this user and the friend relationship will be removed.',
+          'Blocks their messages and removes the friendship.',
       'convSetBlacklistTitle': 'Block',
-      'convSetBlacklisted': 'Blocked (friend relationship removed)',
+      'convSetBlacklisted': 'Blocked (unfriended)',
       'convSetCallBusy': 'Currently in a call',
       'convSetClearHistoryConfirm': 'Clear',
       'convSetClearHistoryMsg': 'This cannot be undone. Clear chat history?',
@@ -975,8 +1240,7 @@ class AppLocalizations {
       'convSetComingSoon': '{name} (coming in V2.0)',
       'convSetCopied': 'Copied',
       'convSetDeleteConfirm': 'Delete',
-      'convSetDeleteFriendMsg':
-          'Deleting this friend will also delete the conversation. Delete?',
+      'convSetDeleteFriendMsg': 'Chat will be deleted too. Delete friend?',
       'convSetDeleteFriendTitle': 'Delete friend',
       'convSetDisbandConfirm': 'Disband',
       'convSetDisbandGroupMsg':
@@ -984,8 +1248,7 @@ class AppLocalizations {
       'convSetDisbandGroupTitle': 'Disband group',
       'convSetEmptyMessage': '(empty message)',
       'convSetExitConfirm': 'Exit',
-      'convSetExitGroupMsg':
-          'You will no longer receive messages from this group. Exit?',
+      'convSetExitGroupMsg': 'You will stop receiving group messages. Exit?',
       'convSetExitGroupTitle': 'Exit group',
       'convSetGetPeerFailed': 'Failed to get peer user',
       'convSetGroupAdmin': 'Group admin',
@@ -1007,6 +1270,11 @@ class AppLocalizations {
       'convSetNotSet': 'Not set',
       'convSetOffline': 'Offline',
       'convSetOnline': 'Online',
+      'convSetLastSeen': 'Last seen {time}',
+      'timeJustNow': 'just now',
+      'timeMinAgo': '{n} min ago',
+      'timeHourAgo': '{n} h ago',
+      'timeDayAgo': '{n} d ago',
       'convSetPersonalProfile': 'Personal profile',
       'convSetPinChat': 'Pin chat',
       'convSetPinnedMessages': 'Pinned messages',
@@ -1018,7 +1286,7 @@ class AppLocalizations {
       'convSetRemoveMemberComing': 'Remove member (coming in V2.0)',
       'convSetSave': 'Save',
       'convSetSendMessage': 'Send message',
-      'convSetStartConvFailed': 'Failed to start conversation: {error}',
+      'convSetStartConvFailed': 'Start chat failed: {error}',
       'convSetUnknown': 'Unknown',
       'convSetVideoCall': 'Video call',
       'convSetViewAllMembers': 'View all {count} members >',
@@ -1031,12 +1299,10 @@ class AppLocalizations {
       'discoverMiniApp': 'Mini App',
       'discoverMoments': 'Moments',
       'discoverMomentsSubtitle': 'See what friends are up to',
-      'discoverNoApps':
-          'No apps yet. Publish them in the admin console under "Mini App Management"',
+      'discoverNoApps': 'No apps. Publish in admin console.',
       'discoverScan': 'Scan',
       'discoverScanSubtitle': 'Scan to log in or add friends',
-      'editProfileAvatarUploadTip':
-          'Avatar upload (MinIO integration coming in V2.0)',
+      'editProfileAvatarUploadTip': 'Avatar upload (MinIO)',
       'editProfileAvatarUploaded': 'Avatar uploaded. Tap Save to apply',
       'editProfileAvatarUploadFailed': 'Avatar upload failed',
       'editProfileBio': 'Bio',
@@ -1047,8 +1313,7 @@ class AppLocalizations {
       'editProfileSaving': 'Saving…',
       'editProfileTitle': 'Edit Profile',
       'favoritesConversation': 'Conversation #{id}',
-      'favoritesEmpty':
-          'No favorites yet. Long-press a message in a chat to add one',
+      'favoritesEmpty': 'No favorites yet. Long-press a message to add',
       'favoritesPreviewFile': '[File]',
       'favoritesPreviewImage': '[Image]',
       'favoritesPreviewVideo': '[Video]',
@@ -1058,20 +1323,19 @@ class AppLocalizations {
       'forgotPassword': 'Forgot password?',
       'friendDetailBlock': 'Block',
       'friendDetailBlockMsg':
-          'You won\\\'t receive messages from this person, and the friendship will be removed.',
+          'Blocks their messages and removes the friendship.',
       'friendDetailBlockTitle': 'Add to Blocklist',
       'friendDetailBlocked': 'Blocked (friendship removed)',
       'friendDetailDelete': 'Delete',
       'friendDetailDeleteFriend': 'Delete Friend',
-      'friendDetailDeleteMsg':
-          'You will be removed from each other\\\'s friend list.',
+      'friendDetailDeleteMsg': 'Removes both friend lists.',
       'friendDetailFriendDeleted': 'Friend deleted',
       'friendDetailMoments': 'Moments',
       'friendDetailRemarkHint': 'Remark name',
       'friendDetailRemarkSaved': 'Remark saved',
       'friendDetailSendMessage': 'Send Message',
       'friendDetailSetRemark': 'Set Remark',
-      'friendDetailStartConvFailed': 'Failed to start conversation: {error}',
+      'friendDetailStartConvFailed': 'Start chat failed: {error}',
       'friendDetailTitle': 'Profile',
       'friendDetailUser': 'User',
       'goLogin': 'Log in',
@@ -1079,74 +1343,77 @@ class AppLocalizations {
       'haveAccount': 'Have an account?',
       'home': 'Chats',
       'incomingCallAccept': 'Answer',
-      'incomingCallInviteVideo': 'is inviting you to a video call',
-      'incomingCallInviteVoice': 'is inviting you to a voice call',
+      'incomingCallInviteVideo': 'invites you to a video call',
+      'incomingCallInviteVoice': 'invites you to a voice call',
       'incomingCallReject': 'Decline',
       'incomingCallUnknown': 'Unknown contact',
       'incomingCallVideo': 'Video call',
       'incomingCallVoice': 'Voice call',
       'inviteCode': 'Invite code',
+      'vipIdBadge': 'VIP ID: {id}',
       'kaAutoStartAction': 'Open auto-start settings',
       'kaAutoStartDevice': 'Device: {device}',
-      'kaAutoStartTitle': 'Auto-start / Background permissions',
+      'kaAutoStartTitle': 'Auto-start / Background',
       'kaAutoStartTip':
-          'Complete the steps below to greatly reduce the chance of being killed in background:',
-      'kaBatteryAction': 'Enable battery optimization whitelist',
+          'Finish these steps to avoid being killed in background:',
+      'kaBatteryAction': 'Enable battery whitelist',
       'kaBatteryListTip':
           'Opened the battery optimization list. Switch to "All apps", find this app and set it to "Don\'t optimize"',
-      'kaBatteryOk':
-          'Battery optimization whitelist enabled, keep-alive is good',
+      'kaBatteryOk': 'Battery whitelist on, keep-alive good',
       'kaBatteryTip':
-          'Battery optimization is not disabled for this app; it may be killed in background, causing delayed messages',
+          'Not in battery whitelist; may be killed in background and delay messages',
       'kaFallback':
           'Vendor settings page not found, app info page opened instead. Please find "Auto-start / Battery" manually',
       'kaGeneralTip':
           'If the process is killed by the system, offline messages are still delivered via system push — no message loss. Enabling auto-start and battery whitelist keeps you online for real-time messages.',
       'kaStepsHonor':
-          'Startup manager: switch to "Manage manually"|Enable all three: auto-start, associated start, background activity|Battery optimization: choose "Don\'t allow" for this app',
+          'Startup manager: "Manage manually"|Enable auto-start, linked start, background|Battery optimization: "Don\'t allow"',
       'kaStepsHuawei':
-          'Startup manager: switch to "Manage manually"|Enable all three: auto-start, associated start, background activity|Battery optimization: choose "Don\'t allow" for this app',
+          'Startup manager: "Manage manually"|Enable auto-start, linked start, background|Battery optimization: "Don\'t allow"',
       'kaStepsOppo':
-          'Auto-start: allow this app to auto-start|Battery: allow background activity (disable smart power saving limits for this app)|Pull down the app card in Recents to lock it in background',
+          'Auto-start: allow|Battery: allow background (disable smart saving limits)|Lock the app card in Recents',
       'kaStepsSamsung':
           'Battery: disable "Put unused apps to sleep"|Disable battery optimization for this app',
       'kaStepsVivo':
           'Auto-start: allow this app|Background power: allow high background power usage|Disable "Sleep mode" restriction for this app',
       'kaStepsOther':
-          'Open system settings and look for "Auto-start management" or "Battery optimization"|Allow auto-start and background activity for this app',
+          'In Settings find "Auto-start" or "Battery optimization"|Allow auto-start and background for this app',
       'kaStepsXiaomi':
-          'Auto-start: allow this app to auto-start|Power saving strategy: set to "No restrictions"|Notification: allow notifications',
+          'Auto-start: allow|Power saving: "No restrictions"|Notifications: allow',
       'kaTitle': 'Keep-alive Settings',
       'langEn': 'English',
       'langZh': '简体中文',
+      'langJa': '日本語',
+      'langZhT': '繁體中文',
+      'apiChecking': 'Checking',
+      'apiDown': 'No connection',
       'loggingIn': 'Logging in…',
       'login': 'Log in',
       'me': 'Me',
       'meAbout': 'About',
       'meAboutDesc':
-          'ChatPulse is an instant messaging tool for enterprise teams, offering one-on-one and group chats, voice/video calls, Moments, wallet with red packets and transfers, helping teams communicate and collaborate efficiently.',
+          'ChatPulse is an IM tool for enterprise teams: chats, group chats, voice/video calls, Moments, wallet, red packets and transfers.',
       'meAboutUs': 'About us',
       'meAccount': 'Account: {account}',
       'meAccountSecurity': 'Account security',
-      'meAlreadyLatestVersion':
-          'You are already on the latest version {version}',
+      'meAlreadyLatestVersion': 'Already on latest {version}',
       'meAndroidDownload': 'Android download',
       'meCheckUpdate': 'Check for updates',
       'meChooseLanguage': 'Choose language',
+      'langFollowSystem': 'Follow System',
       'meCopied': 'Copied',
       'meCurrentVersion': 'Current version: {version}',
       'meDownloadNow': 'Download now',
       'meDownloadViaLink': 'Please download via link: {url}',
       'meFavorites': 'My favorites',
-      'meGetVersionFailed':
-          'Failed to get version info, please check your network',
+      'meGetVersionFailed': 'Failed to get version info',
       'meInviteCode': 'My invite code',
-      'meInviteCodeToast': 'Invite code: please contact the administrator',
+      'meInviteCodeToast': 'Contact admin for your invite code',
       'meIosDownload': 'iOS download',
       'meLater': 'Later',
       'meLatestVersion': 'Latest version: {version}',
       'meLogoutConfirm': 'Log out',
-      'meLogoutMsg': 'Are you sure you want to log out of the current account?',
+      'meLogoutMsg': 'Log out of this account?',
       'meLogoutTitle': 'Log out',
       'meMyServices': 'My services',
       'meNewVersion': 'New version available',
@@ -1169,12 +1436,11 @@ class AppLocalizations {
       'momentsEmptyContent': 'Say something before posting',
       'momentsFriendEmpty': 'No posts yet',
       'momentsMe': 'Me',
-      'momentsMyEmpty':
-          'No posts yet. Tap the camera at the top right to share your first moment',
+      'momentsMyEmpty': 'Share your first moment. Tap the camera icon',
       'momentsOfficial': 'Official',
       'momentsOnlyMe': 'Only visible to you',
       'momentsPublish': 'Post',
-      'momentsPublishFailed': 'Failed to post, please try again',
+      'momentsPublishFailed': 'Post failed, retry',
       'momentsPublishTitle': 'New Post',
       'momentsPublished': 'Posted',
       'momentsThoughtHint': 'What\\\'s on your mind…',
@@ -1311,25 +1577,23 @@ class AppLocalizations {
       'profilePhone': 'Phone',
       'profileTitle': 'Profile',
       'pwdMismatch': 'Passwords do not match',
-      'qrLoginOpenAppHint':
-          'Open the app on your phone, tap + in the top right, then choose Scan',
+      'qrLoginOpenAppHint': 'On your phone: tap + at top right, then Scan',
       'qrLoginRefreshIn': 'Auto-refreshes in {seconds}s',
       'qrLoginRefreshQr': 'Refresh QR Code',
-      'qrLoginScanHint': 'Scan the code with your phone to log in',
-      'qrLoginScannedConfirm': 'Scanned. Please confirm on your phone',
+      'qrLoginScanHint': 'Scan with your phone to log in',
+      'qrLoginScannedConfirm': 'Scanned. Confirm on your phone',
       'qrLoginSuccess': 'Logged in, redirecting…',
       'qrLoginSwitchAccount': 'Switch Account',
       'qrLoginTitle': 'Scan to Log In',
       'rcAccountLabel': 'Payee Account',
-      'rcArriveHint':
-          'Credited within 1 business day after the proof is uploaded',
+      'rcArriveHint': 'Arrives within 1 business day',
       'rcAmount': 'Recharge Amount',
       'rcAmountHint': 'Enter recharge amount',
-      'rcAmountInvalid': 'Please enter a valid recharge amount',
+      'rcAmountInvalid': 'Enter a valid amount',
       'rcLoadFailed': 'Failed to load, please retry',
-      'rcNeedProof': 'Please upload the payment proof screenshot',
+      'rcNeedProof': 'Upload payment proof',
       'rcNoOrders': 'No recharge records',
-      'rcNotEnabled': 'Recharge is currently disabled. Contact the admin.',
+      'rcNotEnabled': 'Recharge disabled. Contact admin.',
       'rcOrders': 'Recharge Records',
       'rcPayMethod': 'Payment Method',
       'rcPayMethodAlipay': 'Alipay',
@@ -1356,14 +1620,13 @@ class AppLocalizations {
       'rcCopy': 'Copy',
       'rcPayeeName': 'Payee Name',
       'rcReceiveAccount': 'Payee Account',
-      'rcTxNoHint': 'Payment transaction number for reconciliation (optional)',
+      'rcTxNoHint': 'Txn no. for reconciliation (optional)',
       'redPacketAvailableBalance': 'Balance: ¥{amount}',
-      'redPacketBalanceInsufficient':
-          'Insufficient balance, current balance ¥{amount}',
+      'redPacketBalanceInsufficient': 'Insufficient balance (¥{amount})',
       'redPacketBalanceLoading': 'Loading balance…',
       'redPacketCountHint': 'Enter count',
       'redPacketCountLabel': 'Count',
-      'redPacketCountRequired': 'Please enter the red packet count',
+      'redPacketCountRequired': 'Enter red packet count',
       'redPacketDetailAllClaimed':
           '{count} red packets totaling ¥{amount} fully claimed',
       'redPacketDetailBestLuck': 'Best luck',
@@ -1397,7 +1660,7 @@ class AppLocalizations {
       'redPacketNoteHint': 'Best wishes!',
       'redPacketNoteLabel': 'Note',
       'redPacketReadingBalance': 'Reading balance, please wait',
-      'redPacketSendButton': 'Put Money in the Red Packet',
+      'redPacketSendButton': 'Put Money In',
       'redPacketSingleAmount': 'Amount Each',
       'redPacketTitle': 'Send Red Packet',
       'redPacketTitleGroup': 'Send Red Packet',
@@ -1407,22 +1670,20 @@ class AppLocalizations {
       'register': 'Sign up',
       'registering': 'Signing up…',
       'scanCamInitFailed': 'Camera failed to initialize',
-      'scanCamInitHint':
-          'The camera may be in use by another app, or the system camera service isn\\\'t ready. Please try again.',
+      'scanCamInitHint': 'Camera busy or not ready. Please retry.',
       'scanCamNotReady': 'Camera is not ready, please retry',
       'scanCamOpenSettings': 'Open Settings',
       'scanCamPermissionDenied': 'Camera permission not granted',
       'scanCamPermissionHint':
-          'Camera permission was disabled in system settings, so scan-to-log-in is unavailable. Please enable it in Settings and come back to retry.',
+          'Camera permission is off. Enable it in Settings and retry.',
       'scanCamRetry': 'Retry Camera',
       'scanLogin': 'Scan to log in',
       'scanQrLoginConfirmBtn': 'Confirm Login',
       'scanQrLoginConfirmed': 'Login confirmed. Please check your computer',
       'scanQrLoginConfirming': 'Confirming…',
       'scanQrLoginError': 'Confirmation failed: {error}',
-      'scanQrLoginFailed': 'Confirmation failed, please try again',
-      'scanQrLoginManualHint':
-          'Scan the QR code on your computer with the mobile app, or paste the ticket manually',
+      'scanQrLoginFailed': 'Confirm failed, retry',
+      'scanQrLoginManualHint': 'Scan the PC QR code, or paste the ticket',
       'scanQrLoginNoCamera': 'Camera is not supported in the browser',
       'scanQrLoginPasteTicket': 'Paste the ticket from the QR code',
       'scanQrLoginTitle': 'Scan',
@@ -1432,15 +1693,18 @@ class AppLocalizations {
       'qrConfirmDevice': 'Device',
       'qrConfirmDeviceName': 'PC client',
       'qrConfirmDone': 'Confirmed. Please check your computer',
-      'qrConfirmHint': 'Scanned. Confirm to log in this account on the computer?',
+      'qrConfirmHint':
+          'Scanned. Confirm to log in this account on the computer?',
       'qrConfirmOk': 'Confirm login',
       'qrConfirmTitle': 'Confirm login',
       'qrConfirmFailed': 'Confirmation failed',
       'searchAction': 'Search',
+      'searchClearHistory': 'Clear',
       'searchConvLabel': 'Conversation #{id}',
       'searchEmptyTip': 'Type keywords to search chat history',
       'searchFile': '[File]',
       'searchHint': 'Search chat history',
+      'searchHistory': 'Recent searches',
       'searchImage': '[Image]',
       'searchNoResults': 'No matching messages',
       'searchResultCount': '{count} matching messages',
@@ -1449,10 +1713,10 @@ class AppLocalizations {
       'settingsDarkMode': 'Dark Mode',
       'settingsDarkModeDesc': 'Turn off for light mode',
       'settingsEnableNotifications': 'Enable Notifications',
-      'settingsNotificationsDesc': 'Popups and sounds for new messages',
+      'settingsNotificationsDesc': 'Popups and sounds',
       'settingsTitle': 'Settings',
       'signInContinue': 'Sign in to continue',
-      'svcAcceptFailed': 'Failed to accept transfer',
+      'svcAcceptFailed': 'Accept failed',
       'svcBadParams': 'Invalid parameters',
       'svcCall': '[Call]',
       'svcCallCanceledVideo': '[Video call canceled]',
@@ -1469,7 +1733,7 @@ class AppLocalizations {
       'svcFile': '[File]',
       'svcImage': '[Photo]',
       'svcMsgRecalled': '[Message recalled]',
-      'svcNetRetry': 'Network error, please try again',
+      'svcNetRetry': 'Network error, retry',
       'svcQueryFailed': 'Query failed',
       'svcRedPacket': '[Red packet]',
       'svcRedPacketNote': '[Red packet] {note}',
@@ -1482,13 +1746,12 @@ class AppLocalizations {
       'svcYesterday': 'Yesterday {time}',
       'transferAmountLabel': 'Transfer Amount',
       'transferAvailableBalance': 'Balance: ¥{amount}',
-      'transferBalanceInsufficient':
-          'Insufficient balance, current balance ¥{amount}',
+      'transferBalanceInsufficient': 'Insufficient balance (¥{amount})',
       'transferBalanceLoading': 'Loading balance…',
       'transferConfirmNotice':
-          'Tapping Transfer confirms payment; refunded automatically if not accepted within 24 hours',
+          'Tap Transfer to pay; auto refund if unaccepted in 24h',
       'transferFreezeNotice':
-          'Amount will be frozen; refunded automatically if not accepted within 24 hours',
+          'Amount freezes when sent; auto refund if unaccepted in 24h',
       'transferGroupChat': 'Group chat transfer',
       'transferInsufficient': 'Insufficient balance',
       'transferInvalidAmount': 'Please enter a valid amount',
@@ -1513,12 +1776,11 @@ class AppLocalizations {
       'videoCallInProgress': 'In call',
       'videoCallMicrophone': 'Mic',
       'videoCallMuted': 'Muted',
-      'videoCallNeedPermissions': 'Microphone/camera permission not granted',
+      'videoCallNeedPermissions': 'Mic/camera permission required',
       'videoCallPeerCancelled': 'The other party canceled',
-      'videoCallPeerRejected': 'Declined by the other party',
+      'videoCallPeerRejected': 'Declined',
       'videoCallStartFailed': 'Failed to start call: {error}',
-      'videoCallTrtcNotConfigured':
-          'Audio/video service is not configured, contact your administrator',
+      'videoCallTrtcNotConfigured': 'AV service not configured, contact admin',
       'videoCallUserSigFailed': 'Failed to get call credentials',
       'videoCallWaitingAnswer': 'Waiting for answer…',
       'voiceCallEarpiece': 'Earpiece',
@@ -1528,30 +1790,29 @@ class AppLocalizations {
       'voiceCallInProgress': 'In call',
       'voiceCallMicrophone': 'Mic',
       'voiceCallMuted': 'Muted',
-      'voiceCallNeedMicPermission': 'Microphone permission not granted',
+      'voiceCallNeedMicPermission': 'Mic permission required',
       'voiceCallPeerCancelled': 'The other party canceled',
-      'voiceCallPeerRejected': 'Declined by the other party',
+      'voiceCallPeerRejected': 'Declined',
       'voiceCallSpeaker': 'Speaker',
       'voiceCallStartFailed': 'Failed to start call: {error}',
       'voiceCallTitle': 'Voice call',
-      'voiceCallTrtcNotConfigured':
-          'Audio/video service is not configured, contact your administrator',
+      'voiceCallTrtcNotConfigured': 'AV service not configured, contact admin',
       'voiceCallUserSigFailed': 'Failed to get call credentials',
       'voiceCallWaitingAnswer': 'Waiting for answer…',
-      'walletAutoRefund': 'Refunded automatically if unclaimed within 24 hours',
+      'walletAutoRefund': 'Auto refund if unclaimed in 24h',
       'walletAvailableBalance': 'Available Balance',
       'walletBill': 'Bills',
       'walletFrozen': 'Frozen ',
       'walletNoRecords': 'No transactions yet',
       'walletRecharge': 'Top Up',
       'walletRechargeUnavailable': 'Top-up is not available yet',
-      'walletRecordAuto': 'Transaction details sync automatically',
+      'walletRecordAuto': 'Details sync automatically',
       'walletRecordHint':
-          'Sent red packets and transfers are frozen; refunded automatically if unclaimed within 24 hours',
+          'Sent red packets and transfers freeze; auto refund if unclaimed in 24h',
       'walletTitle': 'My Wallet',
       'walletTransactions': 'Transactions',
       'walletWithdraw': 'Withdraw',
-      'walletWithdrawUnavailable': 'Withdrawal is not available yet',
+      'walletWithdrawUnavailable': 'Withdrawal unavailable',
       'wdAccountType': 'Account Type',
       'wdActual': 'Actual Amount',
       'wdAll': 'All',
@@ -1560,7 +1821,7 @@ class AppLocalizations {
       'wdAlipayQrcode': 'Alipay QR Code (recommended)',
       'wdAmount': 'Withdraw Amount',
       'wdAmountHint': 'Enter withdraw amount',
-      'wdAmountInvalid': 'Please enter a valid withdraw amount',
+      'wdAmountInvalid': 'Enter a valid amount',
       'wdArriveHint': 'Expected arrival: within 24 hours',
       'wdBalance': 'Balance',
       'wdBankAccountName': 'Bank Account Name',
@@ -1574,26 +1835,25 @@ class AppLocalizations {
       'wdEditAccount': 'Edit Account',
       'wdFee': 'Fee',
       'wdHint':
-          'Only one withdrawal method can be bound per account. Saving again will overwrite the existing binding. Make sure the QR code image is clear and the info is real, otherwise the payment may fail.',
+          'One withdrawal method per account. Saving again overwrites it. Make sure the QR image is clear and the info is real.',
       'wdMethod': 'Withdrawal Method',
       'wdMethodAlipay': 'Alipay',
       'wdMethodBank': 'Bank Card',
       'wdMethodTitle': 'Withdrawal Method',
       'wdMethodWechat': 'WeChat',
-      'wdNeedAlipay': 'Please fill in Alipay account and name',
+      'wdNeedAlipay': 'Fill in Alipay account and name',
       'wdNeedBank': 'Please fill in card number, bank name and account name',
-      'wdNeedBind': 'Please bind the selected withdrawal method first',
+      'wdNeedBind': 'Bind the withdrawal method first',
       'wdNeedWechat': 'Please fill in the WeChat name',
       'wdNoOrders': 'No withdrawal records',
-      'wdNotBound': 'Not bound. Please bind a withdrawal method first.',
-      'wdNotEnabled': 'Withdrawal is currently disabled. Contact the admin.',
+      'wdNotBound': 'Not bound. Bind a method first.',
+      'wdNotEnabled': 'Withdrawal disabled. Contact admin.',
       'wdOrders': 'Withdrawal Records',
       'wdPickQrcode': 'Upload QR code',
       'wdRange': 'Per transaction: {min} ~ {max} CNY',
       'wdRealName': 'Real Name',
       'wdRealNameHint': 'Enter your real name',
-      'wdRealNameTip':
-          'Must match the real-name verification info of the bound account',
+      'wdRealNameTip': 'Must match the bound real-name info',
       'wdRejectReason': 'Rejected: {reason}',
       'wdRule':
           '{min}~{max} CNY per transaction\nFee {rate}% (min {feeMin} CNY)',
@@ -1615,7 +1875,7 @@ class AppLocalizations {
           'Android allows cleartext HTTP, but it was still blocked. Please verify the URL protocol.',
       'webViewHintDefault': 'Page failed to load. Try opening it in a browser.',
       'webViewHintOrb':
-          'This page type was blocked by the browser\\\'s security policy (usually because the server didn\\\'t return Content-Type as HTML). Try opening it in a browser.',
+          'Blocked by browser security policy (server did not return HTML Content-Type). Try opening in a browser.',
       'webViewLoadFailed': 'Load failed',
       'webViewLoadFailedWithCode': 'Load failed (error code {code})',
       'webViewRetry': 'Retry',
@@ -1624,10 +1884,11 @@ class AppLocalizations {
       'loginAccountHint': 'Account / Phone',
       'loginPwdHint': 'Password',
       'loginSubtitle': 'Sign in to continue',
-      'loginAccountRequired': 'Please enter your account',
-      'loginAccountTooShort': 'Account must be at least 3 characters',
-      'loginPwdRequired': 'Please enter your password',
-      'loginPwdTooShort': 'Password must be at least 6 characters',
+      'loginAccountRequired': 'Enter your account',
+      'loginAccountTooShort': 'At least 3 characters',
+      'loginPwdRequired': 'Enter your password',
+      'cancel': 'Cancel',
+      'loginPwdTooShort': 'At least 6 characters',
       'loginSuccess': 'Logged in',
       'unknownError': 'Unknown error',
       'registerNow': 'Sign Up',
@@ -1635,14 +1896,16 @@ class AppLocalizations {
       'termsOfService': 'Terms of Service',
       'termsAnd': 'and',
       'privacyPolicy': 'Privacy Policy',
-      'termsAgreeRequired':
-          'Please agree to the Terms of Service and Privacy Policy first',
+      'termsAgreeRequired': 'Agree to Terms & Privacy Policy first',
     },
+    // 繁體中文 / 日本語：完整词典见 app_locale_zht.dart / app_locale_ja.dart
+    'zhT': zhTDict,
+    'ja': jaDict,
   };
 
   /// 取文案。支持参数占位：t('yesterdayAt', {'time': '14:30'}) → "昨天 14:30"
   String t(String key, [Map<String, String>? params]) {
-    final lang = _dict[locale.languageCode] ?? _dict['zh']!;
+    final lang = _dict[_langKey] ?? _dict['zh']!;
     var s = lang[key] ?? _dict['zh']![key] ?? key;
     if (params != null) {
       params.forEach((k, v) => s = s.replaceAll('{$k}', v));
@@ -1669,20 +1932,64 @@ class LocaleProvider extends StatefulWidget {
 }
 
 class _LocaleProviderState extends State<LocaleProvider> {
-  Locale _locale = const Locale('zh', 'CN');
+  /// 初始默认跟随设备语言；initState 异步读出手动选择后覆盖
+  Locale _locale = AppLocalizations.matchSystemLocale();
+  bool _followingSystem = true;
 
   Locale get locale => _locale;
 
+  /// 是否正处于"跟随系统"模式（语言弹窗勾选态用）
+  bool get isFollowingSystem => _followingSystem;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSaved();
+  }
+
+  /// 读取上次手动选择的语言（'system' = 跟随系统 / localeKey = 具体语言）
+  Future<void> _loadSaved() async {
+    try {
+      final v = await ApiClient.instance.readPref('app_locale');
+      if (!mounted || v == null || v.isEmpty || v == 'system') return;
+      final saved = AppLocalizations.localeFromKey(v);
+      if (saved != null) {
+        setState(() {
+          _locale = saved;
+          _followingSystem = false;
+        });
+      }
+    } catch (_) {}
+  }
+
+  /// 四语循环切换：简体中文 → English → 日本語 → 繁體中文（与 AppLocalizations.supportedLangs 一致）
   void toggle() {
     setState(() {
-      _locale = _locale.languageCode == 'zh'
-          ? const Locale('en', 'US')
-          : const Locale('zh', 'CN');
+      _locale = AppLocalizations.nextLocale(_locale);
+      _followingSystem = false;
     });
+    _save(AppLocalizations.localeKey(_locale));
   }
 
   void setLocale(Locale locale) {
-    setState(() => _locale = locale);
+    setState(() {
+      _locale = locale;
+      _followingSystem = false;
+    });
+    _save(AppLocalizations.localeKey(locale));
+  }
+
+  /// 跟随系统：清除手动选择，立即应用当前设备语言
+  void followSystem() {
+    setState(() {
+      _followingSystem = true;
+      _locale = AppLocalizations.matchSystemLocale();
+    });
+    _save('system');
+  }
+
+  void _save(String v) {
+    ApiClient.instance.writePref('app_locale', v).catchError((_) {});
   }
 
   @override

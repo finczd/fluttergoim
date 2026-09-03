@@ -26,6 +26,7 @@ const router = createRouter({
         { path: 'groups', component: () => import('@/views/admin/GroupManage.vue') },
         { path: 'messages', component: () => import('@/views/admin/MessageQuery.vue') },
         { path: 'vip-ids', component: () => import('@/views/admin/VipIdsView.vue') },
+        { path: 'invite-codes', component: () => import('@/views/admin/InviteCodeManage.vue') },
         { path: 'stats', component: () => import('@/views/admin/StatsView.vue') },
         { path: 'health', component: () => import('@/views/admin/HealthCheckView.vue') },
         { path: 'configs', component: () => import('@/views/admin/ConfigView.vue') },

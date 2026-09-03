@@ -8,12 +8,23 @@ class PolicyPage extends StatelessWidget {
   final String title;
   final String content;
 
-  const PolicyPage({super.key, required this.title, required this.content});
+  /// 软件名（后台配置品牌名）：渲染时替换文案中的默认名 "ChatPulse"；
+  /// 空则回落默认名
+  final String appName;
+
+  const PolicyPage({
+    super.key,
+    required this.title,
+    required this.content,
+    this.appName = '',
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final body = _localizedPolicyContent(context, content);
+    final name = appName.isNotEmpty ? appName : 'ChatPulse';
+    final body =
+        _localizedPolicyContent(context, content).replaceAll('ChatPulse', name);
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(title: Text(title)),

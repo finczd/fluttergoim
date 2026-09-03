@@ -6,6 +6,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
+import '../widgets/lang_picker.dart';
 import 'home_shell.dart';
 import 'login_page.dart';
 
@@ -142,7 +143,6 @@ class _QrLoginPageState extends State<QrLoginPage> {
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
-    final isZh = Localizations.localeOf(context).languageCode == 'zh';
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
@@ -154,9 +154,13 @@ class _QrLoginPageState extends State<QrLoginPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => LocaleProvider.of(context)?.toggle(),
-            child: Text(isZh ? t('langZh') : t('langEn'),
-                style: const TextStyle(color: AppTheme.primary)),
+            onPressed: () => showLangPicker(context),
+            // 显示当前语言；点开弹窗可四语切换
+            child: Text(
+              AppLocalizations.langNativeName(
+                  AppLocalizations.of(context).locale),
+              style: const TextStyle(color: AppTheme.primary),
+            ),
           ),
         ],
       ),

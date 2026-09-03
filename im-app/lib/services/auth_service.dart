@@ -72,7 +72,9 @@ class AuthService {
 
   Future<AuthResult> login(String account, String password,
       {String deviceId = ''}) async {
-    final r = await _dio.post('/api/v1/auth/login', data: {
+    // 登录 POST 幂等（重复提交无害）：走瞬时重试，服务端冷启动/首连慢时
+    // 第一次 receive timeout 自动再试，不再让用户手动登第二次
+    final r = await _api.postIdempotent('/api/v1/auth/login', data: {
       'account': account,
       'password': password,
       'deviceType': 1,
@@ -112,8 +114,8 @@ class AuthService {
   void _check(Response r) {
     final code = r.data['code'];
     if (code != 0) {
-      throw Exception(r.data['message'] ??
-          AppLocalizations.instance.t('svcRequestFailed'));
+      throw Exception(
+          r.data['message'] ?? AppLocalizations.instance.t('svcRequestFailed'));
     }
   }
 }

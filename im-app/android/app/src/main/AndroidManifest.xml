@@ -72,6 +72,11 @@
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="dataSync|remoteMessaging"
             android:exported="false" />
+        <!-- 保活通知栏单色小图标：插件通过该 meta-data 读取 drawable 资源 id，
+             不配置则回退 launcher 彩色图标 → 通知栏显示灰色空白方块 -->
+        <meta-data
+            android:name="io.github.imapp.keep_alive.notification_icon"
+            android:resource="@drawable/ic_keep_alive" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

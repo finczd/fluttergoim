@@ -135,9 +135,10 @@ class _IncomingCallPageState extends State<IncomingCallPage>
                       fontSize: 26,
                       fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
-              Text(isVideo
-                  ? t('incomingCallInviteVideo')
-                  : t('incomingCallInviteVoice'),
+              Text(
+                  isVideo
+                      ? t('incomingCallInviteVideo')
+                      : t('incomingCallInviteVoice'),
                   style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.65),
                       fontSize: 14)),

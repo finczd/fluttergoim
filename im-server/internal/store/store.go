@@ -32,7 +32,7 @@ func InitMySQL(cfg *config.Config) error {
 	sqlDB.SetMaxOpenConns(50)
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetConnMaxLifetime(time.Hour)
-	// 幂等建表/加列：钱包流水、朋友圈；user 表补 balance 列
+	// 幂等建表/加列：钱包流水、朋友圈、群聊；user 表补 balance 列
 	if err := DB.AutoMigrate(
 		&model.WalletTransaction{},
 		&model.MomentsPost{},
@@ -40,6 +40,9 @@ func InitMySQL(cfg *config.Config) error {
 		&model.TransferClaim{},
 		&model.MoneyPacket{},
 		&model.User{},
+		&model.InviteFriendCode{},
+		&model.Conversation{},
+		&model.ConversationMember{},
 	); err != nil {
 		return err
 	}

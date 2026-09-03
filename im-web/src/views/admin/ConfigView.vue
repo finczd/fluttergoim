@@ -75,6 +75,29 @@
         </a-card>
       </div>
 
+      <!-- 功能开关 -->
+      <div v-show="activeSection === 'feature'" class="section">
+        <h2 class="section-title">功能开关</h2>
+        <p class="section-desc">控制客户端功能入口的显示，App 端从 /auth/config 实时读取</p>
+
+        <a-card class="form-card">
+          <a-form layout="vertical">
+            <a-form-item label="开启零钱">
+              <a-switch v-model="feature.walletOn" @change="save('wallet_enabled', $event)" />
+              <template #extra>
+                关闭后：聊天窗口不显示红包/转账入口，用户中心不显示「我的钱包」
+              </template>
+            </a-form-item>
+            <a-form-item label="开启邀请码">
+              <a-switch v-model="feature.inviteOn" @change="save('invite_feature_enabled', $event)" />
+              <template #extra>
+                关闭后：用户中心不显示「我的邀请码」。注意与「注册认证」中的「邀请码注册」（注册是否强制填码）相互独立
+              </template>
+            </a-form-item>
+          </a-form>
+        </a-card>
+      </div>
+
       <!-- 客服设置 -->
       <div v-show="activeSection === 'kefu'" class="section">
         <h2 class="section-title">客服设置</h2>
@@ -572,7 +595,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, markRaw } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { IconImage, IconUserGroup, IconInfoCircle, IconNotification, IconStorage, IconMessage, IconCamera, IconSettings, IconSend, IconQrcode, IconWechatpay, IconExport, IconEye, IconDelete, IconCheckCircle } from '@arco-design/web-vue/es/icon'
+import { IconImage, IconUserGroup, IconInfoCircle, IconNotification, IconStorage, IconMessage, IconCamera, IconSettings, IconSend, IconQrcode, IconWechatpay, IconExport, IconEye, IconDelete, IconCheckCircle, IconExperiment } from '@arco-design/web-vue/es/icon'
 import { adminApi } from '@/api/admin'
 import ImageUpload from './ImageUpload.vue'
 
@@ -580,6 +603,7 @@ const activeSection = ref('brand')
 
 const sections = [
   { key: 'brand', title: '品牌', icon: markRaw(IconImage) },
+  { key: 'feature', title: '功能开关', icon: markRaw(IconExperiment) },
   { key: 'auth', title: '注册认证', icon: markRaw(IconUserGroup) },
   { key: 'kefu', title: '客服设置', icon: markRaw(IconUserGroup) },
   { key: 'version', title: 'App 版本', icon: markRaw(IconInfoCircle) },
@@ -593,6 +617,8 @@ const sections = [
 ]
 
 const cfg = ref({ registerOn: true, authMode: 'none' as string, inviteCodeOn: false, captchaOn: false, e2eOn: false })
+// 功能开关（默认开启：后台未配置时 sys_config 返回 null，视为开启）
+const feature = ref({ walletOn: true, inviteOn: true })
 // 客服设置：kefu_config 为整体 JSON 键（{autoAdd, mode, greeting}），读取后解包渲染，保存时整体写回
 const kefu = ref({ autoAdd: false, mode: 'round' as string, greeting: '' })
 const savingKefu = ref(false)
@@ -685,6 +711,12 @@ onMounted(async () => {
     inviteCodeOn: !!i.data.data,
     captchaOn: !!ca.data.data,
     e2eOn: !!e.data.data
+  }
+  // 功能开关（null = 未配置 = 默认开启）
+  const [w, iv] = await Promise.all(['wallet_enabled', 'invite_feature_enabled'].map((k) => adminApi.configGet(k)))
+  feature.value = {
+    walletOn: w.data.data === null ? true : !!w.data.data,
+    inviteOn: iv.data.data === null ? true : !!iv.data.data
   }
   const strKeys = ['app_name', 'brand_name', 'app_logo', 'brand_logo']
   const [an, bn, al, bl] = await Promise.all(strKeys.map((k) => adminApi.configGet(k)))

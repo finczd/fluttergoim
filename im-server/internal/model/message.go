@@ -48,7 +48,9 @@ type Message struct {
 	// 派送状态（需求4：单聊对方 last_read_msg_id ≥ msg_id → "read"，否则 "sent"；非持久化字段，查询时填充）
 	Delivery string `bson:"-" json:"deliveryState,omitempty"`
 	// E2E：开启时 content 为密文（服务端可解密）
-	Encrypted bool      `bson:"encrypted" json:"encrypted"`
+	Encrypted bool `bson:"encrypted" json:"encrypted"`
+	// 屏蔽：后台消息审计中被管理员屏蔽的消息（历史拉取/增量同步不再下发）
+	Blocked   bool      `bson:"blocked,omitempty" json:"blocked"`
 	CreatedAt time.Time `bson:"created_at" json:"createdAt"`
 }
 

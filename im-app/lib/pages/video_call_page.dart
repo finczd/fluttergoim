@@ -17,10 +17,7 @@ class VideoCallPage extends StatefulWidget {
   final String peerAvatar;
   final String? convId; // 会话 ID（房间号）
   const VideoCallPage(
-      {super.key,
-      required this.peerName,
-      this.peerAvatar = '',
-      this.convId});
+      {super.key, required this.peerName, this.peerAvatar = '', this.convId});
 
   @override
   State<VideoCallPage> createState() => _VideoCallPageState();
@@ -433,7 +430,8 @@ class _VideoCallPageState extends State<VideoCallPage> {
       children: [
         _engine!.remoteVideoView(onViewCreated: _onRemoteViewCreated),
         if (_remoteUserId == null)
-          IgnorePointer(child: _statusPlaceholder(_t('videoCallWaitingAnswer'))),
+          IgnorePointer(
+              child: _statusPlaceholder(_t('videoCallWaitingAnswer'))),
       ],
     );
   }
@@ -506,12 +504,14 @@ class _VideoCallPageState extends State<VideoCallPage> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _ctrlBtn(_muted ? Icons.mic_off : Icons.mic,
+        _ctrlBtn(
+            _muted ? Icons.mic_off : Icons.mic,
             _muted ? _t('videoCallMuted') : _t('videoCallMicrophone'),
             _toggleMute,
             active: _muted),
         _ctrlBtn(Icons.call_end, _t('videoCallHangUp'), _hangup, danger: true),
-        _ctrlBtn(_cameraOff ? Icons.videocam_off : Icons.videocam,
+        _ctrlBtn(
+            _cameraOff ? Icons.videocam_off : Icons.videocam,
             _cameraOff ? _t('videoCallCameraClosed') : _t('videoCallCamera'),
             _toggleCamera,
             active: _cameraOff),

@@ -103,9 +103,10 @@ class _AddFriendPageState extends State<AddFriendPage> {
                         Icon(Icons.person_search_outlined,
                             size: 64, color: context.cs.onSurfaceVariant),
                         const SizedBox(height: 12),
-                        Text(_kw.text.isEmpty
-                            ? t('addFriendInputKeyword')
-                            : t('addFriendNoUser'),
+                        Text(
+                            _kw.text.isEmpty
+                                ? t('addFriendInputKeyword')
+                                : t('addFriendNoUser'),
                             style: TextStyle(
                                 color: context.cs.onSurfaceVariant,
                                 fontSize: 14)),
@@ -122,25 +123,20 @@ class _AddFriendPageState extends State<AddFriendPage> {
                         color: context.cs.outlineVariant),
                     itemBuilder: (_, i) {
                       final u = _results[i];
-                      final name = (u['nickname'] ?? u['account'] ??
-                              t('addFriendUser'))
-                          .toString();
+                      final name =
+                          (u['nickname'] ?? u['account'] ?? t('addFriendUser'))
+                              .toString();
                       final avatar = (u['avatar'] ?? '').toString();
                       return ListTile(
                         onTap: () => _request(u),
                         // 需求8：搜索结果显示用户头像（无头像回退首字母）
                         leading: CircleAvatar(
                           backgroundColor: AppTheme.primary,
-                          backgroundImage: avatar.isNotEmpty
-                              ? NetworkImage(avatar)
-                              : null,
+                          backgroundImage:
+                              avatar.isNotEmpty ? NetworkImage(avatar) : null,
                           child: avatar.isEmpty
-                              ? Text(
-                                  name.isEmpty
-                                      ? '?'
-                                      : name.characters.first,
-                                  style: const TextStyle(
-                                      color: Colors.white))
+                              ? Text(name.isEmpty ? '?' : name.characters.first,
+                                  style: const TextStyle(color: Colors.white))
                               : null,
                         ),
                         title: Text(name,

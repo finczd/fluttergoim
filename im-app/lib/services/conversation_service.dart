@@ -1,9 +1,21 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
 import 'api_client.dart';
 import '../l10n/app_locale.dart';
+import 'local_store.dart';
+
+/// 服务端业务错误（HTTP 200 + code != 0）：带 code 供页面区分处理
+/// （如 4006 成员隐私 → 显示"群主已开启成员隐私"而不是报错）
+class ApiException implements Exception {
+  final int code;
+  final String message;
+  ApiException(this.code, this.message);
+  @override
+  String toString() => message;
+}
 
 class ConvItem {
   final Map<String, dynamic> conversation;
@@ -17,7 +29,9 @@ class ConvItem {
   final List<dynamic> peerOnlineDev; // 在线设备：["mobile","web",...]
   final String peerOnlineZh; // 单聊对方在线类型中文
   final String peerShortId; // 单聊对方靓号/ID
+  final bool peerVipShortId; // 对方是否靓号（预留池已绑定）→ 资料页显示「靓ID」徽标
   final String peerRemark; // 我对对方设置的备注（需求：备注优先显示）
+  final String peerId; // 单聊对方用户 ID（顶层字段，雪花 ID 字符串）
 
   ConvItem.fromJson(Map<String, dynamic> j)
       : conversation = j['conversation'] ?? {},
@@ -31,19 +45,26 @@ class ConvItem {
         peerOnlineDev = (j['peerOnlineDev'] as List<dynamic>?) ?? [],
         peerOnlineZh = j['peerOnlineZh']?.toString() ?? '',
         peerShortId = j['peerShortId']?.toString() ?? '',
-        peerRemark = j['peerRemark']?.toString() ?? '';
+        peerVipShortId = j['peerVipShortId'] == true,
+        peerRemark = j['peerRemark']?.toString() ?? '',
+        peerId = j['peerId']?.toString() ?? '';
 
   /// 会话 ID（雪花 ID 全程字符串，H5 上 int 会丢精度）
   String get id => conversation['id']?.toString() ?? '';
 
   /// 是否小助手会话（助手是虚拟 uid -1；消息列表/通讯录用它显示「官方」标识）
-  bool get isAssistant => (conversation['peerId']?.toString() ?? '') == '-1';
+  /// 优先读顶层 peerId（服务端 ConvItem 结构），旧数据回落 conversation.peerId
+  bool get isAssistant =>
+      (peerId == '-1') || (conversation['peerId']?.toString() ?? '') == '-1';
 
   /// 会话头像（群头像 / 单聊对方头像），可能为空
   String get avatarUrl {
     final v = conversation['avatar'] ?? conversation['peerAvatar'];
     return v?.toString() ?? '';
   }
+
+  /// 单聊对方最近上线时间（ISO8601 字符串；服务端单聊接口实时下发，可能为空）
+  String get lastLoginAt => conversation['lastLoginAt']?.toString() ?? '';
 
   String get lastMsgPreview {
     final t = AppLocalizations.instance.t;
@@ -153,9 +174,59 @@ class ConversationService {
   final Dio _dio = ApiClient.instance.dio;
   final _api = ApiClient.instance;
 
+  /// 最近一次会话列表接口的原始数据（供页面落本地缓存）
+  List<dynamic> lastConvRaw = [];
+
+  /// 进程内历史消息缓存：convId → 最近一页原始消息。
+  /// 打开会话先直出缓存再后台刷新，消掉转圈；WS 新消息实时追加。
+  static final Map<String, List<Map<String, dynamic>>> _historyCache = {};
+
+  static List<Map<String, dynamic>>? historyCached(String convId) =>
+      _historyCache[convId];
+
+  /// WS 收到/发送成功后把原始消息追加进缓存（按 msgId/clientMsgId 幂等去重）
+  static void historyCacheAppend(String convId, Map<String, dynamic> raw) {
+    final c = _historyCache[convId];
+    if (c == null) return;
+    final id = raw['msgId']?.toString() ?? '';
+    final cm = raw['clientMsgId']?.toString() ?? '';
+    for (final x in c) {
+      if ((id.isNotEmpty && x['msgId']?.toString() == id) ||
+          (cm.isNotEmpty && x['clientMsgId']?.toString() == cm)) {
+        return;
+      }
+    }
+    c.add(raw);
+    if (c.length > 80) c.removeRange(0, c.length - 80);
+    // 同步落盘（异步，不阻塞 UI）：杀进程后重开仍能看到这些消息
+    unawaited(LocalStore.appendMessage(convId, raw));
+  }
+
+  /// 冷启动兜底：内存没缓存时从本地持久化（Hive）回填。
+  /// 返回 true 表示有数据可直出（调用方再读 historyCached 即可）。
+  static Future<bool> hydrateFromDisk(String convId) async {
+    if (_historyCache.containsKey(convId)) return true;
+    final disk = await LocalStore.loadMessages(convId);
+    if (disk == null || disk.isEmpty) return false;
+    _historyCache[convId] = disk;
+    return true;
+  }
+
+  /// 订阅 Hive 缓存损坏事件：脏数据已被 LocalStore 清掉，这里同步把
+  /// **内存缓存也失效**，保证下次打开该会话走网络重拉并重新落盘
+  /// （否则损坏的脏数据会一直留在内存里，UI 反复显示错误内容）。
+  /// 'conv_list' 由 chat_list_page 自己处理（它本来每次进页都全量刷新）。
+  static void bindLocalStore() {
+    LocalStore.addCorruptListener((key) {
+      if (key == 'conv_list') return;
+      _historyCache.remove(key);
+    });
+  }
+
   Future<List<ConvItem>> list() async {
     final r = await _api.get('/api/v1/conversation/list');
     final data = r.data['data'] as List<dynamic>? ?? [];
+    lastConvRaw = data;
     return data
         .map((e) => ConvItem.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -225,19 +296,34 @@ class ConversationService {
     return (body['data'] as Map<String, dynamic>? ?? {});
   }
 
+  /// 历史消息（服务端返回**时间正序**：最旧在前）。
+  ///
+  /// [beforeMsgId]：分页游标，传当前最旧一条的 msgId 拉更早的（0/'0' = 拉最新一页）。
+  /// 类型用 String 而非 int——雪花 ID 在 Web（JS）上超过 2^53 会丢精度。
+  ///
+  /// limit 固定 80：与 LocalStore.maxMessagesPerConv 对齐。
+  /// 之前是 50，导致冷启动先用 Hive 的 80 条缓存渲染、网络回来只给 50 条，
+  /// 列表凭空少 30 条（上翻时会发现消息断层）。
   Future<List<Map<String, dynamic>>> history(String convId,
-      {int beforeMsgId = 0}) async {
+      {String beforeMsgId = '0'}) async {
     final r = await _dio.get('/api/v1/message/history',
         queryParameters: {
           'convId': convId,
-          'beforeMsgId': '$beforeMsgId',
-          'limit': 50
+          'beforeMsgId': beforeMsgId,
+          'limit': 80
         },
         options: Options(
             headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
-    return ((r.data as Map<String, dynamic>)['data'] as List<dynamic>? ?? [])
-        .map((e) => e as Map<String, dynamic>)
-        .toList();
+    final list =
+        ((r.data as Map<String, dynamic>)['data'] as List<dynamic>? ?? [])
+            .map((e) => e as Map<String, dynamic>)
+            .toList();
+    // 只缓存"最新一页"（无 beforeMsgId 的首拉），上翻加载的更早历史不覆盖
+    if (beforeMsgId == '0' && list.isNotEmpty) {
+      _historyCache[convId] = list;
+      unawaited(LocalStore.saveMessages(convId, list)); // 落盘：冷启动秒开
+    }
+    return list;
   }
 
   Future<void> markRead(String convId, String msgId) async {
@@ -313,14 +399,138 @@ class ConversationService {
     return (r.data as Map<String, dynamic>)['data'] as Map<String, dynamic>;
   }
 
-  /// 会话成员列表（群设置用）
+  /// 最近一次 members() 响应携带的群成员总数（隐私限量模式下列表被截断，总数照实下发）
+  int _lastMembersCount = 0;
+  int get lastMembersCount => _lastMembersCount;
+
+  /// 会话成员列表（群设置用）；code!=0 抛 ApiException（如 4006 成员隐私）
   Future<List<Map<String, dynamic>>> members(String convId) async {
     final r = await _dio.get('/api/v1/conversation/$convId/members',
         options: Options(
             headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
-    return ((r.data as Map<String, dynamic>)['data'] as List<dynamic>? ?? [])
-        .map((e) => e as Map<String, dynamic>)
+    final body = r.data as Map<String, dynamic>;
+    _lastMembersCount = (body['memberCount'] as num?)?.toInt() ?? 0;
+    return _dataList(body);
+  }
+
+  List<Map<String, dynamic>> _dataList(dynamic body) {
+    final map = body as Map<String, dynamic>;
+    final code = (map['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) throw ApiException(code, map['message']?.toString() ?? '');
+    return ((map['data'] as List<dynamic>?) ?? [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
         .toList();
+  }
+
+  Map<String, dynamic> _dataMap(dynamic body) {
+    final map = body as Map<String, dynamic>;
+    final code = (map['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) throw ApiException(code, map['message']?.toString() ?? '');
+    return ((map['data'] as Map?) ?? {})
+        .map((k, v) => MapEntry(k.toString(), v));
+  }
+
+  // ============ 群聊管理 ============
+
+  /// 读取群管理设置（muteAll/privacyEnabled/allowMemberInvite/qrJoinEnabled）
+  Future<Map<String, dynamic>> groupSettings(String convId) async {
+    final r = await _dio.get('/api/v1/conversation/$convId/settings',
+        options: Options(
+            headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
+    return _dataMap(r.data);
+  }
+
+  /// 更新群管理设置（仅群主；未传的开关服务端保持原值）
+  Future<bool> setGroupSettings(String convId,
+      {bool? muteAll,
+      bool? privacyEnabled,
+      bool? allowInvite,
+      bool? qrJoin}) async {
+    final r = await _dio.put('/api/v1/conversation/$convId/settings',
+        data: {
+          if (muteAll != null) 'muteAll': muteAll,
+          if (privacyEnabled != null) 'privacyEnabled': privacyEnabled,
+          if (allowInvite != null) 'allowMemberInvite': allowInvite,
+          if (qrJoin != null) 'qrJoinEnabled': qrJoin,
+        },
+        options: Options(
+            headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
+    return ((r.data as Map<String, dynamic>)['code'] as num?)?.toInt() == 0;
+  }
+
+  /// 设置/取消群管理员（仅群主）
+  Future<bool> setGroupAdmin(String convId, String userId, bool admin) async {
+    final r = await _dio.put('/api/v1/conversation/$convId/admin',
+        data: {'userId': userId, 'admin': admin},
+        options: Options(
+            headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
+    return ((r.data as Map<String, dynamic>)['code'] as num?)?.toInt() == 0;
+  }
+
+  /// 禁言/解除禁言成员（群主/管理员；minutes 为禁言时长分钟数）
+  Future<bool> muteMember(String convId, String userId, bool mute,
+      {int minutes = 10}) async {
+    final r = await _dio.put('/api/v1/conversation/$convId/mute-member',
+        data: {'userId': userId, 'mute': mute, 'minutes': minutes},
+        options: Options(
+            headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
+    return ((r.data as Map<String, dynamic>)['code'] as num?)?.toInt() == 0;
+  }
+
+  /// 扫群二维码进群（返回会话对象）。
+  /// join 幂等（重复调用服务端按"已是成员"跳过）→ 走瞬时重试，
+  /// 服务端偶发 >10s 响应慢时自动重试，不再报「进群失败 receive timeout」
+  Future<Map<String, dynamic>> joinGroup(String convId) async {
+    final r = await _api.postIdempotent('/api/v1/conversation/$convId/join',
+        headers: {'Authorization': 'Bearer ${await _api.readToken()}'});
+    return _dataMap(r.data);
+  }
+
+  /// 扫码进群前的群信息预览（二次确认页：conversation + memberCount）。
+  /// GET 走 ApiClient.get（自带瞬时重试）
+  Future<Map<String, dynamic>> groupPreview(String convId) async {
+    final r = await _api.get('/api/v1/conversation/$convId/preview');
+    return _dataMap(r.data);
+  }
+
+  /// 邀请成员进群（群主/管理员，或开启"允许成员邀请"的普通成员）
+  Future<bool> inviteMembers(String convId, List<String> userIds) async {
+    final r = await _dio.post('/api/v1/conversation/$convId/invite',
+        data: {'memberIds': userIds},
+        options: Options(
+            headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
+    final body = r.data as Map<String, dynamic>;
+    final code = (body['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) throw ApiException(code, body['message']?.toString() ?? '');
+    return code == 0;
+  }
+
+  /// 移除群成员（群主/管理员）
+  Future<bool> removeMember(String convId, String userId) async {
+    final r = await _dio.delete('/api/v1/conversation/$convId/members/$userId',
+        options: Options(
+            headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
+    final body = r.data as Map<String, dynamic>;
+    final code = (body['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) throw ApiException(code, body['message']?.toString() ?? '');
+    return code == 0;
+  }
+
+  /// 更新群信息（群名/群头像；name 双语同值，App 内单语言展示）
+  Future<bool> updateGroupInfo(String convId,
+      {String? name, String? avatar}) async {
+    final r = await _dio.put('/api/v1/conversation/$convId',
+        data: {
+          if (name != null) ...{'nameZh': name, 'nameEn': name},
+          if (avatar != null) 'avatar': avatar,
+        },
+        options: Options(
+            headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
+    final body = r.data as Map<String, dynamic>;
+    final code = (body['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) throw ApiException(code, body['message']?.toString() ?? '');
+    return code == 0;
   }
 
   // ============ 搜索 / 收藏 ============

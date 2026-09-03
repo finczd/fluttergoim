@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:image_picker/image_picker.dart';
 
 import '../l10n/app_locale.dart';
+import '../services/api_client.dart';
 import '../services/call_service.dart';
 import '../services/conversation_service.dart';
 import '../services/friend_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import 'chat_page.dart';
+import 'group_manage_page.dart';
+import 'group_members_page.dart';
+import 'group_qr_page.dart';
 import 'video_call_page.dart';
 import 'voice_call_page.dart';
 import 'moments_page.dart';
@@ -31,8 +36,23 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
   List<Map<String, dynamic>> _pinnedMsgs = [];
   int _pinIndex = 0;
   String? _myId;
+  // 单聊对方靓号信息（从成员接口自取，覆盖所有进入路径的显示一致性）
+  String _peerShortId = '';
+  bool _peerVip = false;
+  // 群聊管理相关
+  bool _uploadingAvatar = false;
+  bool _privacyOn = false; // 老服务端兼容：成员接口报 4006 时置位
+  Map<String, dynamic> _groupSettings = {}; // 群设置（普通成员可读，判断成员隐私）
+  String _avatarOverride = ''; // 群主刚上传的头像（本地立即生效，不等列表刷新）
+  String _nameOverride = ''; // 群主刚改的群名（本地立即生效）
 
   bool get isGroup => (widget.conv.conversation['type'] as num?)?.toInt() == 2;
+
+  String get _groupName =>
+      _nameOverride.isNotEmpty ? _nameOverride : widget.conv.conversationName;
+
+  String get _avatarUrl =>
+      _avatarOverride.isNotEmpty ? _avatarOverride : widget.conv.avatarUrl;
 
   String get _announcement =>
       widget.conv.conversation['announcementZh']?.toString() ?? '';
@@ -50,6 +70,20 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     });
   }
 
+  /// 群主或管理员（成员管理操作用）
+  bool get _isManager {
+    if (_myId == null) return false;
+    return _members.any((m) {
+      final role = (m['role'] as num?)?.toInt() ?? 3;
+      final uid = m['id']?.toString() ?? m['userId']?.toString() ?? '';
+      return uid == _myId && (role == 1 || role == 2);
+    });
+  }
+
+  /// 成员隐私开启且我是普通成员：最多显示 2 排成员预览，不可查看全部
+  bool get _privacyLimited =>
+      !_isManager && (_groupSettings['privacyEnabled'] == true || _privacyOn);
+
   @override
   void initState() {
     super.initState();
@@ -60,19 +94,65 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     if (isGroup) {
       _loadMembers();
       _loadPinned();
+      _loadGroupSettings();
     }
+  }
+
+  /// 群设置（普通成员也可读）：判断成员隐私是否开启
+  Future<void> _loadGroupSettings() async {
+    try {
+      final s = await _svc.groupSettings(widget.conv.id);
+      if (mounted) setState(() => _groupSettings = s);
+    } catch (_) {}
   }
 
   Future<void> _loadProfile() async {
     try {
       final p = await _friendSvc.profile();
-      if (mounted) setState(() => _myId = p['id']?.toString());
+      if (mounted) {
+        setState(() => _myId = p['id']?.toString());
+        // 单聊：从成员接口自取对方靓号信息（会话列表/通讯录/新会话等
+        // 各入口构造的 ConvItem 不一定带 peerShortId，这里兜底保证显示一致）
+        if (!isGroup) await _loadDirectPeer();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadDirectPeer() async {
+    try {
+      final list = await _svc.members(widget.conv.id);
+      for (final m in list) {
+        final uid = m['id']?.toString() ?? m['userId']?.toString() ?? '';
+        if (uid.isNotEmpty && uid != _myId) {
+          if (!mounted) return;
+          setState(() {
+            _peerShortId = m['shortId']?.toString() ?? '';
+            _peerVip = m['vipShortId'] == true;
+          });
+          return;
+        }
+      }
     } catch (_) {}
   }
 
   Future<void> _loadMembers() async {
-    final list = await _svc.members(widget.conv.id);
-    if (mounted) setState(() => _members = list);
+    try {
+      final list = await _svc.members(widget.conv.id);
+      if (mounted) {
+        setState(() {
+          _members = list;
+          _privacyOn = false;
+        });
+      }
+    } on ApiException catch (e) {
+      // 4006：群主开启成员隐私 → 普通成员显示隐私提示而不是报错
+      if (e.code == 4006 && mounted) {
+        setState(() {
+          _members = [];
+          _privacyOn = true;
+        });
+      }
+    } catch (_) {}
   }
 
   /// 加载群置顶消息列表（多条，需求：支持点击切换 + 跳转）
@@ -204,8 +284,13 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     }
   }
 
+  /// 单聊对方的 shortId：优先会话数据，缺失时用成员接口自取值兜底
+  String get _resolvedPeerShortId => widget.conv.peerShortId.isNotEmpty
+      ? widget.conv.peerShortId
+      : _peerShortId;
+
   void _copyId() {
-    final v = isGroup ? widget.conv.id : widget.conv.peerShortId;
+    final v = isGroup ? widget.conv.id : _resolvedPeerShortId;
     if (v.isEmpty) return;
     Clipboard.setData(ClipboardData(text: v));
     final t = AppLocalizations.of(context).t;
@@ -263,31 +348,81 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     }
   }
 
-  void _showMembers() {
-    final t = AppLocalizations.of(context).t;
-    if (_members.isEmpty) {
-      AppDialogs.toast(context, t('convSetNoMembers'));
-      return;
-    }
-    AppDialogs.actionSheet(context,
-        title:
-            t('convSetMembersTitle', {'count': _members.length.toString()}),
-        actions: _members
-            .map((m) => DialogAction(
-                  label: m['nickname']?.toString() ??
-                      m['account']?.toString() ??
-                      '',
-                  icon: Icons.person_outline,
-                  onTap: () {},
-                ))
-            .toList());
+  /// 查看全部成员 → 群成员页（管理：邀请/移除/禁言/设管理员）
+  Future<void> _showMembers() async {
+    await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => GroupMembersPage(conv: widget.conv)));
+    if (mounted) _loadMembers();
   }
 
-  void _inviteMember() => AppDialogs.toast(
-      context, AppLocalizations.of(context).t('convSetInviteMemberComing'));
+  /// 群聊管理页（群主：二维码进群/成员隐私/全员禁言/允许邀请/管理员）
+  Future<void> _openGroupManage() async {
+    await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => GroupManagePage(conv: widget.conv)));
+    if (mounted) _loadMembers();
+  }
 
-  void _removeMember() => AppDialogs.toast(
-      context, AppLocalizations.of(context).t('convSetRemoveMemberComing'));
+  /// 群主上传群头像：相册选图 → 上传 → 更新会话
+  Future<void> _changeGroupAvatar() async {
+    if (_uploadingAvatar) return;
+    final t = AppLocalizations.of(context).t;
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 85,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _uploadingAvatar = true);
+    try {
+      final up = await ApiClient.instance.uploadFile(
+        picked.path,
+        picked.name.isEmpty ? 'group_avatar.jpg' : picked.name,
+        dir: 'avatar/',
+      );
+      final url = (up['url'] ?? '').toString();
+      if (url.isEmpty) throw Exception('upload failed');
+      await _svc.updateGroupInfo(widget.conv.id, avatar: url);
+      // 回写会话对象：返回会话列表/聊天页立即可见
+      widget.conv.conversation['avatar'] = url;
+      if (mounted) {
+        setState(() => _avatarOverride = url);
+        AppDialogs.toast(context, t('groupAvatarUpdated'));
+      }
+    } catch (_) {
+      if (mounted) AppDialogs.toast(context, t('groupAvatarUpdateFailed'));
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
+  }
+
+  /// 群主修改群名（双语同值，App 内单语言展示）
+  Future<void> _editGroupName() async {
+    final t = AppLocalizations.of(context).t;
+    final result = await AppDialogs.input(
+      context,
+      title: t('groupRenameTitle'),
+      hint: t('groupRenameHint'),
+      maxLines: 1,
+      maxLength: 32,
+      initialValue: _nameOverride.isNotEmpty
+          ? _nameOverride
+          : widget.conv.conversationName,
+    );
+    if (result == null || result.trim().isEmpty) return;
+    final name = result.trim();
+    try {
+      await _svc.updateGroupInfo(widget.conv.id, name: name);
+      widget.conv.conversation['nameZh'] = name;
+      widget.conv.conversation['nameEn'] = name;
+      if (mounted) {
+        setState(() => _nameOverride = name);
+        AppDialogs.toast(context, t('groupRenameSaved'));
+      }
+    } catch (_) {
+      if (mounted) AppDialogs.toast(context, t('groupRenameFailed'));
+    }
+  }
 
   void _clearHistory() async {
     final t = AppLocalizations.of(context).t;
@@ -304,7 +439,9 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
   Future<void> _deleteFriendOrExit() async {
     final t = AppLocalizations.of(context).t;
     final title = isGroup
-        ? (_isOwner ? t('convSetDisbandGroupTitle') : t('convSetExitGroupTitle'))
+        ? (_isOwner
+            ? t('convSetDisbandGroupTitle')
+            : t('convSetExitGroupTitle'))
         : t('convSetDeleteFriendTitle');
     final msg = isGroup
         ? (_isOwner ? t('convSetDisbandGroupMsg') : t('convSetExitGroupMsg'))
@@ -334,7 +471,8 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
         backgroundColor: context.cs.surface,
         elevation: 0,
         centerTitle: true,
-        title: Text(isGroup ? t('convSetGroupProfile') : t('convSetPersonalProfile'),
+        title: Text(
+            isGroup ? t('convSetGroupProfile') : t('convSetPersonalProfile'),
             style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w600,
@@ -355,13 +493,14 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
 
   Widget _directBody() {
     final t = AppLocalizations.of(context).t;
+    // 卡片间距统一为 10（与群聊资料页一致），不再 24/10 混用
     return ListView(
       padding: const EdgeInsets.only(bottom: 32),
       children: [
         _directHeader(),
-        const SizedBox(height: 24),
+        const SizedBox(height: 10),
         _callButtons(),
-        const SizedBox(height: 24),
+        const SizedBox(height: 10),
         _card(
           child: Column(
             children: [
@@ -408,7 +547,7 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
           child: InkWell(
             onTap: _clearHistory,
             child: Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 8, 14),
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 14),
               child: Row(
                 children: [
                   Expanded(
@@ -423,24 +562,30 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
             ),
           ),
         ),
-        const SizedBox(height: 24),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: _dangerButton(
-              isGroup
-                  ? (_isOwner
-                      ? t('convSetDisbandGroupTitle')
-                      : t('convSetExitGroupTitle'))
-                  : t('convSetDeleteFriendTitle'),
-              _deleteFriendOrExit),
-        ),
-        if (!isGroup) ...[
-          const SizedBox(height: 10),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _dangerButton(t('convSetBlacklistTitle'), _confirmBlacklist),
+        const SizedBox(height: 10),
+        // 危险操作：合并为一张卡片的居中红字行（微信式），
+        // 替换原来两个堆叠的浅红大按钮——硬编码浅红底在深色模式下尤其突兀
+        _card(
+          child: Column(
+            children: [
+              _dangerRow(
+                  isGroup
+                      ? (_isOwner
+                          ? t('convSetDisbandGroupTitle')
+                          : t('convSetExitGroupTitle'))
+                      : t('convSetDeleteFriendTitle'),
+                  _deleteFriendOrExit),
+              if (!isGroup) ...[
+                Divider(
+                    height: 1,
+                    indent: 16,
+                    endIndent: 16,
+                    color: context.cs.outlineVariant),
+                _dangerRow(t('convSetBlacklistTitle'), _confirmBlacklist),
+              ],
+            ],
           ),
-        ],
+        ),
       ],
     );
   }
@@ -450,11 +595,16 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     final url = widget.conv.avatarUrl;
     final name = widget.conv.conversationName;
     final initial = name.isEmpty ? '?' : name.characters.first;
+    // 对方是否靓号（服务端预留池校验，随会话/成员数据下发）
+    final shortId = _resolvedPeerShortId;
+    final isVipPeer =
+        (widget.conv.peerVipShortId || _peerVip) && shortId.isNotEmpty;
+    // 在线显示在线+设备；离线且有最近上线记录 → 显示"最近上线 xx"
     final onlineText = widget.conv.peerOnline
         ? (widget.conv.peerOnlineZh.isNotEmpty
             ? widget.conv.peerOnlineZh
             : t('convSetOnline'))
-        : t('convSetOffline');
+        : _lastSeenText();
     final onlineColor = widget.conv.peerOnline
         ? AppTheme.onlineDot
         : context.cs.onSurfaceVariant;
@@ -553,24 +703,44 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Flexible(
-                              child: Text(
-                                'ID: ${widget.conv.peerShortId.isEmpty ? t('convSetUnknown') : widget.conv.peerShortId}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: Colors.white70,
-                                  shadows: [
-                                    Shadow(
-                                      color: Colors.black54,
-                                      blurRadius: 4,
-                                      offset: Offset(0, 1),
+                              // 靓号好友只显示「靓ID：xxx」徽标，不再重复显示普通 ID
+                              child: isVipPeer
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 1.5),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(
+                                            color: const Color(0xFFE5484D),
+                                            width: 1),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        t('vipIdBadge', {'id': shortId}),
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    )
+                                  : Text(
+                                      'ID: ${shortId.isEmpty ? t('convSetUnknown') : shortId}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.white70,
+                                        shadows: [
+                                          Shadow(
+                                            color: Colors.black54,
+                                            blurRadius: 4,
+                                            offset: Offset(0, 1),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ],
-                                ),
-                              ),
                             ),
-                            if (widget.conv.peerShortId.isNotEmpty) ...[
+                            if (shortId.isNotEmpty) ...[
                               const SizedBox(width: 4),
                               const Icon(Icons.copy,
                                   size: 14, color: Colors.white70),
@@ -601,20 +771,38 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     );
   }
 
+  /// 离线状态文案：有最近上线记录显示"最近上线 xx"，否则回退"离线"
+  String _lastSeenText() {
+    final t = AppLocalizations.of(context).t;
+    final dt = DateTime.tryParse(widget.conv.lastLoginAt);
+    if (dt == null) return t('convSetOffline');
+    final diff = DateTime.now().difference(dt);
+    final time = diff.inMinutes < 1
+        ? t('timeJustNow')
+        : diff.inMinutes < 60
+            ? t('timeMinAgo', {'n': '${diff.inMinutes}'})
+            : diff.inHours < 24
+                ? t('timeHourAgo', {'n': '${diff.inHours}'})
+                : diff.inDays < 7
+                    ? t('timeDayAgo', {'n': '${diff.inDays}'})
+                    : '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    return t('convSetLastSeen', {'time': time});
+  }
+
   Widget _callButtons() {
     final t = AppLocalizations.of(context).t;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+    // 一张卡片承载两个圆形操作，视觉成组、不散
+    return _card(
+      padding: const EdgeInsets.symmetric(vertical: 18),
       child: Row(
         children: [
           Expanded(
-            child: _callButton(
-                Icons.phone_outlined, t('convSetVoiceCall'), () => _startCall('voice')),
+            child: _callButton(Icons.phone_outlined, t('convSetVoiceCall'),
+                () => _startCall('voice')),
           ),
-          const SizedBox(width: 16),
           Expanded(
-            child: _callButton(
-                Icons.videocam_outlined, t('convSetVideoCall'), () => _startCall('video')),
+            child: _callButton(Icons.videocam_outlined, t('convSetVideoCall'),
+                () => _startCall('video')),
           ),
         ],
       ),
@@ -622,27 +810,30 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
   }
 
   Widget _callButton(IconData icon, String label, VoidCallback onTap) {
+    // 圆形浅色底图标 + 下方小字（与「我的」页大按钮同款语言），替代色块/描边按钮
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          color: context.cs.primaryContainer,
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 20, color: context.cs.onPrimaryContainer),
-            const SizedBox(width: 8),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: context.cs.onPrimaryContainer)),
-          ],
-        ),
+      borderRadius: BorderRadius.circular(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              color: AppTheme.primary.withValues(alpha: 0.10),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, size: 24, color: AppTheme.primary),
+          ),
+          const SizedBox(height: 8),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: context.cs.onSurface)),
+        ],
       ),
     );
   }
@@ -656,16 +847,35 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
       children: [
         Container(
           color: context.cs.surface,
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
           child: Column(
             children: [
+              // 群头像：群主可点击更换（相册选图上传）
               _groupAvatar(),
               const SizedBox(height: 14),
-              Text(widget.conv.conversationName,
-                  style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: context.cs.onSurface)),
+              // 群名：群主可点击修改
+              InkWell(
+                onTap: _isOwner ? _editGroupName : null,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(_groupName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: context.cs.onSurface)),
+                    ),
+                    if (_isOwner) ...[
+                      const SizedBox(width: 6),
+                      Icon(Icons.edit_outlined,
+                          size: 15, color: context.cs.onSurfaceVariant),
+                    ],
+                  ],
+                ),
+              ),
               const SizedBox(height: 6),
               InkWell(
                 onTap: _copyId,
@@ -694,21 +904,15 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
           _card(child: _pinnedCard()),
         ],
         const SizedBox(height: 10),
-        _sectionHeader(t('convSetGroupMembers'),
-            trailing: t('convSetViewAllMembers',
-                {'count': _members.length.toString()}),
-            onTap: _showMembers),
-        _card(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-          child: _memberGrid(),
-        ),
+        // 成员区：隐私开启时普通成员最多 2 排预览（多余不显示、不可查看全部）
+        _membersSection(),
         const SizedBox(height: 10),
         _sectionHeader(t('convSetGroupAnnouncement')),
         _card(
           child: InkWell(
             onTap: _editAnnouncement,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
               child: Row(
                 children: [
                   Expanded(
@@ -744,14 +948,40 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
             ),
           ),
         ),
+        // 群二维码（全体成员可见，分享扫码进群）
+        const SizedBox(height: 10),
+        _sectionHeader(t('groupQrSection')),
+        _card(
+          child: InkWell(
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => GroupQrPage(conv: widget.conv))),
+            child: Padding(
+              // 与群管理/清空记录等行完全一致的结构，保证箭头像素级对齐
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 14),
+              child: Row(
+                children: [
+                  Icon(Icons.qr_code_2, size: 26, color: AppTheme.primary),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(t('groupQrRow'),
+                        style: TextStyle(
+                            fontSize: 15, color: context.cs.onSurface)),
+                  ),
+                  Icon(Icons.chevron_right,
+                      size: 18, color: context.cs.onSurfaceVariant),
+                ],
+              ),
+            ),
+          ),
+        ),
         if (_isOwner) ...[
           const SizedBox(height: 10),
           _sectionHeader(t('convSetGroupAdmin')),
           _card(
             child: InkWell(
-              onTap: () => _placeholder(t('convSetGroupAdmin')),
+              onTap: _openGroupManage,
               child: Padding(
-                padding: EdgeInsets.fromLTRB(16, 14, 8, 14),
+                padding: EdgeInsets.fromLTRB(16, 14, 16, 14),
                 child: Row(
                   children: [
                     Expanded(
@@ -786,7 +1016,7 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
           child: InkWell(
             onTap: _clearHistory,
             child: Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 8, 14),
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 14),
               child: Row(
                 children: [
                   Expanded(
@@ -801,10 +1031,9 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
             ),
           ),
         ),
-        const SizedBox(height: 24),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: _dangerButton(
+        const SizedBox(height: 10),
+        _card(
+          child: _dangerRow(
               _isOwner
                   ? t('convSetDisbandGroupTitle')
                   : t('convSetExitGroupTitle'),
@@ -815,22 +1044,52 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
   }
 
   Widget _groupAvatar() {
-    final url = widget.conv.avatarUrl;
-    final name = widget.conv.conversationName;
+    final url = _avatarUrl;
+    final name = _groupName;
     final initial = name.isEmpty ? '?' : name.characters.first;
-    return Container(
-      width: 80,
-      height: 80,
-      decoration: BoxDecoration(
-        color: AppTheme.primary.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
+    return InkWell(
+      onTap: _isOwner ? _changeGroupAvatar : null,
+      borderRadius: BorderRadius.circular(20),
+      child: Stack(
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: AppTheme.primary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: url.isNotEmpty
+                ? Image.network(url,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _groupAvatarFallback(initial))
+                : _groupAvatarFallback(initial),
+          ),
+          // 群主可换头像：右下角相机角标（上传中转菊花）
+          if (_isOwner)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: context.cs.surface.withValues(alpha: 0.9),
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: _uploadingAvatar
+                    ? const SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : Icon(Icons.photo_camera_outlined,
+                        size: 15, color: context.cs.onSurfaceVariant),
+              ),
+            ),
+        ],
       ),
-      clipBehavior: Clip.antiAlias,
-      child: url.isNotEmpty
-          ? Image.network(url,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => _groupAvatarFallback(initial))
-          : _groupAvatarFallback(initial),
     );
   }
 
@@ -944,45 +1203,137 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     );
   }
 
-  Widget _memberGrid() {
+  /// 成员区：隐私开启时普通成员最多 2 排预览（无查看全部入口）
+  Widget _membersSection() {
     final t = AppLocalizations.of(context).t;
-    final display = _members.take(5).toList();
-    final cells = <Widget>[];
-    for (final m in display) {
-      cells.add(_memberCell(m));
+    final limited = _privacyLimited;
+    // 老服务端兼容：隐私模式下成员接口报 4006 → 列表为空，显示提示卡片
+    if (limited && _members.isEmpty) {
+      return Column(
+        children: [
+          _sectionHeader(t('convSetGroupMembers')),
+          _card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 22),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.lock_outline,
+                      size: 18, color: context.cs.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Text(t('groupPrivacyHint'),
+                      style: TextStyle(
+                          fontSize: 14, color: context.cs.onSurfaceVariant)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
     }
-    cells.add(_actionCell(Icons.add, t('convSetInvite'), _inviteMember));
-    if (_isOwner) {
-      cells.add(_actionCell(Icons.remove, t('convSetRemove'), _removeMember));
-    }
-    return Wrap(
-      spacing: 12,
-      runSpacing: 16,
-      children: cells,
+    return Column(
+      children: [
+        limited
+            ? _sectionHeader(t('convSetGroupMembers'))
+            : _sectionHeader(t('convSetGroupMembers'),
+                trailing: t('convSetViewAllMembers',
+                    {'count': _members.length.toString()}),
+                onTap: _showMembers),
+        _card(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+          child: _memberGrid(),
+        ),
+      ],
     );
   }
 
-  Widget _memberCell(Map<String, dynamic> m) {
+  Widget _memberGrid() {
+    final t = AppLocalizations.of(context).t;
+    final limited = _privacyLimited;
+    return LayoutBuilder(builder: (context, constraints) {
+      const spacing = 12.0;
+      final width = constraints.maxWidth;
+      // 每格 52 宽 + 12 间距：按卡片实际宽度动态算列数，让每排铺满卡片（不留斜边）
+      final cols = ((width + spacing) / (52 + spacing)).floor().clamp(1, 20);
+      final cellW = (width - spacing * (cols - 1)) / cols;
+      // 资料页固定最多 2 排预览（隐私模式多余不显示；普通模式点"查看全部"进成员页）
+      final maxShow = cols * 2;
+      // 邀请/移除格子也占位，成员格子数 = 2排总格数 - 功能格数，保证总数不超 2 排
+      final actionCount = (!limited ? 1 : 0) + (!limited && _isManager ? 1 : 0);
+      final memberMax = (maxShow - actionCount).clamp(0, _members.length);
+      final cells = <Widget>[];
+      var shown = 0;
+      for (final m in _members) {
+        if (shown >= memberMax) break;
+        cells.add(_memberCell(m, cellW));
+        shown++;
+      }
+      if (!limited) {
+        cells.add(_actionCell(Icons.add, t('convSetInvite'), _showMembers,
+            width: cellW));
+        if (_isManager) {
+          cells.add(_actionCell(Icons.remove, t('convSetRemove'), _showMembers,
+              width: cellW));
+        }
+      }
+      return Wrap(
+        spacing: spacing,
+        runSpacing: 16,
+        children: cells,
+      );
+    });
+  }
+
+  Widget _memberCell(Map<String, dynamic> m, double width) {
+    final t = AppLocalizations.of(context).t;
     final name = m['nickname']?.toString() ?? m['account']?.toString() ?? '';
     final initial = name.isEmpty ? '?' : name.characters.first;
     final url = m['avatar']?.toString() ?? '';
+    final role = (m['role'] as num?)?.toInt() ?? 3;
     return SizedBox(
-      width: 52,
+      width: width,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          CircleAvatar(
-            radius: 22,
-            backgroundColor: AppTheme
-                .avatarColors[name.length % AppTheme.avatarColors.length],
-            backgroundImage: url.isNotEmpty ? NetworkImage(url) : null,
-            child: url.isEmpty
-                ? Text(initial,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600))
-                : null,
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: AppTheme
+                    .avatarColors[name.length % AppTheme.avatarColors.length],
+                backgroundImage: url.isNotEmpty ? NetworkImage(url) : null,
+                child: url.isEmpty
+                    ? Text(initial,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600))
+                    : null,
+              ),
+              // 群主标识：头像右上角小角标
+              if (role == 1)
+                Positioned(
+                  top: -3,
+                  right: -6,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: AppTheme.orange,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: Theme.of(context).colorScheme.surface,
+                          width: 1),
+                    ),
+                    child: Text(t('groupRoleOwner'),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 6),
           Text(name,
@@ -996,9 +1347,11 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     );
   }
 
-  Widget _actionCell(IconData icon, String label, VoidCallback onTap) {
+  Widget _actionCell(IconData icon, String label, VoidCallback onTap,
+      {double width = 52}) {
     return SizedBox(
-      width: 52,
+      // 与成员格同宽（cellW），保证同排内头像圆心/文字中心像素级对齐
+      width: width,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(22),
@@ -1128,19 +1481,23 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     );
   }
 
-  Widget _dangerButton(String label, VoidCallback onTap) {
-    return FilledButton(
-      onPressed: onTap,
-      style: FilledButton.styleFrom(
-        backgroundColor: const Color(0xFFFFECE9),
-        foregroundColor: AppTheme.danger,
-        elevation: 0,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.radiusMd)),
+  /// 危险操作行：surface 底 + 居中红字（微信「删除联系人」样式）。
+  /// 不自带上边距，由调用处用 _card 包裹并控制间距；
+  /// 深浅色都走主题色，避免硬编码浅红底在深色模式下突兀。
+  Widget _dangerRow(String label, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 15),
+        alignment: Alignment.center,
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+                color: AppTheme.danger)),
       ),
-      child: Text(label,
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
     );
   }
 

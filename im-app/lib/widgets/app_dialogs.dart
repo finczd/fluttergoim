@@ -15,8 +15,7 @@ class AppDialogs {
     String? confirmText,
     bool danger = false,
   }) {
-    final cancel =
-        cancelText ?? AppLocalizations.instance.t('dialogsCancel');
+    final cancel = cancelText ?? AppLocalizations.instance.t('dialogsCancel');
     final ok = confirmText ?? AppLocalizations.instance.t('dialogsConfirm');
     return showDialog<bool>(
       context: context,
@@ -84,8 +83,7 @@ class AppDialogs {
     String? cancelText,
     String? confirmText,
   }) async {
-    final cancel =
-        cancelText ?? AppLocalizations.instance.t('dialogsCancel');
+    final cancel = cancelText ?? AppLocalizations.instance.t('dialogsCancel');
     final ok = confirmText ?? AppLocalizations.instance.t('dialogsSave');
     final controller = TextEditingController(text: initialValue ?? '');
     return showDialog<String?>(

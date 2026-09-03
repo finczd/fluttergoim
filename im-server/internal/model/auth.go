@@ -42,6 +42,20 @@ type InviteCode struct {
 
 func (InviteCode) TableName() string { return "invite_code" }
 
+// InviteFriendCode 自定义邀请码（后台创建）：一个码可关联多个好友，
+// 通过该码注册的用户会自动添加这些好友（双向好友关系，多用不限次数）
+type InviteFriendCode struct {
+	ID        int64     `gorm:"primaryKey" json:"id,string"`
+	Code      string    `gorm:"size:32;uniqueIndex" json:"code"`
+	FriendIDs string    `gorm:"type:json" json:"friendIds"` // JSON 数组字符串，如 ["123","456"]
+	Remark    string    `gorm:"size:255" json:"remark"`     // 备注（这个码发给谁用）
+	Enabled   int       `gorm:"default:1" json:"enabled"`   // 1 启用 / 0 停用
+	UsedCount int       `gorm:"default:0" json:"usedCount"` // 使用次数（注册成功并绑定好友 +1）
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func (InviteFriendCode) TableName() string { return "invite_friend_code" }
+
 // AdminLog 后台操作日志
 type AdminLog struct {
 	ID        int64     `gorm:"primaryKey" json:"id,string"`

@@ -110,7 +110,8 @@ class _TransferPageState extends State<TransferPage> {
       ),
       // ===== body 外层渐变 + SafeArea(top/bottom:true) 双保险 =====
       body: Container(
-        decoration: isDark ? null : const BoxDecoration(gradient: lightGradient),
+        decoration:
+            isDark ? null : const BoxDecoration(gradient: lightGradient),
         child: SafeArea(
           top: true,
           bottom: true,
@@ -155,7 +156,8 @@ class _TransferPageState extends State<TransferPage> {
   }
 
   // ========= 收款人头像 + 名字（左头像 + 右文字，单行水平布局）=========
-  Widget _buildRecipient(AppLocalizations loc, ColorScheme scheme, bool isDark) {
+  Widget _buildRecipient(
+      AppLocalizations loc, ColorScheme scheme, bool isDark) {
     final name = widget.peerName.trim().isEmpty ? '?' : widget.peerName.trim();
     // 取第一个 Unicode 字符（防止中文切半）
     final firstChar = name.characters.first.toUpperCase();
@@ -335,9 +337,7 @@ class _TransferPageState extends State<TransferPage> {
             loc.t('transferAmountLabel'),
             style: TextStyle(
               fontSize: 13,
-              color: isDark
-                  ? scheme.onSurfaceVariant
-                  : const Color(0xFF888888),
+              color: isDark ? scheme.onSurfaceVariant : const Color(0xFF888888),
             ),
           ),
           const SizedBox(height: 8),
@@ -363,8 +363,8 @@ class _TransferPageState extends State<TransferPage> {
                   controller: _amountCtrl,
                   focusNode: _focus,
                   autofocus: true,
-                  keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(
                         RegExp(r'^\d{0,6}\.?\d{0,2}$')),
@@ -397,8 +397,8 @@ class _TransferPageState extends State<TransferPage> {
               Text(
                 _balanceLoading
                     ? loc.t('transferBalanceLoading')
-                    : loc.t('transferAvailableBalance',
-                        {'amount': _fmt(_balance)}),
+                    : loc.t(
+                        'transferAvailableBalance', {'amount': _fmt(_balance)}),
                 style: TextStyle(
                   fontSize: 12,
                   color: isDark
@@ -414,7 +414,8 @@ class _TransferPageState extends State<TransferPage> {
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFF3E5),
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: AppTheme.danger.withValues(alpha: 0.3)),
+                    border: Border.all(
+                        color: AppTheme.danger.withValues(alpha: 0.3)),
                   ),
                   child: Text(
                     loc.t('transferInsufficient'),
@@ -434,9 +435,7 @@ class _TransferPageState extends State<TransferPage> {
             loc.t('transferNoteLabel'),
             style: TextStyle(
               fontSize: 13,
-              color: isDark
-                  ? scheme.onSurfaceVariant
-                  : const Color(0xFF888888),
+              color: isDark ? scheme.onSurfaceVariant : const Color(0xFF888888),
             ),
           ),
           const SizedBox(height: 10),
@@ -448,9 +447,8 @@ class _TransferPageState extends State<TransferPage> {
               hintText: loc.t('transferNoteHint'),
               hintStyle: TextStyle(
                   fontSize: 14,
-                  color: isDark
-                      ? scheme.outlineVariant
-                      : const Color(0xFFBBBBBB)),
+                  color:
+                      isDark ? scheme.outlineVariant : const Color(0xFFBBBBBB)),
               filled: true,
               fillColor: isDark
                   ? scheme.surfaceContainerHighest

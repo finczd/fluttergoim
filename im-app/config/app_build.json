@@ -12,8 +12,8 @@
 
   "appName": "青鸟",
   "packageName": "com.qingniao.im",
-  "versionName": "0.1.0",
-  "versionCode": 1,
+  "versionName": "1.1.0",
+  "versionCode": 2,
   "apiBase": "https://im.x123.wang/",
   "wsBase": "wss://im.x123.wang/ws",
   "icon": "assets/icon/app_icon.png"

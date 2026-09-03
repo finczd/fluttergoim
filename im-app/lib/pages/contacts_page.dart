@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../services/conversation_service.dart';
 import '../services/friend_service.dart';
+import '../services/user_cache.dart';
 import '../services/ws_service.dart';
 import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
@@ -34,6 +35,7 @@ class _ContactsPageState extends State<ContactsPage> {
   List<FriendRequest> _requests = [];
   String _assistantAvatar = ''; // 后台配置的小助手头像（通讯录官方入口显示）
   bool _loading = true;
+  bool _loadFailed = false; // 好友列表加载失败（无缓存数据时显示"重新加载"，不再误显"暂无好友"）
   bool _searching = false;
   final String _msg = '';
   String _myId = '';
@@ -91,10 +93,17 @@ class _ContactsPageState extends State<ContactsPage> {
   }
 
   Future<void> _loadMyId() async {
+    // 进程内缓存命中直接用（一次登录会话只拉一次 /user/profile）
+    final cached = UserCache.myId;
+    if (cached != null && cached.isNotEmpty) {
+      if (mounted) setState(() => _myId = cached);
+      return;
+    }
     try {
       final r = await _api.get('/api/v1/user/profile');
-      final id =
-          ((r.data['data'] as Map<String, dynamic>)['id'])?.toString() ?? '';
+      final d = (r.data['data'] as Map<String, dynamic>?);
+      UserCache.setMyProfile(d ?? {});
+      final id = d?['id']?.toString() ?? '';
       if (mounted && id.isNotEmpty) setState(() => _myId = id);
     } catch (_) {}
   }
@@ -112,34 +121,61 @@ class _ContactsPageState extends State<ContactsPage> {
   }
 
   Future<void> _load() async {
+    List<Map<String, dynamic>>? friends;
     try {
-      final friends = await _svc.list();
-      final requests = await _svc.incoming();
-      if (mounted) {
-        setState(() {
-          _friends = friends;
-          _requests = requests;
-          _loading = false;
-        });
-        // 好友/申请/助手头像一并落缓存，下次进页首帧直出
-        unawaited(_api.writePref(
-            'contacts',
-            jsonEncode({
-              'friends': friends,
-              'requests': requests
-                  .map((r) => {
-                        'id': r.id,
-                        'fromUser': r.fromUser,
-                        'message': r.message,
-                        'status': r.status,
-                      })
-                  .toList(),
-              'assistantAvatar': _assistantAvatar,
-            })));
-      }
+      friends = await _svc.list();
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      // 好友列表失败：有数据（缓存/上次结果）则保留并提示；首进无数据显示重试态
+      if (mounted) {
+        setState(() => _loading = false);
+        if (_friends.isEmpty && _requests.isEmpty) {
+          setState(() => _loadFailed = true);
+        } else {
+          AppDialogs.toast(
+              context, AppLocalizations.of(context).t('contactsRefreshFailed'));
+        }
+      }
+      return;
     }
+    var requests = <FriendRequest>[];
+    var reqFailed = false;
+    try {
+      requests = await _svc.incoming();
+    } catch (_) {
+      reqFailed = true; // 申请列表失败不拖累好友展示
+    }
+    if (mounted) {
+      setState(() {
+        _friends = friends ?? [];
+        if (!reqFailed) _requests = requests;
+        _loading = false;
+        _loadFailed = false;
+      });
+      // 好友/申请/助手头像一并落缓存，下次进页首帧直出
+      unawaited(_api.writePref(
+          'contacts',
+          jsonEncode({
+            'friends': friends,
+            'requests': (reqFailed ? _requests : requests)
+                .map((r) => {
+                      'id': r.id,
+                      'fromUser': r.fromUser,
+                      'message': r.message,
+                      'status': r.status,
+                    })
+                .toList(),
+            'assistantAvatar': _assistantAvatar,
+          })));
+    }
+  }
+
+  /// 失败态手动重试
+  void _retryLoad() {
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
+    _load();
   }
 
   /// 本地过滤通讯录好友（按昵称 / 账号 / 手机号）
@@ -324,179 +360,182 @@ class _ContactsPageState extends State<ContactsPage> {
                 ),
               ],
             ),
-            // 搜索框：紧贴标题栏下方，本地过滤通讯录好友
+            // 搜索框：与首页搜索栏同款样式（surface 底色 + radiusMd 圆角、去描边、
+            // 同边距/高度/图标/文字），保持实时本地过滤能力（可输入 + 清除按钮）。
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: SizedBox(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: Container(
                 height: 42,
-                child: TextField(
-                  controller: _searchCtrl,
-                  style: TextStyle(fontSize: 14, color: context.cs.onSurface),
-                  decoration: InputDecoration(
-                    hintText: t('contactsSearchHint'),
-                    hintStyle: TextStyle(
-                        fontSize: 14, color: context.cs.onSurfaceVariant),
-                    isDense: true,
-                    filled: true,
-                    // 白色填充 + 发丝线描边：与灰色页面背景拉开对比（深色模式同款逻辑）
-                    fillColor: context.cs.surface,
-                    prefixIcon: Icon(Icons.search,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(
+                  color: context.cs.surface,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.search,
                         size: 20, color: context.cs.onSurfaceVariant),
-                    suffixIcon: _searchCtrl.text.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: Icon(Icons.close,
-                                size: 18, color: context.cs.onSurfaceVariant),
-                            onPressed: () => setState(() {
-                              _searchCtrl.clear();
-                              _searching = false;
-                              _filteredFriends = [];
-                            }),
-                          ),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 11),
-                    // 白色填充 + 发丝线描边（描边颜色略淡于 focusedBorder 主色）
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                      borderSide: BorderSide(color: context.cs.outlineVariant),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _searchCtrl,
+                        style: TextStyle(fontSize: 14, color: context.cs.onSurface),
+                        decoration: InputDecoration(
+                          hintText: t('contactsSearchHint'),
+                          hintStyle: TextStyle(
+                              fontSize: 14, color: context.cs.onSurface),
+                          isDense: true,
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.zero,
+                          suffixIcon: _searchCtrl.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  icon: Icon(Icons.close,
+                                      size: 18,
+                                      color: context.cs.onSurfaceVariant),
+                                  onPressed: () => setState(() {
+                                    _searchCtrl.clear();
+                                    _searching = false;
+                                    _filteredFriends = [];
+                                  }),
+                                ),
+                        ),
+                        onChanged: _filter,
+                      ),
                     ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                      borderSide: BorderSide(color: context.cs.outlineVariant),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                      borderSide: BorderSide(
-                          color: AppTheme.primary.withValues(alpha: 0.4)),
-                    ),
-                  ),
-                  onChanged: _filter,
+                  ],
                 ),
               ),
             ),
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
-                  : ListView(
-                      padding: const EdgeInsets.all(16),
-                      children: [
-                        // 设计稿功能区：新朋友 / 群聊 / 小助手（需求8/9/10）
-                        Padding(
-                          padding: EdgeInsets.zero,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            // 微信式：卡片靠「白卡 vs 灰底」的明度差区分，不描边
-                            decoration: BoxDecoration(
-                              color: context.cs.surface,
-                              borderRadius: BorderRadius.circular(14),
+                  : _loadFailed
+                      ? _buildLoadFailed()
+                      : ListView(
+                          padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
+                          children: [
+                            // 设计稿功能区：新朋友 / 群聊 / 小助手（需求8/9/10）
+                            Padding(
+                              padding: EdgeInsets.zero,
+                              child: Container(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 4),
+                                // 微信式：卡片靠「白卡 vs 灰底」的明度差区分，不描边
+                                decoration: BoxDecoration(
+                                  color: context.cs.surface,
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Column(
+                                  children: [
+                                    // 需求8：新朋友 → 申请记录列表（通过/拒绝）
+                                    _funcRow(
+                                        Icons.person_add_alt_1,
+                                        t('contactsNewFriends'),
+                                        _requests.length,
+                                        AppTheme.orange, () async {
+                                      await Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                              builder: (_) =>
+                                                  const NewFriendsPage()));
+                                      if (mounted) _load();
+                                    }),
+                                    _divider(),
+                                    // 需求9：群聊 → 我的群聊列表
+                                    _funcRow(
+                                        Icons.groups_rounded,
+                                        t('contactsGroupChats'),
+                                        0,
+                                        AppTheme.green, () {
+                                      Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                              builder: (_) =>
+                                                  MyGroupsPage(myId: _myId)));
+                                    }),
+                                    _divider(),
+                                    // 需求10：系统公告 → 小助手（带官方标识 + 后台配置头像）
+                                    _funcRow(
+                                        Icons.smart_toy_outlined,
+                                        t('contactsAssistant'),
+                                        0,
+                                        AppTheme.cyan,
+                                        _openAssistant,
+                                        official: true,
+                                        avatarUrl: _assistantAvatar),
+                                  ],
+                                ),
+                              ),
                             ),
-                            child: Column(
-                              children: [
-                                // 需求8：新朋友 → 申请记录列表（通过/拒绝）
-                                _funcRow(
-                                    Icons.person_add_alt_1,
-                                    t('contactsNewFriends'),
-                                    _requests.length,
-                                    AppTheme.orange, () async {
-                                  await Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                          builder: (_) =>
-                                              const NewFriendsPage()));
-                                  if (mounted) _load();
-                                }),
-                                _divider(),
-                                // 需求9：群聊 → 我的群聊列表
-                                _funcRow(
-                                    Icons.groups_rounded,
-                                    t('contactsGroupChats'),
-                                    0,
-                                    AppTheme.green, () {
-                                  Navigator.of(context).push(MaterialPageRoute(
-                                      builder: (_) =>
-                                          MyGroupsPage(myId: _myId)));
-                                }),
-                                _divider(),
-                                // 需求10：系统公告 → 小助手（带官方标识 + 后台配置头像）
-                                _funcRow(
-                                    Icons.smart_toy_outlined,
-                                    t('contactsAssistant'),
-                                    0,
-                                    AppTheme.cyan,
-                                    _openAssistant,
-                                    official: true,
-                                    avatarUrl: _assistantAvatar),
-                              ],
-                            ),
-                          ),
+
+                            if (_msg.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(_msg,
+                                    style: const TextStyle(
+                                        fontSize: 12, color: AppTheme.success)),
+                              ),
+
+                            if (!_searching && _requests.isNotEmpty) ...[
+                              _SectionLabel(t('contactsFriendRequests',
+                                  {'count': '${_requests.length}'})),
+                              ..._requests.map((r) => _requestTile(r)),
+                              const SizedBox(height: 8),
+                            ],
+                            if (_searching) ...[
+                              _SectionLabel(t('contactsSearchResults',
+                                  {'count': '${_filteredFriends.length}'})),
+                              if (_filteredFriends.isEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 56),
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.search_off,
+                                            size: 56,
+                                            color: context.cs.onSurfaceVariant
+                                                .withValues(alpha: 0.5)),
+                                        const SizedBox(height: 12),
+                                        Text(t('contactsNoMatch'),
+                                            style: TextStyle(
+                                                color:
+                                                    context.cs.onSurfaceVariant,
+                                                fontSize: 14)),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                              else
+                                ..._filteredFriends.map((f) => _friendTile(f)),
+                            ] else ...[
+                              _SectionLabel(t('contactsFriends',
+                                  {'count': '${_friends.length}'})),
+                              if (_friends.isEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 56),
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.group_outlined,
+                                            size: 56,
+                                            color: context.cs.onSurfaceVariant
+                                                .withValues(alpha: 0.5)),
+                                        const SizedBox(height: 12),
+                                        Text(t('contactsEmptyFriends'),
+                                            style: TextStyle(
+                                                color:
+                                                    context.cs.onSurfaceVariant,
+                                                fontSize: 14)),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                              else
+                                ..._friends.map((f) => _friendTile(f)),
+                            ],
+                          ],
                         ),
-
-                        if (_msg.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(_msg,
-                                style: const TextStyle(
-                                    fontSize: 12, color: AppTheme.success)),
-                          ),
-
-                        if (!_searching && _requests.isNotEmpty) ...[
-                          _SectionLabel(t('contactsFriendRequests',
-                              {'count': '${_requests.length}'})),
-                          ..._requests.map((r) => _requestTile(r)),
-                          const SizedBox(height: 8),
-                        ],
-                        if (_searching) ...[
-                          _SectionLabel(t('contactsSearchResults',
-                              {'count': '${_filteredFriends.length}'})),
-                          if (_filteredFriends.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 56),
-                              child: Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.search_off,
-                                        size: 56,
-                                        color: context.cs.onSurfaceVariant
-                                            .withValues(alpha: 0.5)),
-                                    const SizedBox(height: 12),
-                                    Text(t('contactsNoMatch'),
-                                        style: TextStyle(
-                                            color: context.cs.onSurfaceVariant,
-                                            fontSize: 14)),
-                                  ],
-                                ),
-                              ),
-                            )
-                          else
-                            ..._filteredFriends.map((f) => _friendTile(f)),
-                        ] else ...[
-                          _SectionLabel(t('contactsFriends',
-                              {'count': '${_friends.length}'})),
-                          if (_friends.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 56),
-                              child: Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.group_outlined,
-                                        size: 56,
-                                        color: context.cs.onSurfaceVariant
-                                            .withValues(alpha: 0.5)),
-                                    const SizedBox(height: 12),
-                                    Text(t('contactsEmptyFriends'),
-                                        style: TextStyle(
-                                            color: context.cs.onSurfaceVariant,
-                                            fontSize: 14)),
-                                  ],
-                                ),
-                              ),
-                            )
-                          else
-                            ..._friends.map((f) => _friendTile(f)),
-                        ],
-                      ],
-                    ),
             ),
           ],
         ),
@@ -504,10 +543,37 @@ class _ContactsPageState extends State<ContactsPage> {
     );
   }
 
+  /// 好友列表加载失败：显示"重新加载"，不再误显"暂无好友"
+  Widget _buildLoadFailed() {
+    final t = AppLocalizations.of(context).t;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.cloud_off_outlined,
+              size: 48, color: context.cs.onSurfaceVariant),
+          const SizedBox(height: 12),
+          Text(t('contactsLoadFailed'),
+              style:
+                  TextStyle(fontSize: 14, color: context.cs.onSurfaceVariant)),
+          const SizedBox(height: 14),
+          TextButton(
+            onPressed: _retryLoad,
+            child: Text(t('contactsRetry'),
+                style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.primary)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _requestTile(FriendRequest r) {
     final t = AppLocalizations.of(context).t;
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.fromLTRB(0, 4, 0, 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: context.cs.surface,
@@ -615,11 +681,19 @@ class _ContactsPageState extends State<ContactsPage> {
         try {
           final convSvc = ConversationService();
           final conv = await convSvc.createDirect(id);
+          // createDirect 返回的会话对象不带对方头像，资料页头图会空成首字母
+          // （聊天窗口路径会话列表自带 avatar 所以正常）→ 用通讯录行的好友头像兜底
+          final av = f['avatar']?.toString() ?? '';
+          if (av.isNotEmpty &&
+              (conv['avatar'] == null || conv['avatar'].toString().isEmpty)) {
+            conv['peerAvatar'] = av;
+          }
           final online = f['online'] == true;
           final item = ConvItem.fromJson({
             'conversation': conv,
             'conversationName': name,
             'peerShortId': f['shortId']?.toString() ?? '',
+            'peerVipShortId': f['vipShortId'] == true,
             'peerRemark': f['remark']?.toString() ?? '',
             'peerOnline': online,
             'peerOnlineDev': f['onlineDevice'] ?? [],
@@ -636,7 +710,7 @@ class _ContactsPageState extends State<ContactsPage> {
       },
       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
+        margin: const EdgeInsets.fromLTRB(0, 4, 0, 4),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: context.cs.surface,

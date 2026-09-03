@@ -5,7 +5,7 @@ import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_dialogs.dart';
+import '../widgets/lang_picker.dart';
 import 'home_shell.dart';
 import 'login_page.dart';
 import 'pay_ui.dart';
@@ -247,7 +247,7 @@ class _RegisterPageState extends State<RegisterPage> {
       shadowColor: Colors.black.withValues(alpha: 0.08),
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
-        onTap: () => LocaleProvider.of(context)?.toggle(),
+        onTap: () => showLangPicker(context),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           child: Row(
@@ -255,8 +255,10 @@ class _RegisterPageState extends State<RegisterPage> {
             children: [
               Icon(Icons.language, size: 18, color: AppTheme.primary),
               const SizedBox(width: 6),
+              // 显示当前语言；点开弹窗可四语切换
               Text(
-                isZh ? t('langZh') : t('langEn'),
+                AppLocalizations.langNativeName(
+                    AppLocalizations.of(context).locale),
                 style: TextStyle(
                   fontSize: 12,
                   color: scheme.onSurface,

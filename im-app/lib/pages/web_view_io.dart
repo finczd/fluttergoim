@@ -97,8 +97,8 @@ class _AppWebViewState extends State<_AppWebView> {
                   size: 48, color: Color(0xFF9AA3AE)),
               const SizedBox(height: 12),
               Text(t('webViewLoadFailed'),
-                  style: const TextStyle(
-                      fontSize: 15, color: Color(0xFF6B7480))),
+                  style:
+                      const TextStyle(fontSize: 15, color: Color(0xFF6B7480))),
               const SizedBox(height: 6),
               Text(_error,
                   textAlign: TextAlign.center,

@@ -29,6 +29,8 @@ func GetProfileHandler(cfg *config.Config) gin.HandlerFunc {
 		extra := map[string]interface{}{
 			"online":       online,
 			"onlineDevice": devs,
+			// 靓号标识：short_id 来自后台靓号池（已分配）→ 客户端 ID 前显示红色「靓ID」徽标
+			"vipShortId": service.IsVipShortID(c.Request.Context(), uid, u.ShortID),
 		}
 		var body map[string]interface{}
 		json.Unmarshal(uJSON, &body)

@@ -90,6 +90,18 @@ func GetUserDetail(ctx context.Context, targetID int64) (*model.User, error) {
 	return &u, nil
 }
 
+// IsVipShortID 用户的短 ID 是否为后台靓号（reserved_short_id 池中已分配给该用户的号）
+func IsVipShortID(ctx context.Context, userID int64, shortID *string) bool {
+	if shortID == nil || *shortID == "" || userID <= 0 {
+		return false
+	}
+	var cnt int64
+	store.DB.Model(&model.ReservedShortID{}).
+		Where("short_id = ? AND status = ? AND used_by = ?", *shortID, model.ReservedShortIDUsed, userID).
+		Count(&cnt)
+	return cnt > 0
+}
+
 // DeptTree 部门树（双语字段由客户端按语言取 nameZh/nameEn）
 func DeptTree(ctx context.Context) ([]*model.Department, error) {
 	var depts []*model.Department

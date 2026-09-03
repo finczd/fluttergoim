@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
+import '../services/user_cache.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 
@@ -32,23 +33,30 @@ class _QrConfirmPageState extends State<QrConfirmPage> {
   }
 
   Future<void> _loadProfile() async {
-    try {
-      final r = await _api.get('/api/v1/user/profile');
-      final d = (r.data['data'] as Map<String, dynamic>?) ?? {};
-      if (!mounted) return;
-      setState(() {
-        _nickname = (d['nickname'] ?? d['account'] ?? '').toString();
-        _avatar = (d['avatar'] ?? '').toString();
-      });
-    } catch (_) {}
+    // 进程内缓存命中直接用（一次登录会话只拉一次 /user/profile）
+    Map<String, dynamic>? d = UserCache.myProfileData;
+    if (d == null) {
+      try {
+        final r = await _api.get('/api/v1/user/profile');
+        d = (r.data['data'] as Map<String, dynamic>?) ?? {};
+        UserCache.setMyProfile(d);
+      } catch (_) {
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _nickname = (d?['nickname'] ?? d?['account'] ?? '').toString();
+      _avatar = (d?['avatar'] ?? '').toString();
+    });
   }
 
   Future<void> _confirm() async {
     if (_confirming || _done) return;
     setState(() => _confirming = true);
     try {
-      final r = await _api.post('/api/v1/auth/qr/confirm',
-          data: {'ticket': widget.ticket});
+      final r = await _api
+          .post('/api/v1/auth/qr/confirm', data: {'ticket': widget.ticket});
       final code = (r.data as Map<String, dynamic>)['code'];
       if (!mounted) return;
       if (code == 0) {
@@ -71,8 +79,7 @@ class _QrConfirmPageState extends State<QrConfirmPage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final initial =
-        _nickname.isEmpty ? '?' : _nickname.characters.first;
+    final initial = _nickname.isEmpty ? '?' : _nickname.characters.first;
     return Scaffold(
       backgroundColor: cs.surface,
       appBar: AppBar(
@@ -118,8 +125,8 @@ class _QrConfirmPageState extends State<QrConfirmPage> {
             ),
             const SizedBox(height: 12),
             Text(_nickname,
-                style: const TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.w600)),
+                style:
+                    const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             const SizedBox(height: 28),
             // 登录设备卡片
             Container(
@@ -154,8 +161,9 @@ class _QrConfirmPageState extends State<QrConfirmPage> {
                     child: SizedBox(
                       height: 46,
                       child: OutlinedButton(
-                        onPressed:
-                            _confirming ? null : () => Navigator.of(context).pop(false),
+                        onPressed: _confirming
+                            ? null
+                            : () => Navigator.of(context).pop(false),
                         style: OutlinedButton.styleFrom(
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),

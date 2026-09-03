@@ -59,7 +59,8 @@ class _NewConversationPageState extends State<NewConversationPage> {
   String _name(Map<String, dynamic> u) {
     final r = u['remark']?.toString() ?? '';
     if (r.isNotEmpty) return r;
-    return (u['nickname'] ?? u['account'] ??
+    return (u['nickname'] ??
+            u['account'] ??
             AppLocalizations.of(context).t('newConvUser'))
         .toString();
   }
@@ -151,8 +152,8 @@ class _NewConversationPageState extends State<NewConversationPage> {
             child: TextField(
               controller: _searchCtrl,
               onChanged: (_) => setState(() {}),
-              decoration:
-                  AppTheme.authInput(hint: t('newConvSearchHint'), icon: Icons.search),
+              decoration: AppTheme.authInput(
+                  hint: t('newConvSearchHint'), icon: Icons.search),
             ),
           ),
           if (_loading)
@@ -175,15 +176,38 @@ class _NewConversationPageState extends State<NewConversationPage> {
                         final id = (u['id'] ?? '').toString();
                         final selected = _selected.contains(id);
                         final name = _name(u);
+                        final avatar = (u['avatar'] ?? '').toString();
                         return ListTile(
                           onTap: () => setState(() {
                             selected ? _selected.remove(id) : _selected.add(id);
                           }),
-                          leading: CircleAvatar(
-                            backgroundColor: AppTheme.primary,
-                            child: Text(
-                                name.isEmpty ? '?' : name.characters.first,
-                                style: const TextStyle(color: Colors.white)),
+                          leading: Container(
+                            width: 42,
+                            height: 42,
+                            clipBehavior: Clip.antiAlias,
+                            decoration: const BoxDecoration(
+                              color: AppTheme.primary,
+                              shape: BoxShape.circle,
+                            ),
+                            alignment: Alignment.center,
+                            // 有头像显示真实头像，加载失败/无头像回落首字母
+                            child: avatar.isNotEmpty
+                                ? Image.network(
+                                    avatar,
+                                    width: 42,
+                                    height: 42,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => Text(
+                                        name.isEmpty
+                                            ? '?'
+                                            : name.characters.first,
+                                        style: const TextStyle(
+                                            color: Colors.white)),
+                                  )
+                                : Text(
+                                    name.isEmpty ? '?' : name.characters.first,
+                                    style:
+                                        const TextStyle(color: Colors.white)),
                           ),
                           title: Text(name,
                               style: const TextStyle(
@@ -242,8 +266,8 @@ class _NewConversationPageState extends State<NewConversationPage> {
               controller: _nameCtrl,
               autofocus: true,
               maxLength: 30,
-              decoration:
-                  AppTheme.authInput(hint: t('newConvGroupNameHint'), icon: Icons.group),
+              decoration: AppTheme.authInput(
+                  hint: t('newConvGroupNameHint'), icon: Icons.group),
             ),
             const SizedBox(height: 12),
             Text(t('newConvSelectedCount', {'count': '${_selected.length}'}),

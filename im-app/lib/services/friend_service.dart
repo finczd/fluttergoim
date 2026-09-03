@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 
 import 'api_client.dart';
+import 'conversation_service.dart' show ApiException;
+import 'user_cache.dart';
 
 class FriendRequest {
   final String id; // 字符串 ID（H5 精度安全）
@@ -19,11 +21,22 @@ class FriendService {
   final Dio _dio = ApiClient.instance.dio;
   final _api = ApiClient.instance;
 
+  /// 业务 code 校验：服务端失败时返回 code!=0 + data:null（HTTP 仍是 200），
+  /// 不检查会把失败静默解析成"空列表"（表现为明明有好友却显示 0）
+  void _ensureOk(Map<String, dynamic> body) {
+    final code = (body['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) {
+      throw Exception(body['message']?.toString() ?? 'request failed ($code)');
+    }
+  }
+
   Future<List<Map<String, dynamic>>> list() async {
     final r = await _dio.get('/api/v1/friend/list',
         options: Options(
             headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
-    return ((r.data as Map<String, dynamic>)['data'] as List<dynamic>? ?? [])
+    final body = r.data as Map<String, dynamic>;
+    _ensureOk(body);
+    return ((body['data'] as List<dynamic>? ?? []))
         .map((e) => e as Map<String, dynamic>)
         .toList();
   }
@@ -42,7 +55,9 @@ class FriendService {
     final r = await _dio.get('/api/v1/friend/request/incoming',
         options: Options(
             headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
-    return ((r.data as Map<String, dynamic>)['data'] as List<dynamic>? ?? [])
+    final body = r.data as Map<String, dynamic>;
+    _ensureOk(body);
+    return ((body['data'] as List<dynamic>? ?? []))
         .map((e) => FriendRequest.fromJson(e as Map<String, dynamic>))
         .toList();
   }
@@ -92,6 +107,22 @@ class FriendService {
         options: Options(
             headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
     return (r.data as Map<String, dynamic>)['data'] as Map<String, dynamic>;
+  }
+
+  /// 按 ID 查用户公开资料（GET /user/:id，服务端附带在线状态）。
+  /// 扫个人二维码落地页用（判断好友/陌生人）。
+  /// 带 24h 进程内缓存：同一用户短时间内重复查看不再重复请求
+  /// （在线状态可能略滞后，可下拉刷新强刷——此处调用场景均无强刷入口，可接受）
+  Future<Map<String, dynamic>> userDetail(String userId) async {
+    final cached = UserCache.get(userId);
+    if (cached != null) return cached;
+    final r = await _api.get('/api/v1/user/$userId');
+    final body = r.data as Map<String, dynamic>;
+    final code = (body['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) throw ApiException(code, body['message']?.toString() ?? '');
+    final d = ((body['data'] as Map?) ?? {}).cast<String, dynamic>();
+    if (d.isNotEmpty) UserCache.put(userId, d);
+    return d;
   }
 
   /// 更新资料（昵称/签名/头像）

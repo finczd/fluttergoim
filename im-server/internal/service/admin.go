@@ -83,6 +83,10 @@ type AuthFlags struct {
 	DefaultAvatar string `json:"defaultAvatar"`
 	// 小助手头像（通讯录官方入口显示，后台「智能小助手」可配）
 	AssistantAvatar string `json:"assistantAvatar"`
+	// 功能开关：是否开启零钱（关闭 → 聊天窗口不显示红包/转账入口、用户中心不显示我的钱包）
+	WalletOn bool `json:"walletOn"`
+	// 功能开关：是否开启邀请码（关闭 → 用户中心不显示我的邀请码；与「邀请码注册」开关相互独立）
+	InviteFeatureOn bool `json:"inviteFeatureOn"`
 }
 
 func GetAuthFlags(ctx context.Context, cfg *config.Config) AuthFlags {
@@ -104,6 +108,8 @@ func GetAuthFlags(ctx context.Context, cfg *config.Config) AuthFlags {
 		OnlineDevice:    strVal(SysConfigGet(ctx, "online_device", "")),
 		DefaultAvatar:   strVal(SysConfigGet(ctx, "default_avatar", "")),
 		AssistantAvatar: GetAssistantConfig(ctx, cfg).Avatar,
+		WalletOn:        boolVal(SysConfigGet(ctx, "wallet_enabled", true)),
+		InviteFeatureOn: boolVal(SysConfigGet(ctx, "invite_feature_enabled", true)),
 	}
 }
 
@@ -325,11 +331,26 @@ func AdminAppDelete(ctx context.Context, id int64) error {
 
 // ============ 群组管理 ============
 
-func AdminGroupList(ctx context.Context) ([]model.Conversation, error) {
+// AdminGroupOut 群组管理列表项：群信息 + 成员数（后台显示人数）
+type AdminGroupOut struct {
+	model.Conversation
+	MemberCount int64 `json:"memberCount"`
+}
+
+func AdminGroupList(ctx context.Context) ([]AdminGroupOut, error) {
 	var groups []model.Conversation
 	err := store.DB.Where("type = ? AND status = ?", model.ConvGroup, model.ConvNormal).
 		Order("id desc").Limit(200).Find(&groups).Error
-	return groups, err
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AdminGroupOut, 0, len(groups))
+	for _, g := range groups {
+		var cnt int64
+		store.DB.Model(&model.ConversationMember{}).Where("conversation_id = ?", g.ID).Count(&cnt)
+		out = append(out, AdminGroupOut{Conversation: g, MemberCount: cnt})
+	}
+	return out, nil
 }
 
 func AdminGroupDisband(ctx context.Context, id int64) error {
@@ -345,15 +366,37 @@ type AdminMsgQuery struct {
 	Kw     string `json:"kw"`
 	From   int64  `json:"from"` // unix ms
 	To     int64  `json:"to"`
+	Type   int    `json:"type"` // 消息类型筛选（1文本 2图片 3文件 4语音 5视频 6系统 7通话 8红包 9转账）
 }
 
-func AdminMessageQuery(ctx context.Context, q *AdminMsgQuery, page, size int) ([]model.Message, int64, error) {
+// AdminMessageOut 后台消息列表项：消息本体 + 发送者/接收者/会话冗余信息（前端直接渲染头像昵称）
+type AdminMessageOut struct {
+	model.Message
+	// 发送者（senderId 为 -1 即小助手，昵称头像取后台助手配置）
+	SenderName    string `json:"senderName"`
+	SenderAvatar  string `json:"senderAvatar"`
+	SenderShortID string `json:"senderShortId"`
+	// 接收者：单聊为对方用户，群聊为群本身
+	ReceiverID      string `json:"receiverId"`
+	ReceiverName    string `json:"receiverName"`
+	ReceiverAvatar  string `json:"receiverAvatar"`
+	ReceiverShortID string `json:"receiverShortId"`
+	// 会话冗余
+	ConvType   int    `json:"convType"`
+	ConvName   string `json:"convName"`
+	ConvAvatar string `json:"convAvatar"`
+}
+
+func AdminMessageQuery(ctx context.Context, q *AdminMsgQuery, page, size int) ([]AdminMessageOut, int64, error) {
 	filter := bson.M{}
 	if q.ConvID > 0 {
 		filter["conversation_id"] = q.ConvID
 	}
 	if q.UserID > 0 {
 		filter["sender_id"] = q.UserID
+	}
+	if q.Type > 0 {
+		filter["type"] = q.Type
 	}
 	if q.Kw != "" {
 		// 转义正则特殊字符，避免非法 regex 报错
@@ -383,8 +426,128 @@ func AdminMessageQuery(ctx context.Context, q *AdminMsgQuery, page, size int) ([
 		return nil, 0, err
 	}
 	var msgs []model.Message
-	cur.All(ctx, &msgs)
-	return msgs, total, nil
+	if err := cur.All(ctx, &msgs); err != nil {
+		return nil, 0, err
+	}
+
+	out := make([]AdminMessageOut, 0, len(msgs))
+	if len(msgs) == 0 {
+		return out, total, nil
+	}
+
+	// ---- 批量取会话 ----
+	convIDs := make([]int64, 0, len(msgs))
+	seen := map[int64]bool{}
+	for _, m := range msgs {
+		if !seen[m.ConversationID] {
+			seen[m.ConversationID] = true
+			convIDs = append(convIDs, m.ConversationID)
+		}
+	}
+	var convs []model.Conversation
+	store.DB.Where("id IN ?", convIDs).Find(&convs)
+	convMap := map[int64]model.Conversation{}
+	for _, cv := range convs {
+		convMap[cv.ID] = cv
+	}
+
+	// ---- 批量取单聊成员（单聊接收者 = 发送者之外的另一个成员）----
+	directIDs := make([]int64, 0)
+	for _, cv := range convs {
+		if cv.Type == model.ConvDirect {
+			directIDs = append(directIDs, cv.ID)
+		}
+	}
+	convOther := map[int64][]int64{} // convID -> 成员 userID 列表（单聊最多 2 个）
+	if len(directIDs) > 0 {
+		var mems []model.ConversationMember
+		store.DB.Where("conversation_id IN ?", directIDs).Find(&mems)
+		for _, mm := range mems {
+			convOther[mm.ConversationID] = append(convOther[mm.ConversationID], mm.UserID)
+		}
+	}
+
+	// ---- 批量取用户 ----
+	userSet := map[int64]bool{}
+	for _, m := range msgs {
+		if m.SenderID > 0 {
+			userSet[m.SenderID] = true
+		}
+		for _, uid := range convOther[m.ConversationID] {
+			if uid > 0 {
+				userSet[uid] = true
+			}
+		}
+	}
+	userIDs := make([]int64, 0, len(userSet))
+	for uid := range userSet {
+		userIDs = append(userIDs, uid)
+	}
+	userMap := map[int64]model.User{}
+	if len(userIDs) > 0 {
+		var users []model.User
+		store.DB.Where("id IN ?", userIDs).Find(&users)
+		for _, u := range users {
+			userMap[u.ID] = u
+		}
+	}
+
+	// ---- 小助手配置（昵称/头像/靓号）----
+	ac := GetAssistantConfig(ctx, nil)
+
+	fillUser := func(uid int64) (string, string, string) {
+		if uid == -1 {
+			return ac.Name, ac.Avatar, "10000"
+		}
+		u, ok := userMap[uid]
+		if !ok {
+			return fmt.Sprintf("用户%v", uid), "", ""
+		}
+		short := ""
+		if u.ShortID != nil {
+			short = *u.ShortID
+		}
+		return u.Nickname, u.Avatar, short
+	}
+
+	for _, m := range msgs {
+		o := AdminMessageOut{Message: m}
+		o.SenderName, o.SenderAvatar, o.SenderShortID = fillUser(m.SenderID)
+
+		cv := convMap[m.ConversationID]
+		o.ConvType = cv.Type
+		if cv.Type == model.ConvGroup {
+			// 群聊：接收者就是群本身
+			o.ReceiverID = strconv.FormatInt(m.ConversationID, 10)
+			o.ReceiverName = cv.NameZh
+			o.ReceiverAvatar = cv.Avatar
+			o.ConvName = cv.NameZh
+			o.ConvAvatar = cv.Avatar
+		} else {
+			// 单聊：接收者 = 发送者之外的另一个成员
+			other := int64(0)
+			for _, uid := range convOther[m.ConversationID] {
+				if uid != m.SenderID {
+					other = uid
+					break
+				}
+			}
+			o.ReceiverID = strconv.FormatInt(other, 10)
+			o.ReceiverName, o.ReceiverAvatar, o.ReceiverShortID = fillUser(other)
+			peerName, peerAvatar, _ := fillUser(other)
+			o.ConvName = peerName
+			o.ConvAvatar = peerAvatar
+		}
+		out = append(out, o)
+	}
+	return out, total, nil
+}
+
+// AdminMessageBlock 屏蔽/恢复屏蔽一条消息（后台审计）：blocked=true 后用户端历史/同步不再下发
+func AdminMessageBlock(ctx context.Context, msgID int64, blocked bool) error {
+	_, err := msgColl().UpdateOne(ctx, bson.M{"msg_id": msgID},
+		bson.M{"$set": bson.M{"blocked": blocked}})
+	return err
 }
 
 // ============ 数据统计 ============

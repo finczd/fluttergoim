@@ -33,6 +33,7 @@ func CreateDirect(ctx context.Context, userID, otherID int64) (*model.Conversati
 		JOIN conversation_member m2 ON m2.conversation_id = c.id AND m2.user_id = ?
 		WHERE c.type = 1 AND c.status = 1 LIMIT 1`, userID, otherID).Scan(&conv).Error
 	if err == nil && conv.ID > 0 {
+		fillDirectAvatar(ctx, &conv, otherID)
 		return &conv, nil
 	}
 
@@ -45,7 +46,22 @@ func CreateDirect(ctx context.Context, userID, otherID int64) (*model.Conversati
 	}
 	store.DB.Create(&model.ConversationMember{ConversationID: cid, UserID: userID, Role: model.MemberNormal, JoinedAt: now})
 	store.DB.Create(&model.ConversationMember{ConversationID: cid, UserID: otherID, Role: model.MemberNormal, JoinedAt: now})
+	fillDirectAvatar(ctx, &conv, otherID)
 	return &conv, nil
+}
+
+// fillDirectAvatar 单聊会话裸记录通常不带头像：实时补对方用户头像与最近上线时间。
+// 与 ConversationList 的补齐逻辑对齐——否则通讯录"创建会话→进资料页"路径
+// 拿到的 avatar 恒为空，资料页头图只能显示首字母（聊天窗口走列表接口所以正常）。
+func fillDirectAvatar(ctx context.Context, conv *model.Conversation, otherID int64) {
+	u, err := GetUserDetail(ctx, otherID)
+	if err != nil {
+		return
+	}
+	conv.LastLoginAt = u.LastLoginAt
+	if conv.Avatar == "" && u.Avatar != "" {
+		conv.Avatar = u.Avatar
+	}
 }
 
 // CreateGroup 创建群聊
@@ -86,6 +102,7 @@ type ConvItem struct {
 	PeerOnlineZh     string             `json:"peerOnlineZh"`     // 对方在线类型中文（手机在线/H5在线/电脑在线）
 	PeerOnlineIP     []string           `json:"peerOnlineIp"`     // 对方在线 IP（需求8）
 	PeerShortID      string             `json:"peerShortId"`      // 对方靓号 ID（需求12：小助手固定 10000）
+	PeerVipShortID   bool               `json:"peerVipShortId"`   // 对方是否靓号（预留池已绑定）→ 客户端资料页显示「靓ID」徽标
 	PeerRemark       string             `json:"peerRemark"`       // 我对对方设置的备注
 }
 
@@ -93,8 +110,10 @@ type ConvItem struct {
 // 嵌入 model.User 内联用户字段，Role 覆盖为用户表全局角色（群内角色以本字段为准）
 type ConvMemberInfo struct {
 	model.User
-	Role   int    `json:"role"`   // 群内角色：1=群主 2=管理员 3=普通成员
-	Remark string `json:"remark"` // 好友备注（按当前用户视角，非好友为空）
+	Role            int    `json:"role"`            // 群内角色：1=群主 2=管理员 3=普通成员
+	Remark          string `json:"remark"`          // 好友备注（按当前用户视角，非好友为空）
+	VipShortID      bool   `json:"vipShortId"`      // 是否靓号（预留池已绑定）→ 客户端资料页显示「靓ID」徽标
+	SpeakMutedUntil int64  `json:"speakMutedUntil"` // 禁言截止时间戳（秒），0=未禁言（群主/管理员管理用）
 }
 
 // friendRemark 查询当前用户对某好友设置的备注（无则返回空）
@@ -158,20 +177,27 @@ func ConvList(ctx context.Context, userID int64) ([]*ConvItem, error) {
 			if otherID := directOtherID(ctx, m.ConversationID, userID); otherID != 0 {
 				item.PeerID = otherID
 				if otherID == -1 {
-					// 小助手虚拟账号（名称固定"小助手"，靓号 ID 固定 10000——需求12）
-					item.ConversationName = "小助手"
+					// 小助手虚拟账号（靓号 ID 固定 10000——需求12），昵称/头像取后台助手配置
+					ac := GetAssistantConfig(ctx, nil)
+					item.ConversationName = ac.Name
 					item.PeerShortID = "10000"
+					// 小助手永远在线（官方账号）
+					item.PeerOnline = true
+					item.PeerOnlineZh = "在线"
 					// 后台设置的小助手头像下发到会话列表/聊天页
-					if av := AssistantAvatar(ctx); av != "" {
+					if av := ac.Avatar; av != "" {
 						item.Conversation.Avatar = av
 					}
 				} else {
-					if u, err := GetUserDetail(ctx, otherID); err == nil {
-						item.ConversationName = u.Nickname
-						item.PeerShortID = model.StrVal(u.ShortID)
+				if u, err := GetUserDetail(ctx, otherID); err == nil {
+					item.ConversationName = u.Nickname
+					item.PeerShortID = model.StrVal(u.ShortID)
+					item.PeerVipShortID = IsVipShortID(ctx, otherID, u.ShortID)
 						if item.Conversation.Avatar == "" {
 							item.Conversation.Avatar = u.Avatar
 						}
+						// 资料页"最近上线"数据源：聊天窗口路径的会话来自本列表
+						item.Conversation.LastLoginAt = u.LastLoginAt
 					}
 					// 需求：设置了备注则优先显示备注名
 					item.PeerRemark = friendRemark(ctx, userID, otherID)
@@ -255,11 +281,31 @@ func directOtherID(ctx context.Context, convID, userID int64) int64 {
 
 // ============ 群管理 ============
 
+// getConv 加载会话（不存在/已解散返回 ConvNotFound）
+func getConv(ctx context.Context, convID int64) (*model.Conversation, error) {
+	var conv model.Conversation
+	if err := store.DB.First(&conv, convID).Error; err != nil {
+		return nil, errs.ConvNotFound
+	}
+	if conv.Status == model.ConvDisband {
+		return nil, errs.ConvNotFound
+	}
+	return &conv, nil
+}
+
 func GroupInvite(ctx context.Context, userID, convID int64, memberIDs []int64) error {
 	role := memberRole(ctx, convID, userID)
 	if role != model.MemberOwner && role != model.MemberAdmin {
-		return errs.Forbidden
+		// 普通成员仅在群允许时才能邀请（群管理开关：允许成员邀请）
+		conv, err := getConv(ctx, convID)
+		if err != nil {
+			return err
+		}
+		if conv.AllowMemberInvite != 1 {
+			return errs.Forbidden
+		}
 	}
+	added := make([]int64, 0, len(memberIDs))
 	for _, uid := range memberIDs {
 		var cnt int64
 		store.DB.Model(&model.ConversationMember{}).
@@ -268,29 +314,71 @@ func GroupInvite(ctx context.Context, userID, convID int64, memberIDs []int64) e
 			store.DB.Create(&model.ConversationMember{
 				ConversationID: convID, UserID: uid, Role: model.MemberNormal, JoinedAt: time.Now(),
 			})
+			added = append(added, uid)
+		}
+	}
+	// 群事件系统提示：邀请人进群（每新增一人一条，聊天流灰色提示）
+	if actor := userName(userID); actor != "" {
+		for _, uid := range added {
+			b, _ := json.Marshal(map[string]interface{}{
+				"kind": "invite", "actor": actor, "target": userName(uid),
+			})
+			sendGroupSystemMsg(ctx, convID, string(b))
 		}
 	}
 	return nil
 }
 
 func GroupRemove(ctx context.Context, userID, convID, targetID int64) error {
+	if userID == targetID {
+		// 移除自己请走退出群（quit），这里直接拒绝避免误触
+		return errs.Forbidden
+	}
 	role := memberRole(ctx, convID, userID)
 	if role != model.MemberOwner && role != model.MemberAdmin {
 		return errs.Forbidden
 	}
-	return store.DB.Where("conversation_id = ? AND user_id = ?", convID, targetID).
-		Delete(&model.ConversationMember{}).Error
+	// 层级约束：不能移除群主；管理员只能移除普通成员
+	targetRole := memberRole(ctx, convID, targetID)
+	if targetRole == model.MemberOwner {
+		return errs.Forbidden
+	}
+	if role == model.MemberAdmin && targetRole == model.MemberAdmin {
+		return errs.Forbidden
+	}
+	targetName := userName(targetID)
+	if err := store.DB.Where("conversation_id = ? AND user_id = ?", convID, targetID).
+		Delete(&model.ConversationMember{}).Error; err != nil {
+		return err
+	}
+	// 群事件系统提示：成员被移出群聊
+	if actor := userName(userID); actor != "" && targetName != "" {
+		b, _ := json.Marshal(map[string]interface{}{
+			"kind": "kick", "actor": actor, "target": targetName,
+		})
+		sendGroupSystemMsg(ctx, convID, string(b))
+	}
+	return nil
 }
 
 func GroupQuit(ctx context.Context, userID, convID int64) error {
 	var cnt int64
 	store.DB.Model(&model.ConversationMember{}).Where("conversation_id = ?", convID).Count(&cnt)
 	if cnt <= 1 {
-		// 最后一人退出 → 解散
+		// 最后一人退出 → 解散（不再发退出提示）
 		store.DB.Model(&model.Conversation{}).Where("id = ?", convID).Update("status", model.ConvDisband)
 	}
-	return store.DB.Where("conversation_id = ? AND user_id = ?", convID, userID).
-		Delete(&model.ConversationMember{}).Error
+	name := userName(userID)
+	if err := store.DB.Where("conversation_id = ? AND user_id = ?", convID, userID).
+		Delete(&model.ConversationMember{}).Error; err != nil {
+		return err
+	}
+	// 群事件系统提示：成员退出群聊
+	if name != "" && cnt > 1 {
+		b, _ := json.Marshal(map[string]interface{}{"kind": "quit", "target": name})
+		sendGroupSystemMsg(ctx, convID, string(b))
+	}
+	return nil
 }
 
 func GroupDisband(ctx context.Context, userID, convID int64) error {
@@ -302,7 +390,7 @@ func GroupDisband(ctx context.Context, userID, convID int64) error {
 	return store.DB.Where("conversation_id = ?", convID).Delete(&model.ConversationMember{}).Error
 }
 
-func GroupUpdate(ctx context.Context, userID, convID int64, nameZh, nameEn, announcementZh, announcementEn string) error {
+func GroupUpdate(ctx context.Context, userID, convID int64, nameZh, nameEn, announcementZh, announcementEn, avatar string) error {
 	role := memberRole(ctx, convID, userID)
 	if role != model.MemberOwner && role != model.MemberAdmin {
 		return errs.Forbidden
@@ -320,10 +408,190 @@ func GroupUpdate(ctx context.Context, userID, convID int64, nameZh, nameEn, anno
 	if announcementEn != "" {
 		updates["announcement_en"] = announcementEn
 	}
+	if avatar != "" {
+		updates["avatar"] = avatar
+	}
 	if len(updates) == 0 {
 		return nil
 	}
 	return store.DB.Model(&model.Conversation{}).Where("id = ?", convID).Updates(updates).Error
+}
+
+// ============ 群聊管理（群主/管理员） ============
+
+// GroupSettings 群管理设置（群管理页读写）
+type GroupSettings struct {
+	MuteAll           bool `json:"muteAll"`           // 全员禁言：仅群主/管理员可发言
+	PrivacyEnabled    bool `json:"privacyEnabled"`    // 成员隐私：普通成员不可查看成员列表
+	AllowMemberInvite bool `json:"allowMemberInvite"` // 允许群成员邀请成员
+	QrJoinEnabled     bool `json:"qrJoinEnabled"`     // 二维码进群
+}
+
+// GetGroupSettings 读取群管理设置（全体成员可读：成员页需要按"允许邀请"决定是否显示邀请入口）
+func GetGroupSettings(ctx context.Context, userID, convID int64) (*GroupSettings, error) {
+	if !isMember(ctx, convID, userID) {
+		return nil, errs.ConvNotFound
+	}
+	conv, err := getConv(ctx, convID)
+	if err != nil {
+		return nil, err
+	}
+	return &GroupSettings{
+		MuteAll:           conv.MuteAll == 1,
+		PrivacyEnabled:    conv.PrivacyEnabled == 1,
+		AllowMemberInvite: conv.AllowMemberInvite == 1,
+		QrJoinEnabled:     conv.QrJoinEnabled == 1,
+	}, nil
+}
+
+// SetGroupSettings 更新群管理设置（仅群主）
+func SetGroupSettings(ctx context.Context, userID, convID int64, s *GroupSettings) error {
+	if memberRole(ctx, convID, userID) != model.MemberOwner {
+		return errs.Forbidden
+	}
+	old, err := getConv(ctx, convID)
+	if err != nil {
+		return err
+	}
+	b2i := map[bool]int{true: 1, false: 0}
+	if err := store.DB.Model(&model.Conversation{}).Where("id = ?", convID).Updates(map[string]interface{}{
+		"mute_all":            b2i[s.MuteAll],
+		"privacy_enabled":     b2i[s.PrivacyEnabled],
+		"allow_member_invite": b2i[s.AllowMemberInvite],
+		"qr_join_enabled":     b2i[s.QrJoinEnabled],
+	}).Error; err != nil {
+		return err
+	}
+	// 群事件系统提示：全员禁言开启/解除（仅状态变化时发）
+	if (old.MuteAll == 1) != s.MuteAll {
+		kind := "muteAllOff"
+		if s.MuteAll {
+			kind = "muteAllOn"
+		}
+		payload := map[string]interface{}{"kind": kind, "actor": userName(userID)}
+		b, _ := json.Marshal(payload)
+		sendGroupSystemMsg(ctx, convID, string(b))
+	}
+	return nil
+}
+
+// SetGroupAdmin 设置/取消管理员（仅群主；目标必须是普通成员/管理员，不能操作群主）
+func SetGroupAdmin(ctx context.Context, userID, convID, targetID int64, admin bool) error {
+	if memberRole(ctx, convID, userID) != model.MemberOwner {
+		return errs.Forbidden
+	}
+	if targetID == userID {
+		return errs.Forbidden
+	}
+	targetRole := memberRole(ctx, convID, targetID)
+	if targetRole == model.MemberOwner {
+		return errs.Forbidden
+	}
+	want := model.MemberAdmin
+	if !admin {
+		want = model.MemberNormal
+	}
+	// 目标不是成员或已是期望角色则拒绝
+	if targetRole != model.MemberAdmin && targetRole != model.MemberNormal {
+		return errs.ConvNotFound
+	}
+	if targetRole == want {
+		return nil
+	}
+	return store.DB.Model(&model.ConversationMember{}).
+		Where("conversation_id = ? AND user_id = ?", convID, targetID).
+		Update("role", want).Error
+}
+
+// MuteMember 禁言/解除禁言成员（群主/管理员；不能禁言群主；管理员不能禁言管理员）
+func MuteMember(ctx context.Context, userID, convID, targetID int64, mute bool, minutes int) error {
+	if userID == targetID {
+		return errs.Forbidden
+	}
+	role := memberRole(ctx, convID, userID)
+	if role != model.MemberOwner && role != model.MemberAdmin {
+		return errs.Forbidden
+	}
+	targetRole := memberRole(ctx, convID, targetID)
+	if targetRole == model.MemberOwner {
+		return errs.Forbidden
+	}
+	if role == model.MemberAdmin && targetRole == model.MemberAdmin {
+		return errs.Forbidden
+	}
+	until := int64(0)
+	if mute {
+		if minutes <= 0 {
+			minutes = 10
+		}
+		if minutes > 43200 { // 上限 30 天
+			minutes = 43200
+		}
+		until = time.Now().Add(time.Duration(minutes) * time.Minute).Unix()
+	}
+	if err := store.DB.Model(&model.ConversationMember{}).
+		Where("conversation_id = ? AND user_id = ?", convID, targetID).
+		Update("speak_muted_until", until).Error; err != nil {
+		return err
+	}
+	// 群事件系统提示：禁言/解除禁言
+	if actor := userName(userID); actor != "" {
+		kind := "unmute"
+		payload := map[string]interface{}{
+			"kind": kind, "actor": actor, "target": userName(targetID),
+		}
+		if mute {
+			payload["kind"] = "mute"
+			payload["minutes"] = minutes
+		}
+		b, _ := json.Marshal(payload)
+		sendGroupSystemMsg(ctx, convID, string(b))
+	}
+	return nil
+}
+
+// GroupJoin 扫群二维码进群（需群开启"二维码进群"；群未解散；未满员）
+func GroupJoin(ctx context.Context, userID, convID int64) (*model.Conversation, error) {
+	conv, err := getConv(ctx, convID)
+	if err != nil {
+		return nil, err
+	}
+	if conv.Type != model.ConvGroup {
+		return nil, errs.ConvNotFound
+	}
+	if conv.QrJoinEnabled != 1 {
+		return nil, errs.Forbidden
+	}
+	var cnt int64
+	store.DB.Model(&model.ConversationMember{}).Where("conversation_id = ?", convID).Count(&cnt)
+	if cnt >= int64(conv.MaxMembers) {
+		return nil, errs.GroupFull
+	}
+	var exist int64
+	store.DB.Model(&model.ConversationMember{}).
+		Where("conversation_id = ? AND user_id = ?", convID, userID).Count(&exist)
+	if exist == 0 {
+		store.DB.Create(&model.ConversationMember{
+			ConversationID: convID, UserID: userID, Role: model.MemberNormal, JoinedAt: time.Now(),
+		})
+		// 群事件系统提示：扫码新成员加入
+		if name := userName(userID); name != "" {
+			b, _ := json.Marshal(map[string]interface{}{"kind": "join", "target": name})
+			sendGroupSystemMsg(ctx, convID, string(b))
+		}
+	}
+	return conv, nil
+}
+
+// GroupPreview 扫码进群前的群信息预览（二次确认页用；已登录即可，不要求是成员）
+func GroupPreview(ctx context.Context, convID int64) (*model.Conversation, int64, error) {
+	conv, err := getConv(ctx, convID)
+	if err != nil || conv.Type != model.ConvGroup {
+		return nil, 0, errs.ConvNotFound
+	}
+	var cnt int64
+	store.DB.Model(&model.ConversationMember{}).Where("conversation_id = ?", convID).Count(&cnt)
+	return conv, cnt, nil
 }
 
 // SetPin / SetMute 置顶 / 免打扰
@@ -340,38 +608,70 @@ func SetMute(ctx context.Context, userID, convID int64, mute bool) error {
 }
 
 // ConvMembers 会话成员（含用户信息，群设置展示）
-func ConvMembers(ctx context.Context, userID, convID int64) ([]ConvMemberInfo, error) {
+// 返回值：成员列表 + 群成员总数。
+// 成员隐私开启时，普通成员只下发前 15 个成员（资料页 2 排预览），总数照实返回。
+func ConvMembers(ctx context.Context, userID, convID int64) ([]ConvMemberInfo, int64, error) {
 	if !isMember(ctx, convID, userID) {
-		return nil, errs.ConvNotFound
+		return nil, 0, errs.ConvNotFound
 	}
+	conv, err := getConv(ctx, convID)
+	if err != nil {
+		return nil, 0, err
+	}
+	privacyLimited := conv.PrivacyEnabled == 1 && memberRole(ctx, convID, userID) == model.MemberNormal
 	var members []model.ConversationMember
-	if err := store.DB.Where("conversation_id = ?", convID).Find(&members).Error; err != nil {
-		return nil, err
+	q := store.DB.Where("conversation_id = ?", convID)
+	// 群主(1)→管理员(2)→普通成员(3)，同角色按进群时间先后（群主永远排第一）
+	q = q.Order("role ASC, joined_at ASC, id ASC")
+	if privacyLimited {
+		q = q.Limit(15)
+	}
+	if err := q.Find(&members).Error; err != nil {
+		return nil, 0, err
+	}
+	var total int64
+	if privacyLimited {
+		store.DB.Model(&model.ConversationMember{}).Where("conversation_id = ?", convID).Count(&total)
+	} else {
+		total = int64(len(members))
 	}
 	ids := make([]int64, 0, len(members))
 	roleMap := make(map[int64]int, len(members))
+	muteMap := make(map[int64]int64, len(members))
 	for _, m := range members {
 		ids = append(ids, m.UserID)
 		roleMap[m.UserID] = m.Role
+		muteMap[m.UserID] = m.SpeakMutedUntil
 	}
 	if len(ids) == 0 {
-		return []ConvMemberInfo{}, nil
+		return []ConvMemberInfo{}, total, nil
 	}
 	var users []model.User
 	if err := store.DB.Where("id IN ?", ids).Find(&users).Error; err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	userMap := make(map[int64]model.User, len(users))
+	for _, u := range users {
+		userMap[u.ID] = u
 	}
 	// 按当前用户视角补好友备注（群聊 @ 昵称等场景可用备注名）
 	remarks := friendRemarkMap(ctx, userID, ids)
-	out := make([]ConvMemberInfo, 0, len(users))
-	for _, u := range users {
+	// 输出顺序跟随 members 排序：群主→管理员→普通成员，同角色按进群时间
+	out := make([]ConvMemberInfo, 0, len(members))
+	for _, m := range members {
+		u, ok := userMap[m.UserID]
+		if !ok {
+			continue
+		}
 		out = append(out, ConvMemberInfo{
-			User:   u,
-			Role:   roleMap[u.ID],
-			Remark: remarks[u.ID],
+			User:            u,
+			Role:            roleMap[u.ID],
+			Remark:          remarks[u.ID],
+			VipShortID:      IsVipShortID(ctx, u.ID, u.ShortID),
+			SpeakMutedUntil: muteMap[u.ID],
 		})
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // SetPinMessage 置顶/取消置顶消息（所有成员可置顶；支持多条 pinnedMsgIDs 列表）

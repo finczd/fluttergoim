@@ -15,7 +15,8 @@ class ScanQrPage extends StatelessWidget {
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(t('scanQrTitle'), style: const TextStyle(color: Colors.white)),
+        title:
+            Text(t('scanQrTitle'), style: const TextStyle(color: Colors.white)),
       ),
       body: Center(
         child: Column(
@@ -26,8 +27,8 @@ class ScanQrPage extends StatelessWidget {
             Text(
               t('scanQrPlaceholder'),
               textAlign: TextAlign.center,
-              style:
-                  const TextStyle(fontSize: 14, color: Colors.white60, height: 1.6),
+              style: const TextStyle(
+                  fontSize: 14, color: Colors.white60, height: 1.6),
             ),
           ],
         ),

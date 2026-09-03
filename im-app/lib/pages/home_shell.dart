@@ -201,9 +201,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       ),
       child: Text(count > 99 ? '99+' : '$count',
           style: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: Colors.white)),
+              fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
     );
   }
 }

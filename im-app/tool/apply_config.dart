@@ -7,6 +7,7 @@
 //   2. packageName  → android/app/build.gradle 的 applicationId / namespace
 //   3. versionName
 //      versionCode  → pubspec.yaml 的 version（Gradle 通过 flutter.versionName 读取）
+//      versionName  → lib/services/update_service.dart 的 currentVersion（检查更新时的本地版本基准）
 //   4. apiBase
 //      wsBase       → assets/config/app_config.json（App 运行时读取接口地址）
 //   5. icon         → 检查文件是否存在（存在则提示用 flutter_launcher_icons 生成）
@@ -20,6 +21,7 @@ const _gradle = 'android/app/build.gradle';
 const _gradleKts = 'android/app/build.gradle.kts';
 const _pubspec = 'pubspec.yaml';
 const _runtimeCfg = 'assets/config/app_config.json';
+const _aboutPage = 'lib/services/update_service.dart';
 
 void main() {
   final cfgFile = File(_configFile);
@@ -85,6 +87,16 @@ void main() {
     );
   }
 
+  // 3.5) 版本基准 → update_service currentVersion（后台版本对比用，必须与打包版本一致）
+  if (verName.isNotEmpty) {
+    changed += _replaceOnce(
+      _aboutPage,
+      RegExp(r"static const currentVersion = '[^']*';"),
+      "static const currentVersion = '$verName';",
+      '版本基准 → update_service（检查更新对比用）',
+    );
+  }
+
   // 4) 接口地址 → 运行时配置（App 启动时读取）
   final runtime = File(_runtimeCfg);
   if (!runtime.existsSync()) {
@@ -108,7 +120,8 @@ void main() {
       stdout.writeln('      dart run flutter_launcher_icons');
     } else {
       stdout.writeln('  ⚠ 图标文件不存在：$icon');
-      stdout.writeln('    把 1024x1024 PNG 放到该路径，再执行 dart run flutter_launcher_icons');
+      stdout.writeln(
+          '    把 1024x1024 PNG 放到该路径，再执行 dart run flutter_launcher_icons');
     }
   }
 

@@ -33,7 +33,7 @@ func FriendListHandler() gin.HandlerFunc {
 			}
 		}
 		data := attachOnline(c, us)
-		for _, item := range data {
+		for i, item := range data {
 			if idStr, ok := item["id"].(string); ok {
 				if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
 					if r, ok := remarks[id]; ok {
@@ -41,6 +41,10 @@ func FriendListHandler() gin.HandlerFunc {
 					}
 				}
 			}
+			// 靓号标记：好友 short_id 在预留池且已绑定本人 → 客户端资料页显示「靓ID」徽标
+			// （us/data/friends 三者同序，见 attachOnline 实现）
+			data[i]["vipShortId"] = service.IsVipShortID(c.Request.Context(),
+				friends[i].User.ID, friends[i].User.ShortID)
 		}
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
 	}

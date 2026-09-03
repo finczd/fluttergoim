@@ -65,7 +65,8 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       // 后端 remark 接口（PUT /friend/:id/remark）暂未接入 UI 展示，仅调用
       final ok = await _svc.setRemark(_id, result);
       if (ok && mounted) {
-        AppDialogs.toast(context, AppLocalizations.of(context).t('friendDetailRemarkSaved'));
+        AppDialogs.toast(
+            context, AppLocalizations.of(context).t('friendDetailRemarkSaved'));
       }
     }
   }
@@ -82,7 +83,8 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     if (yes != true) return;
     final ok = await _svc.delete(_id);
     if (ok && mounted) {
-      AppDialogs.toast(context, AppLocalizations.of(context).t('friendDetailFriendDeleted'));
+      AppDialogs.toast(
+          context, AppLocalizations.of(context).t('friendDetailFriendDeleted'));
       Navigator.of(context).pop(true);
     }
   }
@@ -99,7 +101,8 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     if (yes != true) return;
     final ok = await _svc.blacklistAdd(_id);
     if (ok && mounted) {
-      AppDialogs.toast(context, AppLocalizations.of(context).t('friendDetailBlocked'));
+      AppDialogs.toast(
+          context, AppLocalizations.of(context).t('friendDetailBlocked'));
       Navigator.of(context).pop(true);
     }
   }

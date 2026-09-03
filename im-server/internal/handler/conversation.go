@@ -143,13 +143,139 @@ func GroupUpdateHandler() gin.HandlerFunc {
 			NameEn         string `json:"nameEn"`
 			AnnouncementZh string `json:"announcementZh"`
 			AnnouncementEn string `json:"announcementEn"`
+			Avatar         string `json:"avatar"` // 群头像 URL（先调 /upload 拿到）
 		}
 		c.ShouldBindJSON(&body)
-		if err := service.GroupUpdate(c.Request.Context(), uid, convID, body.NameZh, body.NameEn, body.AnnouncementZh, body.AnnouncementEn); err != nil {
+		if err := service.GroupUpdate(c.Request.Context(), uid, convID, body.NameZh, body.NameEn, body.AnnouncementZh, body.AnnouncementEn, body.Avatar); err != nil {
 			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// GroupSettingsHandler 读取群管理设置（全员可读：成员页按"允许邀请"决定邀请入口）
+func GroupSettingsHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		convID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		s, err := service.GetGroupSettings(c.Request.Context(), uid, convID)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": s})
+	}
+}
+
+// SetGroupSettingsHandler 更新群管理设置（仅群主）
+func SetGroupSettingsHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		convID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		var body struct {
+			MuteAll           *bool `json:"muteAll"`
+			PrivacyEnabled    *bool `json:"privacyEnabled"`
+			AllowMemberInvite *bool `json:"allowMemberInvite"`
+			QrJoinEnabled     *bool `json:"qrJoinEnabled"`
+		}
+		c.ShouldBindJSON(&body)
+		// 未传的开关保持原值：先读旧值再覆盖
+		old, err := service.GetGroupSettings(c.Request.Context(), uid, convID)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		s := &service.GroupSettings{
+			MuteAll:           old.MuteAll,
+			PrivacyEnabled:    old.PrivacyEnabled,
+			AllowMemberInvite: old.AllowMemberInvite,
+			QrJoinEnabled:     old.QrJoinEnabled,
+		}
+		if body.MuteAll != nil {
+			s.MuteAll = *body.MuteAll
+		}
+		if body.PrivacyEnabled != nil {
+			s.PrivacyEnabled = *body.PrivacyEnabled
+		}
+		if body.AllowMemberInvite != nil {
+			s.AllowMemberInvite = *body.AllowMemberInvite
+		}
+		if body.QrJoinEnabled != nil {
+			s.QrJoinEnabled = *body.QrJoinEnabled
+		}
+		if err := service.SetGroupSettings(c.Request.Context(), uid, convID, s); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// SetGroupAdminHandler 设置/取消管理员（仅群主）
+func SetGroupAdminHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		convID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		var body struct {
+			UserID int64 `json:"userId,string" binding:"required"`
+			Admin  bool  `json:"admin"`
+		}
+		c.ShouldBindJSON(&body)
+		if err := service.SetGroupAdmin(c.Request.Context(), uid, convID, body.UserID, body.Admin); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// MuteMemberHandler 禁言/解除禁言成员（群主/管理员）
+func MuteMemberHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		convID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		var body struct {
+			UserID  int64 `json:"userId,string" binding:"required"`
+			Mute    bool  `json:"mute"`
+			Minutes int   `json:"minutes"` // 禁言时长（分钟）；mute=false 时忽略
+		}
+		c.ShouldBindJSON(&body)
+		if err := service.MuteMember(c.Request.Context(), uid, convID, body.UserID, body.Mute, body.Minutes); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// GroupJoinHandler 扫群二维码进群（需群开启"二维码进群"）
+func GroupJoinHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		convID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		conv, err := service.GroupJoin(c.Request.Context(), uid, convID)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": conv})
+	}
+}
+
+// GroupPreviewHandler 扫码进群前的群信息预览（二次确认页：群名/头像/成员数）
+func GroupPreviewHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		convID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		conv, cnt, err := service.GroupPreview(c.Request.Context(), convID)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{
+			"conversation": conv,
+			"memberCount":  cnt,
+		}})
 	}
 }
 
@@ -186,12 +312,12 @@ func ConvMembersHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := middleware.CurrentUserID(c)
 		convID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-		users, err := service.ConvMembers(c.Request.Context(), uid, convID)
+		users, total, err := service.ConvMembers(c.Request.Context(), uid, convID)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": users})
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": users, "memberCount": total})
 	}
 }
 

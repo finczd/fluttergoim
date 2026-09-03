@@ -1,11 +1,16 @@
+import 'dart:async';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../config/app_config.dart';
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/lang_picker.dart';
 import 'home_shell.dart';
 import 'pay_ui.dart';
 import 'register_page.dart';
@@ -26,12 +31,64 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
   String _logoUrl = ''; // 接口下发的品牌 Logo（appLogo / brandLogo）
 
+  // ===== 接口状态指示（左上角：点 + 毫秒）=====
+  // 0=检测中(灰) 1=正常(绿) 2=慢(黄) 3=不通(红)
+  static const int _apiChecking = 0;
+  static const int _apiOk = 1;
+  static const int _apiSlow = 2;
+  static const int _apiDown = 3;
+  int _apiState = _apiChecking;
+  int? _apiMs;
+  Timer? _apiTimer;
+  Dio? _apiProbe;
+
   final _svc = AuthService();
 
   @override
   void initState() {
     super.initState();
     _loadLogo();
+    _probeApi();
+    // 每 20 秒复测一次，保证离开页面进来说明是实时状态
+    _apiTimer = Timer.periodic(const Duration(seconds: 20), (_) => _probeApi());
+  }
+
+  /// 探测接口延迟：GET /api/v1/health，独立轻量 Dio（3s 超时，不走鉴权拦截器）。
+  /// 服务器有任何响应（含 4xx/5xx）都算"通"，只有连接失败/超时才算不通。
+  Future<void> _probeApi() async {
+    final sw = Stopwatch()..start();
+    try {
+      _apiProbe ??= Dio(BaseOptions(
+        baseUrl: AppConfig.instance.apiBase,
+        connectTimeout: const Duration(seconds: 3),
+        receiveTimeout: const Duration(seconds: 3),
+        // 服务器返回任何状态码都算连通（health 正常是 200，这里宽容处理）
+        validateStatus: (_) => true,
+      ));
+      await _apiProbe!.get('/api/v1/health');
+      sw.stop();
+      if (!mounted) return;
+      final ms = sw.elapsedMilliseconds;
+      setState(() {
+        _apiMs = ms;
+        _apiState = ms > 1000 ? _apiSlow : _apiOk;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _apiState = _apiDown;
+        _apiMs = null;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _apiTimer?.cancel();
+    _apiProbe?.close();
+    _accountCtrl.dispose();
+    _pwdCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadLogo() async {
@@ -44,13 +101,6 @@ class _LoginPageState extends State<LoginPage> {
     } catch (_) {
       // 接口失败静默回退默认 Logo
     }
-  }
-
-  @override
-  void dispose() {
-    _accountCtrl.dispose();
-    _pwdCtrl.dispose();
-    super.dispose();
   }
 
   // ========= 品牌 Logo（优先接口图片，失败/未加载回退默认） =========
@@ -87,7 +137,6 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
-    final isZh = Localizations.localeOf(context).languageCode == 'zh';
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final scheme = Theme.of(context).colorScheme;
 
@@ -112,16 +161,21 @@ class _LoginPageState extends State<LoginPage> {
             top: true,
             child: Stack(
               children: [
+                // 左上角：接口状态指示（点 + 毫秒）
+                Align(
+                  alignment: Alignment.topLeft,
+                  child: _buildApiStatusChip(scheme, t),
+                ),
                 SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(28, 0, 28, 16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       const SizedBox(height: 8),
-                      // 语言切换（右上角）
+                      // 语言切换（右上角，显示"下一个语言"）
                       Align(
                         alignment: Alignment.centerRight,
-                        child: _buildLangChip(scheme, isZh, t),
+                        child: _buildLangChip(scheme),
                       ),
                       // 品牌 Logo（接口加载，居中 + 紧凑；不显示软件名）
                       const SizedBox(height: 12),
@@ -164,12 +218,74 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  // ========= 右上角语言胶囊 =========
-  Widget _buildLangChip(
+  // ========= 左上角接口状态指示 =========
+  Widget _buildApiStatusChip(
     ColorScheme scheme,
-    bool isZh,
     String Function(String, [Map<String, String>]) t,
   ) {
+    late final Color dot;
+    late final String label;
+    switch (_apiState) {
+      case _apiOk:
+        dot = const Color(0xFF34C759); // 绿：正常
+        label = '${_apiMs ?? 0}ms';
+        break;
+      case _apiSlow:
+        dot = const Color(0xFFFFB020); // 黄：慢（>1000ms）
+        label = '${_apiMs ?? 0}ms';
+        break;
+      case _apiDown:
+        dot = const Color(0xFFE5484D); // 红：不通
+        label = t('apiDown');
+        break;
+      default:
+        dot = const Color(0xFF9E9E9E); // 灰：检测中
+        label = t('apiChecking');
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, left: 16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ========= 右上角语言入口（点击弹语言菜单，见 widgets/lang_picker.dart） =========
+  Widget _buildLangChip(ColorScheme scheme) {
+    // 显示当前语言；点开弹窗可四语切换或恢复跟随系统
+    final cur = AppLocalizations.of(context).locale;
+    final curLabel = AppLocalizations.langNativeName(cur);
     // 外层 SafeArea(top:true) 已经处理状态栏高度，这里只用 Padding 给语言胶囊留顶部设计间距
     return Padding(
       padding: const EdgeInsets.only(top: 12),
@@ -180,7 +296,7 @@ class _LoginPageState extends State<LoginPage> {
         shadowColor: Colors.black.withValues(alpha: 0.08),
         child: InkWell(
           borderRadius: BorderRadius.circular(999),
-          onTap: () => LocaleProvider.of(context)?.toggle(),
+          onTap: () => showLangPicker(context),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             child: Row(
@@ -189,7 +305,7 @@ class _LoginPageState extends State<LoginPage> {
                 Icon(Icons.language, size: 18, color: AppTheme.primary),
                 const SizedBox(width: 6),
                 Text(
-                  isZh ? '中文' : 'English',
+                  curLabel,
                   style: TextStyle(
                     fontSize: 12,
                     color: scheme.onSurface,
@@ -403,7 +519,10 @@ class _LoginPageState extends State<LoginPage> {
       );
     } catch (e) {
       if (!mounted) return;
-      final msg = e.toString().replaceFirst('Exception: ', '');
+      // 网络超时/连接失败不再 dump 原始 DioException，给可读提示
+      final msg = e is DioException && ApiClient.isTransient(e)
+          ? t('bootLoadFailed')
+          : e.toString().replaceFirst('Exception: ', '');
       AppDialogs.toast(context, msg.isEmpty ? t('unknownError') : msg);
     } finally {
       if (mounted) setState(() => _loading = false);

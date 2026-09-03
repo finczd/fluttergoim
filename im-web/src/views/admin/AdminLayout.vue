@@ -98,6 +98,7 @@ const menuGroups = [
       { path: '/admin/messages', label: '消息记录', icon: markRaw(IconMessage) },
       { path: '/admin/apps', label: '小程序管理', icon: markRaw(IconApps) },
       { path: '/admin/vip-ids', label: '靓号管理', icon: markRaw(IconTrophy) },
+      { path: '/admin/invite-codes', label: '邀请码管理', icon: markRaw(IconGift) },
       { path: '/admin/finance', label: '财务管理', icon: markRaw(IconGift) },
       { path: '/admin/recharge-orders', label: '充值订单', icon: markRaw(IconWechatpay) },
       { path: '/admin/withdraw-orders', label: '提现订单', icon: markRaw(IconExport) }

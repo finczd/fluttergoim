@@ -379,6 +379,13 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 			user.PUT("/conversation/:id", GroupUpdateHandler())
 			user.PUT("/conversation/:id/pin", SetPinHandler())
 			user.PUT("/conversation/:id/mute", SetMuteHandler())
+			// 群聊管理（阶段：群主改头像/群名、群设置、管理员、禁言、二维码进群）
+			user.GET("/conversation/:id/settings", GroupSettingsHandler())
+			user.PUT("/conversation/:id/settings", SetGroupSettingsHandler())
+			user.PUT("/conversation/:id/admin", SetGroupAdminHandler())
+			user.PUT("/conversation/:id/mute-member", MuteMemberHandler())
+			user.POST("/conversation/:id/join", GroupJoinHandler())
+			user.GET("/conversation/:id/preview", GroupPreviewHandler())
 
 			// 消息（阶段 3）
 			user.POST("/message/send", SendMessageHandler())

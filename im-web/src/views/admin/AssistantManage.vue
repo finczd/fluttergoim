@@ -1,10 +1,28 @@
 <template>
-  <div class="page">
-    <a-card :bordered="false">
-      <a-tabs default-active-key="base">
-        <!-- ===== 子分类 1：基础设置 ===== -->
-        <a-tab-pane key="base" title="基础设置">
-          <a-form :label-col="{ span: 5 }" :wrapper-col="{ span: 14 }" style="max-width: 640px; margin-top: 8px">
+  <div class="asst-page">
+    <!-- 左侧分区导航 -->
+    <aside class="asst-nav">
+      <button
+        v-for="s in sections"
+        :key="s.key"
+        class="nav-btn"
+        :class="{ active: activeSection === s.key }"
+        @click="activeSection = s.key"
+      >
+        <component :is="s.icon" />
+        <span>{{ s.title }}</span>
+      </button>
+    </aside>
+
+    <!-- 右侧内容 -->
+    <div class="asst-body">
+      <!-- ===== 基础设置 ===== -->
+      <div v-show="activeSection === 'base'" class="section">
+        <h2 class="section-title">基础设置</h2>
+        <p class="section-desc">智能助手的开关、名称、头像及自动添加行为</p>
+
+        <a-card class="form-card">
+          <a-form layout="vertical" :model="cfg">
             <a-form-item label="启用小助手">
               <a-switch v-model="cfg.enabled" />
             </a-form-item>
@@ -21,17 +39,22 @@
             <a-form-item label="自动添加后的欢迎语">
               <a-textarea v-model="cfg.welcomeText" :rows="2" placeholder="你好，我是小助手，有问题随时找我～" />
             </a-form-item>
-            <a-form-item :wrapper-col="{ offset: 5 }">
+            <div class="form-actions">
               <a-button type="primary" :loading="saving" @click="saveConfig">保存配置</a-button>
-            </a-form-item>
+            </div>
           </a-form>
-        </a-tab-pane>
+        </a-card>
+      </div>
 
-        <!-- ===== 子分类 2：推送消息 ===== -->
-        <a-tab-pane key="push" title="推送消息">
-          <a-form :label-col="{ span: 5 }" :wrapper-col="{ span: 14 }" style="max-width: 640px; margin-top: 8px">
+      <!-- ===== 推送消息 ===== -->
+      <div v-show="activeSection === 'push'" class="section">
+        <h2 class="section-title">推送消息</h2>
+        <p class="section-desc">向指定用户主动发送文本/图片消息</p>
+
+        <a-card class="form-card">
+          <a-form layout="vertical" :model="push">
             <a-form-item label="目标用户">
-              <a-popover position="bottom" trigger="click" :popup-visible="pickVisible" @popup-visible-change="(v: boolean) => pickVisible = v">
+              <a-popover position="bl" trigger="click" :popup-visible="pickVisible" @popup-visible-change="(v: boolean) => pickVisible = v">
                 <template #content>
                   <div style="width: 320px">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
@@ -67,25 +90,35 @@
                 <a-input v-else v-model="push.fileUrl" placeholder="或直接填图片 URL" style="max-width: 260px" />
               </div>
             </a-form-item>
-            <a-form-item :wrapper-col="{ offset: 5 }">
+            <div class="form-actions">
               <a-button type="primary" status="success" :loading="pushing" @click="doPush">立即推送</a-button>
-            </a-form-item>
+            </div>
           </a-form>
-        </a-tab-pane>
+        </a-card>
+      </div>
 
-        <!-- ===== 子分类 3：会话消息 ===== -->
-        <a-tab-pane key="conv" title="会话消息">
-          <div class="conv-wrap">
-            <!-- 左：会话列表 -->
-            <div class="conv-list">
+      <!-- ===== 会话消息 ===== -->
+      <div v-show="activeSection === 'conv'" class="section conv-section">
+        <h2 class="section-title">会话消息</h2>
+        <p class="section-desc">查看用户与助手的会话记录，并可以助手身份回复</p>
+
+        <div class="conv-wrap">
+          <!-- 左：会话列表 -->
+          <aside class="conv-list">
+            <div class="conv-list-head">
+              <span>会话</span>
+              <span class="conv-count">{{ convs.length }}</span>
+            </div>
+            <div class="conv-list-body">
               <a-spin :loading="convLoading" style="width: 100%">
                 <div v-if="!convs.length && !convLoading" class="conv-empty">暂无助手会话</div>
                 <div v-for="cv in convs" :key="cv.userId" class="conv-item"
                      :class="{ active: sel && sel.userId === cv.userId }" @click="openConv(cv)">
-                  <a-avatar :size="38" style="background: #165dff; flex-shrink: 0">
+                  <div class="conv-avatar" :style="avatarBg(cv.nickname || cv.account || 'U')">
                     <img v-if="cv.avatar" :src="cv.avatar" alt="" />
-                    <span v-else>{{ (cv.nickname || '用户').slice(0, 1) }}</span>
-                  </a-avatar>
+                    <span v-else>{{ (cv.nickname || cv.account || cv.userId || 'U').toString().slice(0, 1) }}</span>
+                    <span class="conv-online-dot" :class="cv.online ? 'online' : ''"></span>
+                  </div>
                   <div class="conv-info">
                     <div class="conv-name">
                       <span class="nick">{{ cv.nickname || cv.account || cv.userId }}</span>
@@ -93,60 +126,140 @@
                     </div>
                     <div class="conv-last">{{ preview(cv.lastMessage) }}</div>
                   </div>
+                  <span v-if="cv.unread" class="conv-unread">{{ cv.unread > 99 ? '99+' : cv.unread }}</span>
                 </div>
               </a-spin>
             </div>
+          </aside>
 
-            <!-- 右：消息记录 + 回复 -->
-            <div class="conv-main">
-              <template v-if="sel">
-                <div class="conv-title">
-                  与 {{ sel.nickname || sel.account || sel.userId }} 的对话
-                  <a-button size="mini" type="text" @click="loadMsgs(true)"
-                            :loading="msgsLoading" :disabled="!hasMore">加载更早消息</a-button>
+          <!-- 右：消息记录 + 回复 -->
+          <section class="conv-main">
+            <template v-if="sel">
+              <!-- 聊天 header -->
+              <header class="conv-title">
+                <div class="conv-title-left">
+                  <div class="conv-title-avatar" :style="avatarBg(sel.nickname || sel.account || 'U')">
+                    <img v-if="sel.avatar" :src="sel.avatar" alt="" />
+                    <span v-else>{{ (sel.nickname || sel.account || sel.userId || 'U').toString().slice(0, 1) }}</span>
+                  </div>
+                  <div class="conv-title-text">
+                    <h3>{{ sel.nickname || sel.account || sel.userId }}</h3>
+                    <span class="conv-title-sub">
+                      <span class="conv-title-dot"></span>
+                      最近活跃：{{ fmtTime(sel.lastMessage?.createdAt) || '—' }}
+                    </span>
+                  </div>
                 </div>
-                <div class="msg-scroll">
-                  <a-spin :loading="msgsLoading" style="width: 100%">
-                    <div v-if="!msgs.length && !msgsLoading" class="conv-empty">暂无消息</div>
-                    <div v-for="m in msgs" :key="m.msgId" class="msg-row" :class="{ mine: String(m.senderId) === '-1' }">
-                      <div class="msg-meta">
-                        {{ String(m.senderId) === '-1' ? '助手' : '用户' }} · {{ fmtTime(m.createdAt) }}
-                      </div>
-                      <div class="msg-bubble">
-                        <template v-if="m.recalled">[已撤回]</template>
-                        <template v-else-if="m.type === 2">
-                          <img v-if="m.content" :src="m.content" class="msg-img" alt="" />
-                          <span v-else>[图片]</span>
-                        </template>
-                        <template v-else-if="m.type === 3">[文件] {{ m.content }}</template>
-                        <template v-else-if="m.type === 7">[通话]</template>
-                        <template v-else-if="m.type === 8">[红包]</template>
-                        <template v-else-if="m.type === 9">[转账]</template>
-                        <template v-else>{{ m.content }}</template>
-                      </div>
+                <div class="conv-title-right">
+                  <a-button size="mini" type="outline" @click="loadMsgs(true)"
+                            :loading="msgsLoading" :disabled="!hasMore">
+                    <template #icon><component :is="iconRefresh" /></template>
+                    加载更早
+                  </a-button>
+                </div>
+              </header>
+
+              <!-- 消息滚动 -->
+              <div class="msg-scroll" ref="msgScroll">
+                <a-spin :loading="msgsLoading" style="width: 100%">
+                  <div v-if="!msgs.length && !msgsLoading" class="conv-empty-msg">
+                    <div class="empty-msg-mark">💬</div>
+                    <div>暂无消息，开始和用户沟通</div>
+                  </div>
+                  <div v-for="m in msgs" :key="m.msgId" class="msg-row" :class="{ mine: String(m.senderId) === '-1' }">
+                    <!-- 时间胶囊 -->
+                    <div class="msg-time-chip">{{ fmtDetailTime(m.createdAt) }}</div>
+                    <!-- 消息气泡 -->
+                    <div class="msg-bubble" :class="{ recalled: m.recalled }">
+                      <template v-if="m.recalled"><span class="recalled-tip">该消息已撤回</span></template>
+                      <template v-else-if="m.type === 2">
+                        <img v-if="m.content" :src="m.content" class="msg-img" alt="" />
+                        <span v-else class="msg-type-badge">[图片]</span>
+                      </template>
+                      <template v-else-if="m.type === 3">
+                        <div class="msg-type-card">
+                          <span class="mtc-ico">📄</span>
+                          <span class="mtc-text">{{ m.content || '一个文件' }}</span>
+                        </div>
+                      </template>
+                      <template v-else-if="m.type === 7">
+                        <div class="msg-type-card call">
+                          <span class="mtc-ico">📞</span>
+                          <span class="mtc-text">通话记录</span>
+                        </div>
+                      </template>
+                      <template v-else-if="m.type === 8">
+                        <div class="msg-type-card redpacket">
+                          <span class="mtc-ico">🧧</span>
+                          <span class="mtc-text">红包</span>
+                        </div>
+                      </template>
+                      <template v-else-if="m.type === 9">
+                        <div class="msg-type-card transfer">
+                          <span class="mtc-ico">💸</span>
+                          <span class="mtc-text">转账</span>
+                        </div>
+                      </template>
+                      <template v-else><span v-html="formatMsg(m.content)"></span></template>
                     </div>
-                  </a-spin>
+                  </div>
+                </a-spin>
+              </div>
+
+              <!-- 回复栏 -->
+              <footer class="reply-bar">
+                <div class="reply-tools">
+                  <a-upload :show-file-list="false" :custom-request="(opt: any) => uploadReplyImage(opt.file)">
+                    <a-button type="outline" :loading="replyUploading" shape="circle" size="small" title="上传图片">🖼️</a-button>
+                  </a-upload>
+                  <button type="button" class="tool-btn" title="表情包" disabled>😀</button>
+                  <div class="reply-tools-divider"></div>
+                  <span v-if="replyFileUrl" class="reply-img-chip">
+                    <img :src="replyFileUrl" alt="回复图片" class="reply-img" />
+                    <a-button type="text" status="danger" size="mini" @click="replyFileUrl = ''">×</a-button>
+                  </span>
+                  <span v-else class="reply-tools-hint">支持文本 + 图片；以「助手」身份推送到用户</span>
                 </div>
-                <div class="reply-bar">
-                  <a-textarea v-model="replyText" :rows="2" :max-length="500"
-                              placeholder="以助手身份回复该用户" />
-                  <a-button type="primary" :loading="replying" @click="sendReply">回复</a-button>
+                <div class="reply-input-row">
+                  <a-textarea
+                    v-model="replyText"
+                    :rows="2"
+                    :max-length="2000"
+                    allow-clear
+                    placeholder="以助手身份回复此用户…（Enter 换行，Ctrl/Cmd + Enter 发送）"
+                    @keydown.meta.enter.exact.prevent="sendReply"
+                    @keydown.ctrl.enter.exact.prevent="sendReply"
+                    class="reply-textarea"
+                  />
+                  <a-button type="primary" :loading="replying" @click="sendReply" class="send-btn">
+                    <template #icon><component :is="iconSend" /></template>
+                    发送
+                  </a-button>
                 </div>
-              </template>
-              <div v-else class="conv-empty" style="height: 100%">选择左侧会话查看消息</div>
-            </div>
-          </div>
-        </a-tab-pane>
-      </a-tabs>
-    </a-card>
+              </footer>
+            </template>
+            <div v-else class="conv-empty" style="height: 100%">选择左侧会话查看消息</div>
+          </section>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, computed, watch, markRaw } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import { IconSettings, IconSend, IconMessage, IconRefresh } from '@arco-design/web-vue/es/icon'
 import { adminApi } from '@/api/admin'
 import ImageUpload from './ImageUpload.vue'
+
+const activeSection = ref('base')
+
+const sections = [
+  { key: 'base', title: '基础设置', icon: markRaw(IconSettings) },
+  { key: 'push', title: '推送消息', icon: markRaw(IconSend) },
+  { key: 'conv', title: '会话消息', icon: markRaw(IconMessage) }
+]
 
 const cfg = ref({ enabled: false, name: '小助手', avatar: '', autoAdd: false, welcomeText: '' })
 const saving = ref(false)
@@ -168,6 +281,61 @@ const msgsLoading = ref(false)
 const replyText = ref('')
 const replying = ref(false)
 const hasMore = ref(false)
+const replyFileUrl = ref('') // 回复可附图片（MinIO URL）
+const replyUploading = ref(false)
+const msgScroll = ref<HTMLElement | null>(null)
+const iconRefresh = markRaw(IconRefresh)
+const iconSend = markRaw(IconSend)
+
+/** 首字母取色渐变，做头像背景 */
+function avatarBg(name: any): Record<string, string> {
+  const s = String(name || 'U').charAt(0).toLowerCase()
+  const code = s.charCodeAt(0) || 65
+  const palettes = [
+    ['#3b82f6', '#6366f1'],
+    ['#14b8a6', '#3b82f6'],
+    ['#8b5cf6', '#ec4899'],
+    ['#f59e0b', '#ef4444'],
+    ['#22c55e', '#14b8a6'],
+    ['#f97316', '#ef4444'],
+    ['#06b6d4', '#8b5cf6'],
+    ['#64748b', '#334155'],
+  ]
+  const [a, b] = palettes[code % palettes.length]
+  return { background: `linear-gradient(135deg, ${a} 0%, ${b} 100%)` }
+}
+
+/** 文本消息：URL 变链接；简单换行保留 */
+function formatMsg(content: any): string {
+  if (!content) return ''
+  const esc = String(content).replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c))
+  const linked = esc.replace(/(https?:\/\/[^\s<"'，,。；;]+)/g, (u: string) => {
+    const safe = u.replace(/"/g, '%22')
+    return `<a href="${safe}" target="_blank" rel="noopener" class="msg-link">${u}</a>`
+  })
+  return linked.replace(/\n/g, '<br>')
+}
+
+/** 详情时间：HH:mm:ss + MM-DD */
+function fmtDetailTime(t: any): string {
+  if (!t) return ''
+  const d = new Date(t)
+  if (isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  const now = new Date()
+  const today = d.toDateString() === now.toDateString()
+  const datePart = today ? '' : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} `
+  return `${datePart}${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+/** 滚到底部（用于收到新消息/打开新会话时） */
+function scrollBottom() {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      if (msgScroll.value) msgScroll.value.scrollTop = msgScroll.value.scrollHeight
+    })
+  })
+}
 
 async function loadConvs() {
   convLoading.value = true
@@ -199,6 +367,7 @@ async function loadMsgs(older = false) {
       const list: Array<Record<string, any>> = data.data || []
       hasMore.value = list.length >= 50
       msgs.value = older ? [...list, ...msgs.value] : list
+      if (!older) scrollBottom()
     } else Message.error(data.message)
   } catch (e: any) {
     Message.error('消息加载失败：' + (e.message || e))
@@ -206,20 +375,35 @@ async function loadMsgs(older = false) {
 }
 
 async function sendReply() {
+  if (!sel.value) return
   const content = replyText.value.trim()
-  if (!sel.value || !content) { Message.warning('请输入回复内容'); return }
+  if (!content && !replyFileUrl.value) { Message.warning('请输入回复内容或附上图片'); return }
   replying.value = true
   try {
     const { data } = await adminApi.assistantPush({
-      userIds: [String(sel.value.userId)], content
+      userIds: [String(sel.value.userId)],
+      content,
+      fileUrl: replyFileUrl.value || undefined
     })
     if (data.code === 0) {
       Message.success('已回复')
       replyText.value = ''
+      replyFileUrl.value = ''
       await loadMsgs()
       await loadConvs()
     } else Message.error(data.message)
   } finally { replying.value = false }
+}
+
+/** 回复图片上传（复用推送图片的上传通道） */
+async function uploadReplyImage(file: File) {
+  replyUploading.value = true
+  try {
+    replyFileUrl.value = await uploadToMinio(file, 'assistant/')
+    Message.success('图片已上传')
+  } catch (e: any) {
+    Message.error('图片上传失败：' + (e.message || e))
+  } finally { replyUploading.value = false }
 }
 
 function fmtTime(t: any): string {
@@ -337,30 +521,213 @@ async function doPush() {
 </script>
 
 <style scoped>
+/* ===== 主布局：左导航 + 右内容（与 ConfigView 一致） ===== */
+.asst-page { display: flex; gap: var(--app-space-lg); height: 100%; min-height: 600px; }
+
+/* 左侧分区导航 */
+.asst-nav {
+  width: 180px;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px;
+  background: var(--app-bg-card);
+  border: 1px solid var(--app-border-2);
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-card);
+  flex-shrink: 0;
+  height: fit-content;
+  position: sticky; top: 0;
+}
+.nav-btn {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 10px 12px;
+  background: transparent; border: none;
+  border-radius: var(--app-radius-md);
+  color: var(--app-text-2);
+  font-size: var(--app-font-size-base);
+  cursor: pointer; text-align: left;
+  overflow: hidden;
+  transition: color .18s ease, transform .18s ease;
+  z-index: 0;
+}
+.nav-btn::before {
+  content: '';
+  position: absolute;
+  inset: auto -10% -100% auto;
+  width: 130%; height: 120%;
+  background: linear-gradient(135deg, rgba(22,93,255,.12) 0%, rgba(120,67,255,.10) 100%);
+  transform: translateY(100%);
+  transition: transform .32s cubic-bezier(.22,.61,.36,1);
+  z-index: -1;
+  border-radius: 14px;
+}
+.nav-btn:hover { color: var(--app-text-1); }
+.nav-btn:hover::before { transform: translateY(0); }
+.nav-btn.active {
+  color: var(--app-primary);
+  font-weight: var(--app-font-weight-medium);
+}
+.nav-btn.active::before { transform: translateY(0); opacity: 1; }
+.nav-btn::after {
+  content: '';
+  position: absolute;
+  left: 0; top: 18%; bottom: 18%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--app-primary), #7843ff);
+  transform: scaleY(0);
+  transition: transform .25s ease;
+}
+.nav-btn.active::after { transform: scaleY(1); }
+.nav-btn :deep(svg) { width: 18px; height: 18px; flex-shrink: 0; }
+
+/* 右侧内容 */
+.asst-body { flex: 1; min-width: 0; }
+.section { max-width: 820px; }
+.section-title { margin: 0 0 6px; font-size: var(--app-font-size-xl); font-weight: var(--app-font-weight-semibold); color: var(--app-text-1); }
+.section-desc { margin: 0 0 16px; font-size: var(--app-font-size-sm); color: var(--app-text-3); }
+.form-card { border-radius: var(--app-radius-lg); }
+.form-card :deep(.arco-form-item-label) { padding-bottom: 6px; font-weight: 500; }
+.form-card :deep(.arco-form-item) { margin-bottom: 18px; }
+.form-actions {
+  display: flex; align-items: center; justify-content: flex-start;
+  padding-top: 8px;
+}
+
+/* ===== 会话消息区域 ===== */
+.conv-section { max-width: none; }
 .conv-wrap {
   display: flex;
   gap: 16px;
-  height: 520px;
+  height: 640px;
   margin-top: 8px;
 }
+
+/* ========== 左侧：会话列表 ========== */
 .conv-list {
   width: 320px;
   flex-shrink: 0;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--app-bg-card) 0%, rgba(99,102,241,.04) 100%);
+  border: 1px solid var(--app-border-2);
+  border-radius: 14px;
+  box-shadow: var(--app-shadow-card);
+  overflow: hidden;
+}
+.conv-list-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px dashed var(--app-border-2);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--app-text-1);
+}
+.conv-count {
+  min-width: 22px;
+  padding: 0 8px;
+  height: 20px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #165dff 0%, #7843ff 100%);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(22,93,255,.3);
+}
+.conv-list-body {
+  flex: 1;
   overflow-y: auto;
-  padding: 6px;
+  padding: 8px;
+}
+.conv-list-body::-webkit-scrollbar { width: 6px; }
+.conv-list-body::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(22,93,255,.3), rgba(120,67,255,.3));
+  border-radius: 3px;
 }
 .conv-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 10px;
-  border-radius: 8px;
+  padding: 10px 10px;
+  margin-bottom: 2px;
+  border-radius: 12px;
   cursor: pointer;
+  overflow: hidden;
+  transition: transform .2s ease, background .2s ease;
 }
-.conv-item:hover { background: var(--color-fill-1); }
-.conv-item.active { background: var(--color-fill-2); }
+.conv-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(22,93,255,.06), rgba(120,67,255,.08));
+  opacity: 0;
+  transition: opacity .25s ease;
+  pointer-events: none;
+}
+.conv-item:hover { transform: translateX(2px); }
+.conv-item:hover::before { opacity: 1; }
+.conv-item.active {
+  background: linear-gradient(135deg, rgba(22,93,255,.10) 0%, rgba(120,67,255,.08) 100%);
+  box-shadow: inset 0 0 0 1px rgba(22,93,255,.18);
+}
+.conv-item.active::after {
+  content: '';
+  position: absolute;
+  left: 0; top: 20%; bottom: 20%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, #165dff, #7843ff);
+  box-shadow: 0 0 8px rgba(22,93,255,.6);
+}
+/* 会话头像 */
+.conv-avatar {
+  position: relative;
+  width: 40px; height: 40px;
+  border-radius: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: 15px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.12);
+}
+.conv-avatar img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.conv-online-dot {
+  position: absolute;
+  right: 2px; bottom: 2px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: #c9cdd4;
+  border: 2px solid #fff;
+}
+.conv-online-dot.online {
+  background: #00b42a;
+  box-shadow: 0 0 0 2px rgba(0,180,42,.22);
+  animation: online-pulse 1.8s infinite;
+}
+@keyframes online-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(0,180,42,.22); }
+  50%      { box-shadow: 0 0 0 5px rgba(0,180,42,.05); }
+}
+/* 会话未读红点 */
+.conv-unread {
+  min-width: 18px; height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #f53f3f 0%, #ff7d00 100%);
+  color: #fff;
+  font-size: 11px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(245,63,63,.35);
+}
 .conv-info { min-width: 0; flex: 1; }
 .conv-name {
   display: flex;
@@ -370,7 +737,8 @@ async function doPush() {
 }
 .conv-name .nick {
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--app-text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -382,61 +750,361 @@ async function doPush() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 2px;
+  margin-top: 3px;
 }
+
+/* ========== 右侧：消息区 ========== */
 .conv-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
+  background:
+    radial-gradient(1200px 600px at 0% 0%, rgba(22,93,255,.05), transparent 60%),
+    radial-gradient(1000px 500px at 100% 100%, rgba(120,67,255,.05), transparent 60%),
+    var(--app-bg-card);
+  border: 1px solid var(--app-border-2);
+  border-radius: 14px;
+  box-shadow: var(--app-shadow-card);
+  overflow: hidden;
 }
+
+/* 顶部聊天头 */
 .conv-title {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--color-border-2);
-  font-size: 14px;
-  font-weight: 500;
+  position: relative;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--app-border-2);
+  background: linear-gradient(120deg, rgba(22,93,255,.06) 0%, rgba(120,67,255,.06) 100%);
+  backdrop-filter: blur(8px);
 }
+.conv-title::after {
+  content: '';
+  position: absolute;
+  left: 18px; right: 18px; bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(22,93,255,.35), rgba(120,67,255,.35), transparent);
+}
+.conv-title-left {
+  display: flex; align-items: center; gap: 12px;
+}
+.conv-title-avatar {
+  width: 44px; height: 44px;
+  border-radius: 14px;
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 16px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.14);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.conv-title-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.conv-title-text h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--app-text-1);
+}
+.conv-title-sub {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px;
+  color: #86909c;
+  margin-top: 2px;
+}
+.conv-title-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #00b42a;
+  box-shadow: 0 0 0 3px rgba(0,180,42,.18);
+}
+.conv-title-right { display: flex; gap: 8px; align-items: center; }
+.conv-title-right :deep(.arco-btn) { border-radius: 8px; }
+
+/* 消息滚动区 */
 .msg-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 14px;
+  padding: 20px 28px;
+  scroll-behavior: smooth;
 }
-.msg-row { margin-bottom: 12px; }
-.msg-row.mine { text-align: right; }
-.msg-meta { font-size: 11px; color: #86909c; margin-bottom: 4px; }
-.msg-bubble {
-  display: inline-block;
-  max-width: 75%;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--color-fill-2);
+.msg-scroll::-webkit-scrollbar { width: 7px; }
+.msg-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(22,93,255,.35), rgba(120,67,255,.35));
+  border-radius: 4px;
+}
+
+/* 空态 */
+.conv-empty-msg {
+  height: 100%;
+  min-height: 280px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px;
+  color: #86909c;
   font-size: 13px;
-  text-align: left;
+}
+.empty-msg-mark {
+  width: 64px; height: 64px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(22,93,255,.12), rgba(120,67,255,.14));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px;
+  box-shadow: inset 0 0 0 1px rgba(22,93,255,.2);
+}
+
+/* 消息行 */
+.msg-row {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 18px;
+  align-items: flex-start;
+  animation: msg-in .42s cubic-bezier(.22,.61,.36,1) both;
+}
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.msg-row.mine {
+  align-items: flex-end;
+}
+
+/* 时间胶囊 */
+.msg-time-chip {
+  align-self: center;
+  margin: 4px 0 10px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  color: #86909c;
+  background: rgba(134,144,156,.08);
+  border: 1px solid rgba(134,144,156,.15);
+}
+.msg-row.mine .msg-time-chip { order: 0; }
+
+/* ========== 消息气泡 ========== */
+.msg-bubble {
+  position: relative;
+  display: inline-block;
+  max-width: min(72%, 560px);
+  padding: 10px 14px;
+  border-radius: 6px 14px 14px 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #fafbff 100%);
+  border: 1px solid #e5e6eb;
+  box-shadow:
+    0 1px 2px rgba(31,35,41,.04),
+    0 4px 14px rgba(31,35,41,.06);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--app-text-1);
   word-break: break-word;
-  white-space: pre-wrap;
+  white-space: normal;
+  text-align: left;
+  transition: transform .18s ease, box-shadow .18s ease;
 }
+.msg-bubble:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 2px 3px rgba(31,35,41,.06),
+    0 10px 24px rgba(31,35,41,.09);
+}
+/* 气泡尾巴：用户发（左） */
+.msg-bubble::before {
+  content: '';
+  position: absolute;
+  top: 10px; left: -7px;
+  width: 0; height: 0;
+  border-style: solid;
+  border-width: 0 8px 8px 0;
+  border-color: transparent #ffffff transparent transparent;
+  filter: drop-shadow(-1px 1px 0 #e5e6eb);
+}
+
+/* 助手消息（我发送的）右侧蓝紫渐变 */
 .msg-row.mine .msg-bubble {
-  background: rgb(var(--primary-6));
   color: #fff;
+  background: linear-gradient(135deg, #2b6dff 0%, #3a5bff 45%, #7843ff 100%);
+  border: none;
+  border-radius: 14px 6px 14px 14px;
+  box-shadow:
+    0 2px 5px rgba(22,93,255,.22),
+    0 10px 28px rgba(120,67,255,.30);
 }
+.msg-row.mine .msg-bubble::before {
+  left: auto;
+  right: -7px;
+  border-width: 8px 8px 0 0;
+  border-color: #7843ff transparent transparent transparent;
+  filter: none;
+}
+/* 助手气泡外发光 */
+.msg-row.mine .msg-bubble::after {
+  content: '';
+  position: absolute;
+  inset: -14px -22px -18px -22px;
+  background: radial-gradient(120% 80% at 80% 20%, rgba(22,93,255,.18), transparent 55%),
+              radial-gradient(100% 70% at 20% 80%, rgba(120,67,255,.18), transparent 55%);
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 26px;
+}
+.msg-bubble.recalled {
+  opacity: .6;
+  background: repeating-linear-gradient(45deg, #f7f8fa, #f7f8fa 6px, #eef0f3 6px, #eef0f3 12px);
+  color: #86909c;
+  border: 1px dashed #c9cdd4;
+  font-style: italic;
+  box-shadow: none;
+}
+.msg-bubble.recalled::before { display: none; }
+.recalled-tip { color: #86909c; }
+.msg-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(255,255,255,.35);
+  word-break: break-all;
+}
+.msg-row:not(.mine) .msg-link {
+  color: #165dff;
+  text-decoration-color: rgba(22,93,255,.3);
+}
+
+/* 图片消息 */
 .msg-img {
-  max-width: 200px;
-  max-height: 200px;
-  border-radius: 6px;
+  max-width: 260px;
+  max-height: 280px;
+  border-radius: 10px;
   display: block;
+  box-shadow: 0 4px 14px rgba(0,0,0,.12);
+  transition: transform .25s ease, box-shadow .25s ease;
 }
+.msg-img:hover {
+  transform: scale(1.03);
+  box-shadow: 0 10px 30px rgba(0,0,0,.18);
+}
+.msg-type-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(22,93,255,.08);
+  color: #165dff;
+  font-weight: 600;
+}
+
+/* 类型卡：文件/通话/红包/转账 */
+.msg-type-card {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  min-width: 200px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+  border: 1px solid rgba(99,102,241,.2);
+}
+.msg-type-card.call {
+  background: linear-gradient(135deg, #e6fffb 0%, #e0f2fe 100%);
+  border-color: rgba(20,184,166,.2);
+}
+.msg-type-card.redpacket {
+  background: linear-gradient(135deg, #fff1f0 0%, #fff7e6 100%);
+  border-color: rgba(245,63,63,.2);
+}
+.msg-type-card.transfer {
+  background: linear-gradient(135deg, #f6ffed 0%, #e6fffb 100%);
+  border-color: rgba(0,180,42,.2);
+}
+.mtc-ico { font-size: 20px; line-height: 1; }
+.mtc-text { font-size: 13px; font-weight: 500; color: var(--app-text-1); }
+
+/* ========== 底部回复栏 ========== */
 .reply-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--app-border-2);
+  background: linear-gradient(0deg, rgba(22,93,255,.03), transparent 60%);
+}
+.reply-tools {
+  display: flex; align-items: center; gap: 8px;
+  color: #86909c;
+  font-size: 12px;
+}
+.tool-btn {
+  width: 32px; height: 32px;
+  border-radius: 10px;
+  background: #f7f8fa;
+  border: 1px solid var(--app-border-2);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all .18s ease;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.tool-btn:not(:disabled):hover {
+  background: linear-gradient(135deg, rgba(22,93,255,.08), rgba(120,67,255,.08));
+  border-color: rgba(22,93,255,.25);
+  transform: translateY(-1px);
+}
+.tool-btn:disabled { opacity: .4; cursor: not-allowed; }
+.reply-tools :deep(.arco-btn) { width: 32px; height: 32px; padding: 0; }
+.reply-tools-divider {
+  width: 1px; height: 18px;
+  background: var(--app-border-2);
+  margin: 0 6px;
+}
+.reply-tools-hint {
+  margin-left: 4px;
+  color: #86909c;
+  font-size: 12px;
+}
+.reply-img-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #f7f8fa;
+  border: 1px solid var(--app-border-2);
+}
+.reply-img {
+  width: 44px; height: 44px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.reply-input-row {
   display: flex;
   gap: 10px;
   align-items: flex-end;
-  padding: 10px 14px;
-  border-top: 1px solid var(--color-border-2);
 }
+.reply-textarea {
+  flex: 1;
+}
+.reply-textarea :deep(.arco-textarea-wrapper) {
+  border-radius: 12px;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+.reply-textarea :deep(.arco-textarea-wrapper:hover),
+.reply-textarea :deep(.arco-textarea-wrapper.arco-textarea-focus) {
+  border-color: rgba(22,93,255,.45);
+  box-shadow: 0 0 0 4px rgba(22,93,255,.08);
+}
+.send-btn {
+  height: 44px;
+  padding: 0 20px;
+  border-radius: 12px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #165dff 0%, #7843ff 100%);
+  border: none;
+  box-shadow: 0 4px 14px rgba(22,93,255,.3);
+  transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+}
+.send-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(120,67,255,.4);
+  filter: brightness(1.05);
+}
+.send-btn:active { transform: translateY(0); }
+
+/* ========== 通用空态 ========== */
 .conv-empty {
   display: flex;
   align-items: center;
@@ -445,5 +1113,7 @@ async function doPush() {
   font-size: 13px;
   padding: 24px 0;
   height: 100%;
+  background:
+    radial-gradient(400px 200px at 50% 30%, rgba(22,93,255,.05), transparent 60%);
 }
 </style>

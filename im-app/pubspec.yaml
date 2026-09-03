@@ -1,7 +1,7 @@
 name: im_app
 description: "企业内部即时通讯 - 移动端"
 publish_to: 'none'
-version: 0.1.0+1
+version: 1.1.0+2
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -14,6 +14,8 @@ dependencies:
   intl: ^0.20.2
   dio: ^5.5.0                 # HTTP
   flutter_secure_storage: ^9.2.2  # token 安全存储
+  hive: ^2.2.3                # 本地持久化 KV（会话列表 + 每会话最近消息，缓存方案 P0-1）
+  hive_flutter: ^1.1.0        # Hive 的 Flutter 初始化封装（自带 path_provider）
   provider: ^6.1.2            # 状态管理
   web_socket_channel: ^3.0.0   # WS 长连接（跨 IO/Web 平台，消息实时收发）
   url_launcher: ^6.3.0        # 发现页打开网页小程序（H5 新标签 / native 浏览器）

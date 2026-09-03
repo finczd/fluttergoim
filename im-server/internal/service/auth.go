@@ -103,7 +103,10 @@ func Register(ctx context.Context, cfg *config.Config, req *RegisterReq) (*model
 	}
 	if inviteOn {
 		if err := consumeInviteCode(ctx, req.InviteCode, account); err != nil {
-			return nil, "", "", err
+			// 一次性邀请码无效 → 回退校验自定义好友邀请码（后台创建、多用不限次）
+			if !InviteFriendCodeValid(ctx, req.InviteCode) {
+				return nil, "", "", err
+			}
 		}
 	}
 	// 6. 按认证模式校验验证码
@@ -178,6 +181,11 @@ func Register(ctx context.Context, cfg *config.Config, req *RegisterReq) (*model
 	// 9.1 注册成功按配置自动添加客服好友（失败不阻断注册）
 	if err := KefuAddForUser(ctx, u.ID); err != nil {
 		log.Printf("[kefu] auto add kefu for user %d failed: %v", u.ID, err)
+	}
+
+	// 9.2 注册时填了自定义邀请码 → 自动添加该邀请码关联的好友（失败不阻断注册）
+	if err := InviteFriendBindForRegister(ctx, req.InviteCode, u.ID); err != nil {
+		log.Printf("[invite] auto add invite friends for user %d failed: %v", u.ID, err)
 	}
 
 	// 10. 注册成功即登录，签发 token

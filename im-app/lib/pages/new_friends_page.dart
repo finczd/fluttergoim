@@ -42,8 +42,8 @@ class _NewFriendsPageState extends State<NewFriendsPage> {
     await _svc.handle(reqId, agree);
     if (!mounted) return;
     final t = AppLocalizations.of(context).t;
-    AppDialogs.toast(
-        context, agree ? t('newFriendsApproved') : t('newFriendsRejectedToast'));
+    AppDialogs.toast(context,
+        agree ? t('newFriendsApproved') : t('newFriendsRejectedToast'));
     _load();
   }
 

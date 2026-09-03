@@ -11,10 +11,16 @@ import 'pages/home_shell.dart';
 import 'pages/incoming_call_page.dart';
 import 'pages/login_page.dart';
 import 'services/api_client.dart';
+import 'services/conversation_service.dart';
 import 'services/keep_alive_service.dart';
 import 'services/local_notify_service.dart';
+import 'services/local_store.dart';
 import 'services/settings_service.dart';
+import 'services/update_service.dart';
+import 'services/user_cache.dart';
+import 'services/wallet_store.dart';
 import 'theme/app_theme.dart';
+import 'widgets/update_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,6 +37,16 @@ Future<void> main() async {
   };
   // 需求7-8：加载本地设置（深色模式 / 通知开关）
   await AppSettings.instance.init();
+  // 本地持久化缓存（Hive：会话列表 + 每会话最近消息）——冷启动首帧直出，
+  // 失败不能阻塞启动（缓存只是加速器，数据仍可从服务端拉取）
+  try {
+    await LocalStore.init();
+    // 缓存损坏时同步失效内存缓存 → 强制走网络重拉（防脏数据滞留内存）
+    ConversationService.bindLocalStore();
+    // 钱包余额快照：冷启动首屏直接显示上次余额，不再"先 ¥0 再跳变"
+    // （仅展示用，任何金额操作前各页面都会先 refresh() 取服务端值）
+    await WalletStore.instance.hydrate();
+  } catch (_) {}
   // 需求3：App 后台时 WS 新消息 → 通知栏本地通知（极光只推离线用户）
   unawaited(LocalNotifyService.instance.init());
   runApp(const ImApp());
@@ -53,7 +69,12 @@ class ImApp extends StatelessWidget {
             title: 'ChatPulse',
             theme: settings.dark ? AppTheme.dark() : AppTheme.light(),
             locale: loc,
-            supportedLocales: const [Locale('zh'), Locale('en')],
+            supportedLocales: const [
+              Locale('zh'), // 简体（zh_CN）
+              Locale('zh', 'TW'), // 繁體中文
+              Locale('en'),
+              Locale('ja'),
+            ],
             localizationsDelegates: const [
               GlobalMaterialLocalizations.delegate,
               GlobalWidgetsLocalizations.delegate,
@@ -71,8 +92,14 @@ class ImApp extends StatelessWidget {
 
 /// 启动登录态判断（需求：杀进程后不用每次重新登录）
 /// token 已持久化在 FlutterSecureStorage，401 拦截器会自动 refresh+重试。
-/// 这里只判断"有没有 refresh token"：有 → 直接进主界面（由拦截器续期），
-/// 没有 → 登录页。不再写死 home: LoginPage。
+/// 这里只判断"有没有 refresh token"：有 → 静默续期后进主界面，
+/// 没有 → 登录页。
+///
+/// 关键纪律：**网络故障绝不清登录态**。杀进程重开 App 时安卓网络常常
+/// 还没就绪，以前一次刷新失败就 clearAuth() 把 token 全删了 → 用户被
+/// 强制重新登录。现在区分三态：续期成功 → 主界面；服务端明确拒绝
+/// （rt 真作废）→ 清凭据回登录页；网络不通 → 保留凭据显示失败态，
+/// 点"重新加载"原地重试。
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 
@@ -84,6 +111,9 @@ class _AuthGateState extends State<AuthGate> {
   Widget _body = const Scaffold(
     body: Center(child: CircularProgressIndicator()),
   );
+  // 启动网络失败态的自动重试：3 秒倒计时自动再试，不用手动点
+  Timer? _autoRetryTimer;
+  int _retryCountdown = 0;
 
   @override
   void initState() {
@@ -91,22 +121,160 @@ class _AuthGateState extends State<AuthGate> {
     _decide();
   }
 
+  @override
+  void dispose() {
+    _autoRetryTimer?.cancel();
+    super.dispose();
+  }
+
+  /// 进入失败态后启动自动重试倒计时（每次失败重新计时）
+  void _startAutoRetry() {
+    _autoRetryTimer?.cancel();
+    _retryCountdown = 3;
+    _autoRetryTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      _retryCountdown--;
+      if (_retryCountdown <= 0) {
+        timer.cancel();
+        // 自动重试：显示转圈，走完整 _decide 流程
+        setState(() => _body =
+            const Scaffold(body: Center(child: CircularProgressIndicator())));
+        _decide();
+      } else {
+        // 刷新倒计时文案（重建失败态 widget 以更新秒数）
+        setState(() => _body = _buildNetFailed());
+      }
+    });
+  }
+
   Future<void> _decide() async {
+    if (_deciding) return; // 防重入：自动重试定时器触发时上一次可能还没走完
+    _deciding = true;
+    try {
+      await _decideInner();
+    } finally {
+      _deciding = false;
+    }
+  }
+
+  Future<void> _decideInner() async {
     final api = ApiClient.instance;
-    final rt = await api.readRefresh();
+    // 读 refresh token：secure storage 偶发读取失败/挂起，重试 2 次（每次 5s 封顶）。
+    // 都读不到再进登录页（登录页本身不需要旧凭据，误进一次可重新登录，代价可控；
+    // 但绝不能在读失败时主动清凭据）。
+    String? rt;
+    for (var i = 0; i < 2; i++) {
+      try {
+        rt = await api.readRefresh().timeout(const Duration(seconds: 5));
+        if (rt != null && rt.isNotEmpty) break;
+      } catch (_) {}
+      if (i < 1) await Future.delayed(const Duration(milliseconds: 400));
+    }
     Widget target;
     if (rt != null && rt.isNotEmpty) {
-      // 有 refresh token：先静默续期一次拿 access（失败也不拦，
-      // 进主界面后首个请求 401 会再走拦截器 refresh 流程）
-      try {
-        await api.refreshAccess();
-      } catch (_) {}
-      target = const HomeShell();
+      // 有 refresh token：静默续期。网络错误自动重试（含 refreshSession 内部重试），
+      // 仍失败保持失败态；只有服务端明确拒绝才清登录态。
+      // 每次尝试整体 15s 封顶（dio 最坏 5s 连接 + 10s 响应）——
+      // 之前 3 次不设整体上限，服务端慢时纯转圈最长 60~90s，看起来像卡死
+      var result = AuthRefreshResult.network;
+      for (var i = 0; i < 2; i++) {
+        try {
+          result =
+              await api.refreshSession().timeout(const Duration(seconds: 15));
+        } catch (_) {
+          result = AuthRefreshResult.network;
+        }
+        if (result != AuthRefreshResult.network) break;
+        if (i < 1) await Future.delayed(const Duration(milliseconds: 600));
+      }
+      if (result == AuthRefreshResult.ok) {
+        target = const HomeShell();
+      } else if (result == AuthRefreshResult.invalid) {
+        // 服务端明确拒绝：rt 已被作废（多端登录挤掉白名单 / Redis 重启 / rt 过期），
+        // 留着只会让下次启动再空跑一次 → 清凭据去登录页
+        await api.clearAuth();
+        UserCache.clear(); // 换账号不能复用上一个登录会话的用户缓存
+        WalletStore.instance.reset(); // 同上：别让上一个人的余额串到新账号
+        // 本地消息/会话缓存一并清（换账号不能看到上一个人的聊天记录）
+        unawaited(LocalStore.clearUserData());
+        target = const LoginPage();
+      } else {
+        // 网络不通：保留登录态，显示失败态，3 秒后自动重试（也可手动立即重试）
+        if (!mounted) return;
+        setState(() => _body = _buildNetFailed());
+        _startAutoRetry();
+        return;
+      }
     } else {
       target = const LoginPage();
     }
     if (!mounted) return;
     setState(() => _body = target);
+    // 已登录进入主界面：延迟几秒自动检查一次版本更新（本次启动只查一次）
+    if (target is HomeShell && !_updateChecked) {
+      _updateChecked = true;
+      _autoCheckUpdate();
+    }
+  }
+
+  bool _updateChecked = false;
+  bool _deciding = false; // _decide 防重入标记
+
+  /// 启动自动检查更新：进主界面 2 秒后静默拉后台版本配置，
+  /// 有新版本且配置了下载地址 → 弹更新弹窗；失败/无新版本完全不打扰
+  Future<void> _autoCheckUpdate() async {
+    await Future.delayed(const Duration(seconds: 2));
+    final info = await UpdateService.fetch();
+    if (info == null || !info.hasNew || !info.hasUrl) return;
+    final ctx = appNavigatorKey.currentContext;
+    if (ctx == null || !ctx.mounted) return;
+    await UpdateDialog.showIfAvailable(ctx, info);
+  }
+
+  /// 启动时网络不通的失败态（不清登录态，重试后凭据还在，能直接进主界面）
+  Widget _buildNetFailed() {
+    final t = AppLocalizations.of(context).t;
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_off_outlined,
+                size: 48,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
+            const SizedBox(height: 12),
+            Text(t('bootLoadFailed'),
+                style: TextStyle(
+                    fontSize: 14,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 14),
+            // 倒计时自动重试提示
+            Text(t('bootAutoRetryIn', {'s': '$_retryCountdown'}),
+                style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () {
+                // 手动立即重试：停掉倒计时
+                _autoRetryTimer?.cancel();
+                setState(() => _body = const Scaffold(
+                    body: Center(child: CircularProgressIndicator())));
+                _decide();
+              },
+              child: Text(t('contactsRetry'),
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.primary)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override

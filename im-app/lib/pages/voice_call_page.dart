@@ -334,12 +334,14 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _ctrlBtn(_muted ? Icons.mic_off : Icons.mic,
+        _ctrlBtn(
+            _muted ? Icons.mic_off : Icons.mic,
             _muted ? _t('voiceCallMuted') : _t('voiceCallMicrophone'),
             _toggleMute,
             active: _muted),
         _ctrlBtn(Icons.call_end, _t('voiceCallHangUp'), _hangup, danger: true),
-        _ctrlBtn(_speaker ? Icons.volume_up : Icons.volume_off,
+        _ctrlBtn(
+            _speaker ? Icons.volume_up : Icons.volume_off,
             _speaker ? _t('voiceCallSpeaker') : _t('voiceCallEarpiece'),
             _toggleSpeaker,
             active: !_speaker),

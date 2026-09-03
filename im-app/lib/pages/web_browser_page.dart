@@ -132,8 +132,8 @@ class _WebBrowserPageState extends State<WebBrowserPage> {
               ),
               ListTile(
                 leading: Icon(Icons.refresh, color: context.cs.onSurface),
-                title:
-                    Text(t('webBrowserRefreshPage'), style: TextStyle(color: context.cs.onSurface)),
+                title: Text(t('webBrowserRefreshPage'),
+                    style: TextStyle(color: context.cs.onSurface)),
                 onTap: () {
                   Navigator.of(ctx).pop();
                   // Web 端刷新 iframe；native 端通过 WebView controller 刷新

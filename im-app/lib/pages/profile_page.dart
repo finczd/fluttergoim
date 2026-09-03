@@ -43,6 +43,9 @@ class _ProfilePageState extends State<ProfilePage> {
     final email = p?['email']?.toString() ?? '';
     final id = p?['id']?.toString() ?? '';
     final shortId = p?['shortId']?.toString() ?? '';
+    final signature = p?['signature']?.toString() ?? '';
+    // 靓号标识：short_id 来自后台靓号池（已分配）
+    final isVipShort = p?['vipShortId'] == true && shortId.isNotEmpty;
     final avatar = p?['avatar']?.toString() ?? '';
 
     return Scaffold(
@@ -141,11 +144,39 @@ class _ProfilePageState extends State<ProfilePage> {
                     child: Builder(builder: (context) {
                       final rows = <Widget>[
                         _infoRow(t('profileAccount'), account, copy: account),
-                        // 需求：ID 优先显示短 ID（靓号）
+                        // 需求：ID 优先显示短 ID（靓号）；靓号时只显示红色「靓ID：xxx」徽标，不再重复显示普通 ID
                         if (shortId.isNotEmpty)
-                          _infoRow('ID', shortId, copy: shortId)
+                          _infoRow('ID', shortId,
+                              copy: shortId,
+                              valueWidget: isVipShort
+                                  ? Align(
+                                      // Expanded 会把徽标拉满整行，用 Align 收紧为内容宽度
+                                      alignment: Alignment.centerLeft,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 1.5),
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                              color: const Color(0xFFE5484D),
+                                              width: 1),
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          t('vipIdBadge', {'id': shortId}),
+                                          style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: Color(0xFFE5484D)),
+                                        ),
+                                      ),
+                                    )
+                                  : null)
                         else if (id.isNotEmpty)
                           _infoRow('ID', id, copy: id),
+                        // 个性签名（编辑资料里维护，这里展示）
+                        if (signature.isNotEmpty)
+                          _infoRow(t('editProfileBio'), signature),
                         if (phone.isNotEmpty)
                           _infoRow(t('profilePhone'), phone, copy: phone),
                         if (email.isNotEmpty)
@@ -177,15 +208,17 @@ class _ProfilePageState extends State<ProfilePage> {
                     child: Row(
                       children: [
                         Expanded(
-                          child: _bigAction(Icons.qr_code, t('profileMyQr'), () {
+                          child:
+                              _bigAction(Icons.qr_code, t('profileMyQr'), () {
                             Navigator.of(context).push(MaterialPageRoute(
                                 builder: (_) => const MyQrPage()));
                           }),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child:
-                              _bigAction(Icons.edit_outlined, t('profileEditProfile'), () async {
+                          child: _bigAction(
+                              Icons.edit_outlined, t('profileEditProfile'),
+                              () async {
                             final changed = await Navigator.of(context)
                                 .push<bool>(MaterialPageRoute(
                                     builder: (_) => const EditProfilePage()));
@@ -214,7 +247,8 @@ class _ProfilePageState extends State<ProfilePage> {
       {bool chevron = false,
       VoidCallback? onTap,
       String? copy,
-      IconData? icon}) {
+      IconData? icon,
+      Widget? valueWidget}) {
     return InkWell(
       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       onTap: onTap,
@@ -233,10 +267,12 @@ class _ProfilePageState extends State<ProfilePage> {
               const SizedBox(width: 10),
             ],
             Expanded(
-              child: Text(value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 14, color: context.cs.onSurface)),
+              child: valueWidget ??
+                  Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          TextStyle(fontSize: 14, color: context.cs.onSurface)),
             ),
             if (copy != null && copy.isNotEmpty)
               InkWell(

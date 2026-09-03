@@ -29,6 +29,14 @@ export const adminApi = {
   configGet: (key: string) => http.get<ApiResp>(`/admin/configs/${key}`),
   configSet: (key: string, value: unknown) => http.put<ApiResp>(`/admin/configs/${key}`, { value }),
 
+  // 自定义邀请码（一码关联多好友，注册自动加好友）
+  inviteCodes: () => http.get<ApiResp<Array<Record<string, any>>>>('/admin/invite-friend-codes'),
+  inviteCodeCreate: (payload: { code: string; friendIds: string[]; remark?: string }) =>
+    http.post<ApiResp>('/admin/invite-friend-codes', payload),
+  inviteCodeUpdate: (id: string | number, payload: { code?: string; friendIds?: string[]; remark?: string; enabled?: number }) =>
+    http.put<ApiResp>(`/admin/invite-friend-codes/${id}`, payload),
+  inviteCodeDelete: (id: string | number) => http.delete<ApiResp>(`/admin/invite-friend-codes/${id}`),
+
   // 智能小助手
   assistantConfigGet: () => http.get<ApiResp<Record<string, any>>>('/admin/assistant/config'),
   assistantConfigSet: (payload: { enabled: boolean; name: string; avatar?: string; autoAdd?: boolean; welcomeText?: string }) =>
@@ -56,8 +64,11 @@ export const adminApi = {
     http.get<ApiResp<{ list: Array<Record<string, any>>; total: number }>>(`/admin/groups/${groupId}/messages`, { params }),
 
   // 消息记录（审计）
-  messages: (params: { kw?: string; convId?: string; userId?: string; from?: number; to?: number; page?: number; size?: number }) =>
+  messages: (params: { kw?: string; convId?: string; userId?: string; type?: number; from?: number; to?: number; page?: number; size?: number }) =>
     http.get<ApiResp<{ list: Array<Record<string, any>>; total: number }>>('/admin/messages', { params }),
+  // 屏蔽/恢复消息（blocked=false 恢复）
+  messageBlock: (msgId: string, blocked = true) =>
+    http.post<ApiResp>(`/admin/messages/${msgId}/block`, { blocked }),
 
   // 数据统计
   statsOverview: () => http.get<ApiResp<Record<string, any>>>('/admin/stats/overview'),

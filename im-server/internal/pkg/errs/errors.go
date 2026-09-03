@@ -18,6 +18,9 @@ var (
 	ConvNotFound = &Err{Code: 4001, Msg: "会话不存在或非成员"}
 	GroupFull    = &Err{Code: 4002, Msg: "群人数已达上限"}
 	RecallDenied = &Err{Code: 4003, Msg: "撤回超时或无权限"}
+	GroupMutedAll = &Err{Code: 4004, Msg: "群已开启全员禁言"}
+	MemberMuted   = &Err{Code: 4005, Msg: "你已被禁言，无法发言"}
+	MemberPrivacy = &Err{Code: 4006, Msg: "群主已开启成员隐私"}
 
 	FileTooLarge = &Err{Code: 5001, Msg: "文件过大或类型不允许"}
 

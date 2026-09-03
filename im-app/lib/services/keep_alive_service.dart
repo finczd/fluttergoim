@@ -44,6 +44,9 @@ class KeepAliveService {
         await FlutterForegroundTask.requestIgnoreBatteryOptimization();
       }
       // 启动前台服务（已在运行时插件内部会返回失败结果，不会抛异常）
+      // notificationIcon：单色小图标（白色气泡），必须配合 AndroidManifest 的
+      // meta-data io.github.imapp.keep_alive.notification_icon 使用；
+      // 不传则插件回退 launcher 彩色图标 → 通知栏只渲染 alpha 通道显示灰色空白方块
       final result = await FlutterForegroundTask.startService(
         serviceTypes: const [
           ForegroundServiceTypes.dataSync,
@@ -51,6 +54,9 @@ class KeepAliveService {
         ],
         notificationTitle: '消息服务运行中',
         notificationText: '保持连接以确保消息及时送达',
+        notificationIcon: const NotificationIcon(
+          metaDataName: 'io.github.imapp.keep_alive.notification_icon',
+        ),
         callback: startCallback,
       );
       if (result is ServiceRequestFailure) {

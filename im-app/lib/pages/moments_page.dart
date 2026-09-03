@@ -335,7 +335,8 @@ class _MomentsPageState extends State<MomentsPage> {
                           color: AppTheme.primary.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(AppLocalizations.of(context).t('momentsOfficial'),
+                        child: Text(
+                            AppLocalizations.of(context).t('momentsOfficial'),
                             style: const TextStyle(
                                 fontSize: 10, color: AppTheme.primary)),
                       ),

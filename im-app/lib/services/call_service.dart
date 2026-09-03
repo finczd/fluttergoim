@@ -6,6 +6,7 @@ import 'package:flutter/material.dart' show MaterialPageRoute;
 import 'package:flutter/foundation.dart';
 
 import 'api_client.dart';
+import 'user_cache.dart';
 import 'ws_service.dart';
 
 /// 通话阶段
@@ -102,10 +103,17 @@ class CallService {
   /// 自己的 ID（用于过滤自己信令的回显，避免把自己发的 invite 当成来电）
   Future<void> _ensureMyId() async {
     if (_myId.isNotEmpty) return;
+    // 进程内缓存命中直接用（一次登录会话只拉一次 /user/profile）
+    final cached = UserCache.myId;
+    if (cached != null && cached.isNotEmpty) {
+      _myId = cached;
+      return;
+    }
     try {
       final r = await ApiClient.instance.get('/api/v1/user/profile');
-      _myId =
-          ((r.data['data'] as Map<String, dynamic>?)?['id'])?.toString() ?? '';
+      final d = (r.data['data'] as Map<String, dynamic>?);
+      UserCache.setMyProfile(d ?? {});
+      _myId = d?['id']?.toString() ?? '';
     } catch (_) {}
   }
 
@@ -325,8 +333,8 @@ class CallService {
     required String callType,
     int duration = 0,
     bool silent = false,
-    String? callerName,    // invite 信令主叫昵称覆盖（startCall 时 state 还没值）
-    String? callerAvatar,  // invite 信令主叫头像覆盖
+    String? callerName, // invite 信令主叫昵称覆盖（startCall 时 state 还没值）
+    String? callerAvatar, // invite 信令主叫头像覆盖
   }) async {
     try {
       final token = await ApiClient.instance.readToken();

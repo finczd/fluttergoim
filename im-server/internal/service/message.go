@@ -38,6 +38,20 @@ func SendMessage(ctx context.Context, senderID int64, req *SendMsgReq) (*model.M
 	if !isMember(ctx, req.ConversationID, senderID) {
 		return nil, errs.ConvNotFound
 	}
+	// 群禁言校验（在幂等判断之前，直接拒绝不落库）：
+	//   1. 全员禁言：开启后仅群主/管理员可发言；
+	//   2. 单人禁言：speak_muted_until 未到期不可发言。
+	var conv model.Conversation
+	if err := store.DB.First(&conv, req.ConversationID).Error; err == nil && conv.Type == model.ConvGroup {
+		if conv.MuteAll == 1 && memberRole(ctx, req.ConversationID, senderID) == model.MemberNormal {
+			return nil, errs.GroupMutedAll
+		}
+		var mem model.ConversationMember
+		if err := store.DB.Where("conversation_id = ? AND user_id = ?", req.ConversationID, senderID).
+			First(&mem).Error; err == nil && mem.SpeakMutedUntil > time.Now().Unix() {
+			return nil, errs.MemberMuted
+		}
+	}
 	if req.Type == 0 {
 		req.Type = model.MsgText
 	}
@@ -156,6 +170,7 @@ func Sync(ctx context.Context, userID, convID, afterSeq int64, limit int64) ([]m
 	filter := bson.M{
 		"conversation_id": convID,
 		"seq":             bson.M{"$gt": afterSeq},
+		"blocked":         bson.M{"$ne": true}, // 后台屏蔽的消息不下发
 	}
 	opts := options.Find().SetSort(bson.D{{Key: "seq", Value: 1}}).SetLimit(limit)
 	cur, err := msgColl().Find(ctx, filter, opts)
@@ -185,7 +200,7 @@ func History(ctx context.Context, userID, convID, beforeMsgID int64, limit int64
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	filter := bson.M{"conversation_id": convID}
+	filter := bson.M{"conversation_id": convID, "blocked": bson.M{"$ne": true}}
 	if beforeMsgID > 0 {
 		filter["msg_id"] = bson.M{"$lt": beforeMsgID}
 	}
@@ -329,6 +344,7 @@ func SearchMessages(ctx context.Context, userID int64, kw string, convID int64, 
 	filter := bson.M{
 		"conversation_id": bson.M{"$in": myConvs},
 		"content":         bson.M{"$regex": regexp.QuoteMeta(kw), "$options": "i"},
+		"blocked":         bson.M{"$ne": true}, // 后台屏蔽的消息不出现在搜索结果
 	}
 	if convID > 0 {
 		if !isMember(ctx, convID, userID) {
@@ -421,4 +437,39 @@ func convMemberIDs(ctx context.Context, convID int64) []int64 {
 	store.DB.Model(&model.ConversationMember{}).
 		Where("conversation_id = ?", convID).Pluck("user_id", &ids)
 	return ids
+}
+
+// sendGroupSystemMsg 群事件系统消息（type=6）：落 Mongo + 实时广播，不写未读数。
+// content 为 JSON：{"kind":"invite|join|quit|kick|mute|unmute|muteAllOn|muteAllOff",
+// "actor":"操作者昵称","target":"当事成员昵称","minutes":N}
+// 客户端按 kind 用本语言词条渲染灰色居中提示条（对齐微信群事件提示）。
+func sendGroupSystemMsg(ctx context.Context, convID int64, content string) {
+	msg := &model.Message{
+		ConversationID: convID,
+		MsgID:          id.Next(),
+		ClientMsgID:    newUUID(),
+		Seq:            nextSeq(ctx, convID),
+		SenderID:       0, // 系统消息无发送者
+		Type:           model.MsgSystem,
+		Content:        content,
+		Status:         model.MsgStatusNormal,
+		CreatedAt:      time.Now(),
+	}
+	if _, err := msgColl().InsertOne(ctx, msg); err != nil {
+		return
+	}
+	_ = PublishEvent(ctx, &Event{
+		Type:    "message",
+		UserIDs: convMemberIDs(ctx, convID),
+		Data:    marshalJSON(msg),
+	})
+}
+
+// userName 取用户昵称（群系统消息文案用），查不到返回空串
+func userName(userID int64) string {
+	var u model.User
+	if err := store.DB.First(&u, userID).Error; err != nil {
+		return ""
+	}
+	return u.Nickname
 }

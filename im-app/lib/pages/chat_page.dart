@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'; // ScrollDirection（判断用户滚动方向）
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -11,6 +12,8 @@ import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/call_service.dart';
 import '../services/conversation_service.dart';
+import '../services/feature_flags.dart';
+import '../services/user_cache.dart';
 import '../services/moment_service.dart';
 import '../services/wallet_store.dart';
 import '../services/ws_service.dart';
@@ -101,20 +104,44 @@ class _ChatPageState extends State<ChatPage> {
   final _svc = ConversationService();
   final _api = ApiClient.instance;
   final _input = TextEditingController();
+
+  /// 消息列表（正序：_msgs[0] 最旧，_msgs.last 最新）
   final _scroll = ScrollController();
+
+  /// 是否应保持贴底（用户意图位）。
+  ///
+  /// true = 跟随到底部：收到新消息 / 图片异步加载导致高度变化都会自动贴底；
+  /// 用户上滑离开底部 → 由 _onScrollNotification 切回 false，停止自动贴底，
+  /// 直到用户滑回底部或点"↓回到最新"。
+  /// 进会话时由 _startStick() 置 true。
+  bool _stickActive = false;
+
+  /// 用户是否正在拖拽 / 惯性滚动（拖拽期间暂停自动贴底，避免打断手势）
+  bool _dragging = false;
+
+  /// jumpTo 是否已排入本帧（收敛期会连续触发多次，同帧只安排一次）
+  bool _jumpScheduled = false;
 
   List<ChatMsg> _msgs = [];
   WsService? _ws;
   bool _loading = true;
+  bool _loadFailed = false; // 历史加载最终失败（显示"重新加载"，不再无声空白）
   int _lastSeq = 0;
-  bool _showJumpBtn = false; // 是否显示"↓"按钮
+  bool _showJumpBtn = false; // 是否显示"↓回到最新"按钮（已离开底部时）
+  bool _loadingOlder = false; // 正在加载更早的历史
+  bool _hasMoreOlder = true; // 还有更早的历史可拉（拉空后置 false）
 
   // 群功能
   List<Map<String, dynamic>> _members = [];
+  int _memberCount = 0; // 群成员人数（标题显示：群名字(9)）
   final Set<String> _mentionIds = {};
   ChatMsg? _quoteMsg;
   // 零钱：已领取的红包/转账 msgId（本地状态）
   final Set<String> _claimedMoneyIds = {};
+
+  // 全员禁言 / 我的角色（禁言时输入框置灰提示；群主/管理员不受限）
+  bool _muteAll = false;
+  int _myRole = 3;
 
   // 长按全屏遮罩状态
   ChatMsg? _longPressedMsg;
@@ -123,6 +150,10 @@ class _ChatPageState extends State<ChatPage> {
   String _myAvatar = '';
 
   bool get isGroup => (widget.conv.conversation['type'] as num?)?.toInt() == 2;
+
+  /// 群成员人数（标题用）：优先服务端实时值，回落会话列表带的值
+  int get _groupMemberCount =>
+      _memberCount > 0 ? _memberCount : widget.conv.memberCount;
 
   /// 群聊按 senderId 查成员头像（单聊不走这里）
   String _memberAvatar(String senderId) {
@@ -135,6 +166,60 @@ class _ChatPageState extends State<ChatPage> {
 
   String _t(String key, [Map<String, String>? params]) =>
       AppLocalizations.of(context).t(key, params);
+
+  /// 群事件系统消息（type=6）→ 本语言文案。
+  /// content 为服务端 JSON：{kind, actor, target, minutes}
+  String _groupSystemText(ChatMsg m) {
+    Map<String, dynamic> d = {};
+    try {
+      final j = jsonDecode(m.content);
+      if (j is Map) d = j.cast<String, dynamic>();
+    } catch (_) {}
+    final kind = (d['kind'] ?? '').toString();
+    final actor = (d['actor'] ?? '').toString();
+    final target = (d['target'] ?? '').toString();
+    final minutes = ((d['minutes'] as num?)?.toInt() ?? 0).toString();
+    switch (kind) {
+      case 'invite':
+        return _t('groupSysInvite', {'actor': actor, 'target': target});
+      case 'join':
+        return _t('groupSysJoin', {'target': target});
+      case 'quit':
+        return _t('groupSysQuit', {'target': target});
+      case 'kick':
+        return _t('groupSysKick', {'actor': actor, 'target': target});
+      case 'mute':
+        return _t(
+            'groupSysMute', {'actor': actor, 'target': target, 'm': minutes});
+      case 'unmute':
+        return _t('groupSysUnmute', {'actor': actor, 'target': target});
+      case 'muteAllOn':
+        return _t('groupSysMuteAllOn', {'actor': actor});
+      case 'muteAllOff':
+        return _t('groupSysMuteAllOff', {'actor': actor});
+      default:
+        return m.content; // 未知系统消息原样显示
+    }
+  }
+
+  /// 输入栏禁言提示（非 null 时输入框整条置灰）：
+  /// 全员禁言仅普通成员受限；个人禁言按 speakMutedUntil 判断
+  String? get _muteBanner {
+    if (!isGroup) return null;
+    if (_muteAll && _myRole != 1 && _myRole != 2) {
+      return _t('chatMutedAllBanner');
+    }
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    for (final m in _members) {
+      final uid = m['userId']?.toString() ?? m['id']?.toString() ?? '';
+      if (uid == widget.myId) {
+        final until = (m['speakMutedUntil'] as num?)?.toInt() ?? 0;
+        if (until > nowSec) return _t('chatMutedBanner');
+        break;
+      }
+    }
+    return null;
+  }
 
   /// 群聊：按 senderId 查成员昵称（小助手固定名；查不到回落短 ID）
   String _senderName(String senderId) {
@@ -156,18 +241,90 @@ class _ChatPageState extends State<ChatPage> {
     super.initState();
     _init();
     _scroll.addListener(_onScroll);
+    // 功能开关（零钱）：后台实时可关，进聊天页刷新一次后重建输入栏
+    FeatureFlags.instance.load().then((_) {
+      if (mounted) setState(() {});
+    });
   }
+
+  /// 距底部多少像素内算"贴底"（此时新消息自动跟进，不打扰正在翻记录的用户）
+  static const double _bottomThreshold = 120;
+
+  /// 滚到距顶部多少像素内触发上拉加载更早历史
+  static const double _loadOlderThreshold = 200;
 
   void _onScroll() {
     final pos = _scroll.position;
     if (!pos.hasContentDimensions) return;
-    final farFromBottom = pos.maxScrollExtent - pos.pixels > 100;
-    if (mounted && farFromBottom != _showJumpBtn) {
-      setState(() => _showJumpBtn = farFromBottom);
+    final awayFromBottom = pos.maxScrollExtent - pos.pixels > _bottomThreshold;
+    if (mounted && awayFromBottom != _showJumpBtn) {
+      setState(() => _showJumpBtn = awayFromBottom);
+    }
+    // 滚到顶部（历史方向的尽头）→ 自动加载更早消息（微信式，无需手动点）
+    if (_hasMoreOlder &&
+        !_loadingOlder &&
+        !_loading &&
+        _msgs.isNotEmpty &&
+        pos.pixels < _loadOlderThreshold) {
+      _loadOlder();
+    }
+  }
+
+  /// 当前是否贴在底部
+  bool get _atBottom {
+    if (!_scroll.hasClients) return true;
+    final pos = _scroll.position;
+    if (!pos.hasContentDimensions) return true;
+    return pos.maxScrollExtent - pos.pixels <= _bottomThreshold;
+  }
+
+  /// 进入会话时调用：开启"持续贴底"意图，并立即跳到底部。
+  ///
+  /// 为什么能收敛到真实底部、且不再白屏/不再有固定贴底窗口：
+  /// ListView.builder 首帧 maxScrollExtent 是**估算值**（只布局可见 item，其余
+  /// 按平均高度外推）。这里首帧 + 下一帧各跳一次启动收敛，之后由
+  /// ScrollMetricsNotification 在内容高度每次变化（懒加载布局收敛、图片**异步
+  /// 加载完成**改变高度）时持续 _jumpToLatest，链式收敛到真实底部。只要用户没
+  /// 主动上滑离开，就一直跟随到底部——彻底覆盖异步图片高度变化（旧版 1.5s 硬
+  /// 窗口到点后图片才加载完，反而把人顶到中间）。
+  /// 列表不再用 Opacity 隐藏，进入/有缓存直出时立即显示，杜绝"白屏一下"。
+  void _startStick() {
+    _stickActive = true;
+    _dragging = false;
+    _jumpToLatest(); // 首帧 layout 后跳到当前（估算）底部
+    // 下一帧再补一跳：此时懒加载已多布局一屏 item，maxScrollExtent 更接近真实
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_stickActive && !_dragging && _scroll.hasClients) _jumpToLatest();
+    });
+  }
+
+  /// 滚动/尺寸通知：
+  /// - 用户拖拽（UserScrollNotification）：拖拽中暂停自动贴底（_dragging），停下时
+  ///   按当前位置刷新意图（在底部→继续贴底；离开→停止，交还控制权）。
+  /// - 内容高度变化（ScrollMetricsNotification）：只要还想贴底就跟随到底部，
+  ///   覆盖懒加载布局收敛、图片异步加载完成等场景。
+  /// 泛型必须是 Notification：ScrollMetricsNotification 与 ScrollNotification
+  /// 是兄弟类，不继承后者，缩窄成 ScrollNotification 收不到。
+  void _onScrollNotification(Notification n) {
+    if (n is UserScrollNotification) {
+      if (n.direction == ScrollDirection.idle) {
+        _dragging = false;
+        _stickActive = _atBottom;
+        if (_stickActive && _scroll.hasClients) _jumpToLatest();
+      } else {
+        _dragging = true; // 正在拖拽，暂停自动贴底，不插入跳变打断手势
+      }
+      return;
+    }
+    if (n is ScrollMetricsNotification) {
+      if (_stickActive && !_dragging && _scroll.hasClients) _jumpToLatest();
     }
   }
 
   Future<void> _init() async {
+    // 全员禁言初值：会话快照携带（服务端 conversation.muteAll）
+    _muteAll =
+        ((widget.conv.conversation['muteAll'] as num?)?.toInt() ?? 0) == 1;
     _loadMyAvatar();
     await _loadHistory();
     await _connectWs();
@@ -177,11 +334,17 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 我方头像（聊天窗口左右气泡都要显示真实头像）
   Future<void> _loadMyAvatar() async {
+    // 进程内缓存命中直接用（一次登录会话只拉一次 /user/profile）
+    final cached = UserCache.myAvatar;
+    if (cached != null && cached.isNotEmpty) {
+      if (mounted) setState(() => _myAvatar = cached);
+      return;
+    }
     try {
       final r = await _api.get('/api/v1/user/profile');
-      final av =
-          ((r.data['data'] as Map<String, dynamic>)['avatar'])?.toString() ??
-              '';
+      final d = (r.data['data'] as Map<String, dynamic>?) ?? {};
+      UserCache.setMyProfile(d);
+      final av = d['avatar']?.toString() ?? '';
       if (mounted && av.isNotEmpty) setState(() => _myAvatar = av);
     } catch (_) {}
   }
@@ -199,11 +362,39 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _loadMembers() async {
     try {
       final list = await _svc.members(widget.conv.id);
-      if (mounted) setState(() => _members = list);
+      if (mounted) {
+        var myRole = _myRole;
+        for (final m in list) {
+          final uid = m['userId']?.toString() ?? m['id']?.toString() ?? '';
+          if (uid == widget.myId) {
+            myRole = (m['role'] as num?)?.toInt() ?? 3;
+            break;
+          }
+        }
+        setState(() {
+          _members = list;
+          _myRole = myRole;
+          // 隐私限量模式下列表被截断，服务端照实下发总数
+          if (_svc.lastMembersCount > 0) _memberCount = _svc.lastMembersCount;
+        });
+      }
     } catch (_) {}
   }
 
-  Future<void> _loadHistory() async {
+  Future<void> _loadHistory({int retry = 0}) async {
+    // 缓存直出：内存有（本进程打开过）或磁盘有（Hive，上次运行留下的）
+    // → 先渲染，不再菊花等待；网络回来后覆盖刷新
+    if (_msgs.isEmpty) {
+      await ConversationService.hydrateFromDisk(widget.conv.id);
+    }
+    final cached = ConversationService.historyCached(widget.conv.id);
+    if (cached != null && cached.isNotEmpty && _msgs.isEmpty) {
+      setState(() {
+        _msgs = cached.map(ChatMsg.fromServer).toList();
+        _loading = false;
+      });
+      _startStick(); // 开启持续贴底（列表已直接显示，无白屏）
+    }
     try {
       final list = await _svc.history(widget.conv.id);
       if (mounted) {
@@ -216,18 +407,44 @@ class _ChatPageState extends State<ChatPage> {
             }
           }
           _loading = false;
+          _loadFailed = false;
+          // 首拉返回不足一页 → 没有更早的历史了（不必再触发上拉）
+          _hasMoreOlder = list.length >= 80;
         });
-        // 群置顶点击跳转：先滚到底（默认），再滚到目标消息
+        // 群置顶点击跳转：滚到目标消息（否则进会话强制贴底）
         final to = widget.scrollToMsgId;
         if (to != null && to.isNotEmpty) {
           _scrollToMsg(to);
         } else {
-          _scrollToBottom();
+          // 进会话：开启持续贴底。缓存直出或首次网络回来的数据整体替换后，
+          // 懒加载估算高度由 ScrollMetricsNotification 持续收敛到真实底部（而非只跳一次）。
+          _startStick();
         }
       }
     } catch (e) {
-      if (mounted) setState(() => _loading = false);
+      // 偶发失败（token 存储读取抖动/网络抖动）会静默变成空会话：
+      // 自动重试两次；仍失败给出"重新加载"入口，不再无声空白
+      if (mounted && retry < 2) {
+        await Future.delayed(const Duration(milliseconds: 600));
+        if (!mounted) return;
+        return _loadHistory(retry: retry + 1);
+      }
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadFailed = true;
+        });
+      }
     }
+  }
+
+  /// 失败态手动重试
+  void _retryLoadHistory() {
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
+    _loadHistory();
   }
 
   Future<void> _connectWs() async {
@@ -269,6 +486,8 @@ class _ChatPageState extends State<ChatPage> {
               if (list.isEmpty || !mounted) return;
               final added = list.map(ChatMsg.fromServer).toList();
               added.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
+              // 同样要在 setState 之前判断（补拉的消息会让内容变高）
+              final wasAtBottom = _atBottom;
               setState(() {
                 for (final m in added) {
                   final dup = _msgs.any((x) =>
@@ -281,7 +500,8 @@ class _ChatPageState extends State<ChatPage> {
                 }
                 _msgs.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
               });
-              _scrollToBottom();
+              // 只在用户本来就看最新时才跟进（翻记录中被打断很烦）
+              if (wasAtBottom) _jumpToLatest();
             });
           });
       _ws!.connect(token);
@@ -294,7 +514,25 @@ class _ChatPageState extends State<ChatPage> {
     final msg = ChatMsg.fromServer(m);
     final seqNow = msg.seq ?? 0;
     if (seqNow > _lastSeq) _lastSeq = seqNow;
+    // 群事件系统消息：全员禁言开关实时刷新输入栏状态
+    if (msg.type == 6) {
+      try {
+        final j = jsonDecode(msg.content);
+        if (j is Map) {
+          final kind = j['kind']?.toString() ?? '';
+          if (kind == 'muteAllOn' || kind == 'muteAllOff') {
+            if (mounted) {
+              setState(() => _muteAll = kind == 'muteAllOn' ? true : false);
+            }
+          }
+        }
+      } catch (_) {}
+    }
     if (mounted) {
+      // **必须在 setState 之前判断**：新消息插进去后 maxScrollExtent 会变大，
+      // 此时再判 _atBottom 会把"本来就在底部"误判成"已离开底部"，
+      // 结果用户收不到新消息还看不到自动滚动。
+      final wasAtBottom = _atBottom;
       setState(() {
         // 幂等去重：msgId 或 clientMsgId 任一命中即跳过。
         // 只按 clientMsgId 判断有漏网场景（服务端/补拉数据不带 clientMsgId 时
@@ -309,7 +547,11 @@ class _ChatPageState extends State<ChatPage> {
         _msgs.add(msg);
         _msgs.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
       });
-      _scrollToBottom();
+      // 同步进进程内历史缓存：下次打开该会话缓存直出时包含这条
+      ConversationService.historyCacheAppend(widget.conv.id, m);
+      // 只有用户本来就在底部才跟进（无动画）；正在翻历史就别打断他，
+      // 由"↓回到最新"按钮提示有新消息
+      if (wasAtBottom) _jumpToLatest();
     }
   }
 
@@ -331,7 +573,7 @@ class _ChatPageState extends State<ChatPage> {
       replyTo: q?.msgId,
     );
     setState(() => _msgs.add(local));
-    _scrollToBottom();
+    _jumpToLatest(); // 自己发的消息：立即看得到（无动画）
 
     try {
       final resp =
@@ -345,6 +587,7 @@ class _ChatPageState extends State<ChatPage> {
           _msgs.sort((a, b) => (a.seq ?? 0).compareTo(b.seq ?? 0));
         }
       });
+      ConversationService.historyCacheAppend(widget.conv.id, resp);
     } catch (_) {
       setState(() {
         final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
@@ -364,6 +607,7 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         if (i >= 0) _msgs[i] = ChatMsg.fromServer(resp);
       });
+      ConversationService.historyCacheAppend(widget.conv.id, resp);
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -475,6 +719,8 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 红包/转账：独立页面（微信群流程对齐）→ 发送 type=8/9
   Future<void> _openMoneyPage(String kind) async {
+    // 防御：后台已关闭零钱时，入口隐藏但历史入口仍可能触发 → 拦截
+    if (!FeatureFlags.instance.walletOn.value) return;
     final isRed = kind == 'redpacket';
     Map<String, dynamic>? payload;
     if (isRed) {
@@ -555,7 +801,7 @@ class _ChatPageState extends State<ChatPage> {
         status: MsgStatus.sending,
       ));
     });
-    _scrollToBottom();
+    _jumpToLatest(); // 自己发的红包/转账：立即看得到（无动画）
     try {
       final resp = await _svc.sendMoney(
           widget.conv.id, isRed ? 8 : 9, contentData,
@@ -596,12 +842,82 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  void _scrollToBottom() {
+  /// 无动画跳到最新一条（自己发消息、收到新消息且本来就在底部）。
+  /// 用 jumpTo 而不是 animateTo —— 用户不该看到"列表自己滚一遍"。
+  void _jumpToLatest() {
+    // 收敛期同一帧可能触发多次（每修正一次尺寸一次），只安排一次即可
+    if (_jumpScheduled) return;
+    _jumpScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _jumpScheduled = false;
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
+  }
+
+  /// 平滑滚到最新（只有用户主动点"↓回到最新"才需要动画）
+  void _animateToLatest() {
+    _stickActive = true; // 用户主动回到底部：恢复贴底意图
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       _scroll.animateTo(_scroll.position.maxScrollExtent,
           duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
     });
+  }
+
+  /// 上拉加载更早历史：以当前最旧一条为游标往回拉，prepend 到列表开头。
+  ///
+  /// 关键：正序列表 prepend 会让内容整体下移，若不补偿，用户眼前的消息会
+  /// 突然跳走。这里记录加载前后的 maxScrollExtent 差值，把 pixels 加上去，
+  /// 视觉位置完全不动（这就是"正序 + 补偿"相对 reverse 唯一多出来的几行）。
+  Future<void> _loadOlder() async {
+    if (_loadingOlder || !_hasMoreOlder || _msgs.isEmpty) return;
+    // 游标取"最旧一条且已有服务端 msgId"的消息（乐观插入的本地消息没有 msgId）
+    String? cursor;
+    for (final m in _msgs) {
+      final id = m.msgId;
+      if (id != null && id.isNotEmpty) {
+        cursor = id;
+        break;
+      }
+    }
+    if (cursor == null) return;
+
+    setState(() => _loadingOlder = true);
+    final beforeExtent =
+        _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0;
+    try {
+      final list = await _svc.history(widget.conv.id, beforeMsgId: cursor);
+      if (!mounted) return;
+      if (list.isEmpty) {
+        setState(() {
+          _hasMoreOlder = false;
+          _loadingOlder = false;
+        });
+        return;
+      }
+      final known = _msgs.map((m) => m.msgId).whereType<String>().toSet();
+      final older = list
+          .map(ChatMsg.fromServer)
+          .where((m) => m.msgId == null || !known.contains(m.msgId))
+          .toList();
+      setState(() {
+        _msgs.insertAll(0, older);
+        _loadingOlder = false;
+        // 服务端 limit 是 80，返回不足 80 说明到头了
+        if (list.length < 80) _hasMoreOlder = false;
+      });
+      // 补偿偏移：让 prepend 前的那条消息仍停在同一位置
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scroll.hasClients) return;
+        final delta = _scroll.position.maxScrollExtent - beforeExtent;
+        if (delta > 0) {
+          _scroll.jumpTo(_scroll.position.pixels + delta);
+        }
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingOlder = false);
+    }
   }
 
   /// 群置顶消息点击跳转：滚动到指定 msgId
@@ -883,7 +1199,7 @@ class _ChatPageState extends State<ChatPage> {
       );
       setState(() {
         _msgs.add(local);
-        _scrollToBottom();
+        _jumpToLatest(); // 自己发的图：立即看得到（无动画）
       });
       // 发送图片消息（type=2, content=URL）
       final resp =
@@ -906,135 +1222,222 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  // ===== 消息列表 =====
+
+  /// 消息列表（**正序**：_msgs[0] 最旧，_msgs.last 最新）
+  ///
+  /// 首屏贴底由进入会话时的 _startStick() 完成（首帧/下一帧跳 + ScrollMetricsNotification
+  /// 持续驱动收敛到真实底部）。列表始终直接渲染，不隐藏——进入会话/有缓存直出立即显示，
+  /// 杜绝"白屏一下再载入消息"。
+  ///
+  /// 为什么是正序而不是 reverse：列表不满一屏时正序天然靠顶部显示（微信式），
+  /// 而 reverse 会靠底部，改回顶部需要自己写 RenderSliver 垫弹性空白。
+  /// 代价只有一个：上拉历史 prepend 后要手动补偿 3 行偏移量（见 _loadOlder）。
+  Widget _buildMessageList() {
+    // 顶部"加载更早"占位：还有更多历史时占一格，拉到头后自动消失
+    final extraTop = _hasMoreOlder ? 1 : 0;
+    final list = ListView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
+      itemCount: _msgs.length + extraTop,
+      itemBuilder: (_, i) {
+        if (extraTop == 1 && i == 0) return _buildOlderLoader();
+        return _buildMsgItem(i - extraTop);
+      },
+    );
+    // 监听滚动/尺寸通知：首屏由 _startStick 激活贴底窗口，内容高度收敛由
+    // ScrollMetricsNotification 驱动持续贴底（见 _onScrollNotification）。
+    // 用 Notification 而不是 ScrollNotification —— ScrollMetricsNotification
+    // 并不继承 ScrollNotification，两者是兄弟关系。
+    final wrapped = NotificationListener<Notification>(
+      onNotification: (n) {
+        _onScrollNotification(n);
+        return false; // 不拦截，继续向上冒泡
+      },
+      child: list,
+    );
+    // 列表始终直接显示，不隐藏：进入会话/有缓存直出立即渲染，避免白屏。
+    return wrapped;
+  }
+
+  /// 列表顶部的"加载更早"条：滚到顶部自动触发（见 _onScroll）。
+  /// 加载中显示转圈；等待触发时保留等高占位，避免触发瞬间列表跳动。
+  Widget _buildOlderLoader() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 8),
+      child: Center(
+        child: _loadingOlder
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const SizedBox(height: 20),
+      ),
+    );
+  }
+
+  /// 单条消息（[i] 为正序索引）
+  Widget _buildMsgItem(int i) {
+    final m = _msgs[i];
+    return Column(
+      children: [
+        // 距上一条超过 5 分钟 → 居中时间分隔条
+        if (_needTimeDivider(i))
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: context.cs.onSurfaceVariant.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                ),
+                child: Text(
+                  _fullTime(m.createdAt),
+                  style: TextStyle(
+                      fontSize: 11, color: context.cs.onSurfaceVariant),
+                ),
+              ),
+            ),
+          ),
+        // 群事件系统提示（type=6）：灰色居中小字条（微信式）
+        if (m.type == 6 && !m.recalled)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(48, 4, 48, 6),
+            child: Text(_groupSystemText(m),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: context.cs.onSurfaceVariant)),
+          )
+        else
+          _MsgRow(
+            msg: m,
+            colors: _bubbleColors,
+            myId: widget.myId,
+            isMine: m.senderId == widget.myId,
+            senderName: _senderName(m.senderId),
+            showSenderName: isGroup,
+            // 头像：单聊（含小助手）用对方会话头像，群聊按成员查
+            myAvatar: _myAvatar,
+            peerAvatar: widget.conv.avatarUrl,
+            senderAvatar: _memberAvatar(m.senderId),
+            highlighted: _longPressedMsg?.clientMsgId == m.clientMsgId,
+            onLongPress: () => _showLongPressOverlay(m),
+            timeText: _time(m.createdAt),
+            onRetry: m.status == MsgStatus.failed ? () => _retry(m) : null,
+            onCallTap: () => _openCallFromSignal(m.content),
+            moneyClaimed: _claimedMoneyIds.contains(m.msgId),
+            onMoneyTap: () => _claimMoney(m),
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pinnedContent =
         widget.conv.conversation['pinnedMsgContent']?.toString() ?? '';
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ===== 顶栏 =====
-            _topBar(),
-            // ===== 置顶消息条 =====
-            if (pinnedContent.isNotEmpty) _pinnedBar(pinnedContent),
-            // ===== 消息列表 + 浮动↓按钮 =====
-            Expanded(
-              child: Stack(
-                children: [
-                  _loading
-                      ? const Center(child: CircularProgressIndicator())
-                      : ListView.builder(
-                          controller: _scroll,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 0, vertical: 8),
-                          itemCount: _msgs.length,
-                          itemBuilder: (_, i) {
-                            final m = _msgs[i];
-                            return Column(
-                              children: [
-                                // 距上一条超过 5 分钟 → 居中时间分隔条
-                                if (_needTimeDivider(i))
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 16, vertical: 10),
-                                    child: Center(
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 10, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: context.cs.onSurfaceVariant
-                                              .withValues(alpha: 0.12),
-                                          borderRadius: BorderRadius.circular(
-                                              AppTheme.radiusSm),
-                                        ),
-                                        child: Text(
-                                          _fullTime(m.createdAt),
-                                          style: TextStyle(
-                                              fontSize: 11,
-                                              color:
-                                                  context.cs.onSurfaceVariant),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                _MsgRow(
-                                  msg: m,
-                                  colors: _bubbleColors,
-                                  myId: widget.myId,
-                                  isMine: m.senderId == widget.myId,
-                                  senderName: _senderName(m.senderId),
-                                  showSenderName: isGroup,
-                                  // 头像：单聊（含小助手）用对方会话头像，群聊按成员查
-                                  myAvatar: _myAvatar,
-                                  peerAvatar: widget.conv.avatarUrl,
-                                  senderAvatar: _memberAvatar(m.senderId),
-                                  highlighted: _longPressedMsg?.clientMsgId ==
-                                      m.clientMsgId,
-                                  onLongPress: () => _showLongPressOverlay(m),
-                                  timeText: _time(m.createdAt),
-                                  onRetry: m.status == MsgStatus.failed
-                                      ? () => _retry(m)
-                                      : null,
-                                  onCallTap: () =>
-                                      _openCallFromSignal(m.content),
-                                  moneyClaimed:
-                                      _claimedMoneyIds.contains(m.msgId),
-                                  onMoneyTap: () => _claimMoney(m),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                  // ===== 浮动↓按钮 =====
-                  if (_showJumpBtn)
-                    Positioned(
-                      bottom: 16,
-                      right: 16,
-                      child: _JumpToBottomBtn(
-                        onTap: _scrollToBottom,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            // ===== 输入栏 =====
-            _InputBar(
-              controller: _input,
-              quoteMsg: _quoteMsg,
-              onClearQuote: () => setState(() => _quoteMsg = null),
-              onSend: _send,
-              onMention: isGroup ? _pickMention : null,
-              onCall: (type) => _openCall(type),
-              onPickImage: _pickImage,
-              onMoney: (kind) => _openMoneyPage(kind),
-            ),
-          ],
-        ),
+    // 系统通知栏（状态栏）颜色跟随标题栏：顶栏是 context.cs.surface，
+    // 状态栏区域原本露出的是 scaffoldBackgroundColor（灰色），不一致 → 锁成同色
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final topBarColor = context.cs.surface;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: topBarColor, // Android 状态栏背景 = 标题栏颜色
+        statusBarIconBrightness:
+            isDark ? Brightness.light : Brightness.dark, // 图标反色
+        statusBarBrightness: isDark ? Brightness.dark : Brightness.light, // iOS
+        systemNavigationBarColor: Theme.of(context).scaffoldBackgroundColor,
+        systemNavigationBarIconBrightness:
+            isDark ? Brightness.light : Brightness.dark,
       ),
-      // ===== 长按全屏遮罩 =====
-      bottomSheet: _longPressedMsg == null
-          ? null
-          : _LongPressOverlay(
-              msg: _longPressedMsg!,
-              convName: widget.conv.conversationName,
-              myId: widget.myId,
-              colors: _bubbleColors,
-              onClose: _closeLongPressOverlay,
-              onCopy: () => _copy(_longPressedMsg!),
-              onQuote: () => _quote(_longPressedMsg!),
-              onRecall: () => _recall(_longPressedMsg!),
-              onFavorite: () => _favorite(_longPressedMsg!),
-              onForward: () => _forward(_longPressedMsg!),
-              onPin: () => _pinMsg(_longPressedMsg!),
-              onSend: (text) {
-                // 回复：直接复用普通 send，replyTo 携带
-                _sendReply(text, _longPressedMsg!);
-                _closeLongPressOverlay();
-              },
-            ),
+      child: Scaffold(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // ===== 顶栏 =====
+              _topBar(),
+              // ===== 置顶消息条 =====
+              if (pinnedContent.isNotEmpty) _pinnedBar(pinnedContent),
+              // ===== 消息列表 + 浮动↓按钮 =====
+              Expanded(
+                child: Stack(
+                  children: [
+                    _loading
+                        ? const Center(child: CircularProgressIndicator())
+                        : _loadFailed
+                            ? _buildLoadFailed()
+                            : _buildMessageList(),
+                    // ===== 浮动↓按钮 =====
+                    if (_showJumpBtn)
+                      Positioned(
+                        bottom: 16,
+                        right: 16,
+                        child: _JumpToBottomBtn(
+                          onTap: _animateToLatest, // 用户主动点 → 用动画
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              // ===== 输入栏（全员禁言/被禁言时整条置灰提示；群主/管理员不受限）=====
+              if (_muteBanner != null)
+                Container(
+                  height: 64,
+                  color:
+                      context.cs.surfaceContainerHighest.withValues(alpha: 0.6),
+                  alignment: Alignment.center,
+                  child: Text(
+                    _muteBanner!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 14, color: context.cs.onSurfaceVariant),
+                  ),
+                )
+              else
+                _InputBar(
+                  controller: _input,
+                  quoteMsg: _quoteMsg,
+                  onClearQuote: () => setState(() => _quoteMsg = null),
+                  onSend: _send,
+                  onMention: isGroup ? _pickMention : null,
+                  onCall: (type) => _openCall(type),
+                  onPickImage: _pickImage,
+                  onMoney: (kind) => _openMoneyPage(kind),
+                  showMoney: FeatureFlags.instance.walletOn.value,
+                ),
+            ],
+          ),
+        ),
+        // ===== 长按全屏遮罩 =====
+        bottomSheet: _longPressedMsg == null
+            ? null
+            : _LongPressOverlay(
+                msg: _longPressedMsg!,
+                convName: widget.conv.conversationName,
+                myId: widget.myId,
+                colors: _bubbleColors,
+                onClose: _closeLongPressOverlay,
+                onCopy: () => _copy(_longPressedMsg!),
+                onQuote: () => _quote(_longPressedMsg!),
+                onRecall: () => _recall(_longPressedMsg!),
+                onFavorite: () => _favorite(_longPressedMsg!),
+                onForward: () => _forward(_longPressedMsg!),
+                onPin: () => _pinMsg(_longPressedMsg!),
+                onSend: (text) {
+                  // 回复：直接复用普通 send，replyTo 携带
+                  _sendReply(text, _longPressedMsg!);
+                  _closeLongPressOverlay();
+                },
+              ),
+      ),
     );
   }
 
@@ -1049,7 +1452,7 @@ class _ChatPageState extends State<ChatPage> {
       replyTo: replyTo.msgId,
     );
     setState(() => _msgs.add(local));
-    _scrollToBottom();
+    _jumpToLatest(); // 自己发的消息：立即看得到（无动画）
     try {
       final resp =
           await _svc.send(widget.conv.id, text, clientMsgId: clientMsgId);
@@ -1069,19 +1472,48 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 顶栏：← 返回 + 居中（标题 + 在线状态） + 右侧 ··· 三点
+  /// 历史加载最终失败：给"重新加载"入口（不再无声空白）
+  Widget _buildLoadFailed() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.cloud_off_outlined,
+              size: 40, color: context.cs.onSurfaceVariant),
+          const SizedBox(height: 10),
+          Text(_t('chatHistoryLoadFailed'),
+              style:
+                  TextStyle(fontSize: 13, color: context.cs.onSurfaceVariant)),
+          const SizedBox(height: 14),
+          TextButton(
+            onPressed: _retryLoadHistory,
+            child: Text(_t('chatRetryLoad'),
+                style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.primary)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _topBar() {
     // 在线状态：从会话数据读取（后端 peerOnline + peerOnlineDev）
     final isGroupType = isGroup;
     final peerOnline = widget.conv.peerOnline;
     final peerDev = widget.conv.peerOnlineDev;
     final hasMobile = peerDev.any((d) => d == 'ios' || d == 'android');
+    // 小助手永远在线（官方账号）
     final statusText = isGroupType
         ? ''
-        : (peerOnline
-            ? (hasMobile
-                ? _t('chatStatusMobileOnline')
-                : _t('chatStatusDesktopOnline'))
-            : _t('chatStatusOffline'));
+        : (widget.conv.isAssistant
+            ? _t('chatStatusOnline')
+            : (peerOnline
+                ? (hasMobile
+                    ? _t('chatStatusMobileOnline')
+                    : _t('chatStatusDesktopOnline'))
+                : _t('chatStatusOffline')));
     return Container(
       decoration: BoxDecoration(
           color: context.cs.surface,
@@ -1100,7 +1532,10 @@ class _ChatPageState extends State<ChatPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(widget.conv.conversationName,
+                Text(
+                    isGroupType && _groupMemberCount > 0
+                        ? '${widget.conv.conversationName}(${_groupMemberCount})'
+                        : widget.conv.conversationName,
                     style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w600,
@@ -2118,6 +2553,7 @@ class _InputBar extends StatefulWidget {
   final ValueChanged<String>? onCall; // 需求11：语音/视频通话（TRTC）
   final VoidCallback? onPickImage; // 需求3：相册选图发送
   final ValueChanged<String>? onMoney; // 红包/转账（redpacket / transfer）
+  final bool showMoney; // 功能开关：关闭零钱时隐藏红包/转账入口
 
   const _InputBar({
     required this.controller,
@@ -2128,6 +2564,7 @@ class _InputBar extends StatefulWidget {
     this.onCall,
     this.onPickImage,
     this.onMoney,
+    this.showMoney = true,
   });
 
   @override
@@ -2374,6 +2811,7 @@ class _InputBarState extends State<_InputBar> {
             child: _drawerOpen
                 ? _PlusDrawer(
                     onMention: widget.onMention,
+                    showMoney: widget.showMoney,
                     onItem: (name) {
                       setState(() => _drawerOpen = false);
                       // 需求11：语音/视频通话入口（TRTC）→ 交由 ChatPage 导航
@@ -2406,13 +2844,15 @@ class _InputBarState extends State<_InputBar> {
 class _PlusDrawer extends StatelessWidget {
   final VoidCallback? onMention;
   final ValueChanged<String> onItem;
-  const _PlusDrawer({this.onMention, required this.onItem});
+  final bool showMoney; // 功能开关：关闭零钱时隐藏红包/转账入口
+  const _PlusDrawer(
+      {this.onMention, required this.onItem, this.showMoney = true});
 
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
     // label 存词典 key，显示时翻译；onItem 回传 key 供逻辑匹配
-    final items = <_DrawerItem>[
+    var items = <_DrawerItem>[
       const _DrawerItem('chatDrawerAlbum', Icons.photo_outlined),
       const _DrawerItem('chatDrawerFile', Icons.folder_outlined),
       const _DrawerItem('chatDrawerRedPacket', Icons.card_giftcard),
@@ -2422,6 +2862,12 @@ class _PlusDrawer extends StatelessWidget {
       const _DrawerItem('chatDrawerCard', Icons.person_outline),
       const _DrawerItem('chatDrawerFavorite', Icons.star_outline),
     ];
+    if (!showMoney) {
+      items = items
+          .where((it) =>
+              it.key != 'chatDrawerRedPacket' && it.key != 'chatDrawerTransfer')
+          .toList();
+    }
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),

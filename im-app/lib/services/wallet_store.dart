@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'api_client.dart';
+import 'local_store.dart';
 import '../l10n/app_locale.dart';
 
 /// 零钱 / 钱包（以后端 `user.balance` 为唯一数据源）
@@ -52,12 +53,44 @@ class WalletStore {
           .map((e) => (e as Map).cast<String, dynamic>())
           .toList();
       _loadedOnce = true;
+      // 落盘：下次冷启动首屏直出，不再"先 ¥0 再跳成真实值"。
+      // 只用于展示，见 LocalStore.loadWallet 的安全说明。
+      unawaited(LocalStore.saveWallet(balance: _balance, frozen: _frozen));
+    } catch (_) {}
+  }
+
+  /// 冷启动：用本地快照先撑住首屏，随后 refresh() 会用服务端真实值覆盖。
+  ///
+  /// **只影响展示**。任何涉及金额的计算/校验都必须先 refresh() 拿服务端值——
+  /// 这份快照可能过期（用户可能在 PC 端改过余额、或离线很久）。
+  /// 提现 / 转账 / 红包页在打开时都会先 refresh()，见各自 _load()。
+  Future<void> hydrate() async {
+    try {
+      final snap = await LocalStore.loadWallet();
+      if (snap == null) return;
+      _setBalance((snap['balance'] as num?)?.toDouble() ?? 0);
+      _frozen = (snap['frozen'] as num?)?.toDouble() ?? 0;
+      if (frozenNotifier.value != _frozen) frozenNotifier.value = _frozen;
     } catch (_) {}
   }
 
   void _setBalance(double v) {
     _balance = v;
     if (balanceNotifier.value != v) balanceNotifier.value = v;
+  }
+
+  /// 退出登录 / 被踢下线：清空内存里的余额与流水。
+  ///
+  /// 磁盘快照由 `LocalStore.clearUserData()` 清，这里清内存——
+  /// 否则换账号登录后、refresh() 返回之前，会短暂显示上一个人的余额（金额类绝不能串号）。
+  void reset() {
+    _balance = 0;
+    _frozen = 0;
+    _records = [];
+    _loadedOnce = false;
+    _lastError = '';
+    if (balanceNotifier.value != 0) balanceNotifier.value = 0;
+    if (frozenNotifier.value != 0) frozenNotifier.value = 0;
   }
 
   /// 转账收款（B-21）。
@@ -77,9 +110,9 @@ class WalletStore {
       final body = r.data as Map<String, dynamic>? ?? {};
       final code = (body['code'] as num?)?.toInt() ?? -1;
       if (code != 0) {
-        _lastError = (body['message'] ??
-                AppLocalizations.instance.t('svcAcceptFailed'))
-            .toString();
+        _lastError =
+            (body['message'] ?? AppLocalizations.instance.t('svcAcceptFailed'))
+                .toString();
         return null;
       }
       final data = (body['data'] as Map<String, dynamic>?) ?? {};

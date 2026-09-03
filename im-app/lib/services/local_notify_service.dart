@@ -27,9 +27,8 @@ class LocalNotifyService {
         iOS: ios,
       ));
       // Android 13+ 通知运行时权限（KeepAliveService 已统一申请过，这里兜底）
-      final impl = _plugin
-          .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>();
+      final impl = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
       await impl?.requestNotificationsPermission();
       _inited = true;
     } catch (e) {
@@ -46,8 +45,8 @@ class LocalNotifyService {
     try {
       const details = NotificationDetails(
         android: AndroidNotificationDetails(
-          'im_messages',        // channel id
-          '消息通知',             // channel name
+          'im_messages', // channel id
+          '消息通知', // channel name
           channelDescription: '新消息通知栏提醒',
           importance: Importance.high,
           priority: Priority.high,

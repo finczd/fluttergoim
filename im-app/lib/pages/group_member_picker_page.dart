@@ -35,8 +35,10 @@ class GroupMemberPickerPage extends StatelessWidget {
               itemBuilder: (ctx, i) {
                 final m = selectable[i];
                 final id = m['id']?.toString() ?? '';
-                final name = (m['nickname'] ?? m['name'] ?? t('memberPickerMember'))
-                    .toString();
+                final name =
+                    (m['nickname'] ?? m['name'] ?? t('memberPickerMember'))
+                        .toString();
+                final avatar = (m['avatar'] ?? '').toString();
                 return InkWell(
                   onTap: () => Navigator.pop(context, m),
                   borderRadius: BorderRadius.circular(AppTheme.radiusMd),
@@ -53,17 +55,32 @@ class GroupMemberPickerPage extends StatelessWidget {
                         Container(
                           width: 42,
                           height: 42,
+                          clipBehavior: Clip.antiAlias,
                           decoration: BoxDecoration(
                             color: AppTheme.avatarColors[id.hashCode.abs() %
                                 AppTheme.avatarColors.length],
                             shape: BoxShape.circle,
                           ),
                           alignment: Alignment.center,
-                          child: Text(name.characters.first,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w600)),
+                          // 有头像显示真实头像，加载失败/无头像回落首字母
+                          child: avatar.isNotEmpty
+                              ? Image.network(
+                                  avatar,
+                                  width: 42,
+                                  height: 42,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Text(
+                                      name.characters.first,
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.w600)),
+                                )
+                              : Text(name.characters.first,
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w600)),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
