@@ -7,6 +7,15 @@ export const useContactsStore = defineStore('contacts', () => {
   const friends = ref([]);
   const requests = ref([]);
 
+  // 用户资料缓存：users/detail 拉取后按 id 缓存，避免重复点击头像/联系人反复请求、头像反复重载
+  const userDetailCache = ref({});
+  function getUserDetail(id) {
+    return userDetailCache.value[String(id)] || null;
+  }
+  function setUserDetail(u) {
+    if (u && u.id) userDetailCache.value = { ...userDetailCache.value, [String(u.id)]: u };
+  }
+
   // 需求1：待处理好友申请数（通讯录/新朋友红点）
   const requestCount = computed(() => requests.value.filter(r => Number(r.status) === 0).length);
 
@@ -46,5 +55,5 @@ export const useContactsStore = defineStore('contacts', () => {
     }
   }
 
-  return { friends, requests, requestCount, loadFriends, loadRequests, respondFriendRequest, addFriend };
+  return { friends, requests, userDetailCache, getUserDetail, setUserDetail, requestCount, loadFriends, loadRequests, respondFriendRequest, addFriend };
 });

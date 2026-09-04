@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, nextTick, computed } from 'vue';
+import { ref, watch, nextTick, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useMessagesStore } from '../stores/messages';
 import { useUiStore } from '../stores/ui';
 import { useInspector } from '../composables/useInspector';
@@ -46,6 +46,27 @@ function scrollBottom() {
 const nearBottom = ref(true);
 const unreadBelow = ref(0);
 const showJumpBottom = computed(() => !nearBottom.value && messages.messages.length > 0);
+
+// 图片/视频点击放大（灯箱）
+const lightboxUrl = ref('');
+function onImage(url) {
+  if (url) lightboxUrl.value = url;
+}
+function closeLightbox() {
+  lightboxUrl.value = '';
+}
+
+// 异步图片/视频加载完成会改变内容高度 → 若本就在底部则重新贴底（避免进入会话后停在“估算底部”）
+function onMediaLoad(e) {
+  const t = e.target;
+  if (t && (t.tagName === 'IMG' || t.tagName === 'VIDEO') && nearBottom.value) scrollBottom();
+}
+onMounted(() => {
+  listEl.value?.addEventListener('load', onMediaLoad, true);
+});
+onBeforeUnmount(() => {
+  listEl.value?.removeEventListener('load', onMediaLoad, true);
+});
 
 function goBottom() {
   nearBottom.value = true;
@@ -126,22 +147,34 @@ function onRetry(id) {
 </script>
 
 <template>
-  <div ref="listEl" class="message-list" @scroll="onScroll">
-    <div v-if="!rendered.length" class="empty-list-state"><strong>还没有消息</strong><span>发送第一条消息开始沟通</span></div>
-    <template v-for="(row, i) in rendered" :key="row.day ? 'd' + i : 'm' + row.message.id">      <div v-if="row.day" class="message-day">{{ row.day }}</div>
-      <MessageRow
-        v-else
-        :message="row.message"
-        @menu="onMenu"
-        @avatar="onAvatar"
-        @reply-jump="onReplyJump"
-        @retry="onRetry"
-        @money="m => emit('money', m)"
-      />
-    </template>
+  <div class="message-list-wrap">
+    <!-- 首屏消息拉取中且无缓存/无内容时显示进度条，避免被误认为白屏/卡死 -->
+    <div v-if="messages.loadingInitial && !messages.messages.length" class="msg-loading">
+      <div class="msg-loading-bar"><i></i></div>
+      <span>正在载入消息…</span>
+    </div>
+    <div ref="listEl" class="message-list" @scroll="onScroll">
+      <div v-if="!rendered.length" class="empty-list-state"><strong>还没有消息</strong><span>发送第一条消息开始沟通</span></div>
+      <template v-for="(row, i) in rendered" :key="row.day ? 'd' + i : 'm' + row.message.id">      <div v-if="row.day" class="message-day">{{ row.day }}</div>
+        <MessageRow
+          v-else
+          :message="row.message"
+          @menu="onMenu"
+          @avatar="onAvatar"
+          @reply-jump="onReplyJump"
+          @retry="onRetry"
+          @image="onImage"
+          @money="m => emit('money', m)"
+        />
+      </template>
+    </div>
     <button v-if="showJumpBottom" class="jump-bottom-fab" type="button" @click="goBottom">
       <svg><use href="#i-chevron" /></svg>
       <span>{{ unreadBelow > 0 ? unreadBelow + ' 条新消息' : '回到底部' }}</span>
     </button>
+    <div v-if="lightboxUrl" class="media-overlay" @click.self="closeLightbox">
+      <button class="media-overlay-close" type="button" @click="closeLightbox">关闭</button>
+      <img :src="lightboxUrl" alt="预览" @click="closeLightbox">
+    </div>
   </div>
 </template>

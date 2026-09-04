@@ -157,16 +157,10 @@ class ApiClient {
     await _storage.delete(key: _refreshKey);
   }
 
-  /// 退出登录：调后端注销 + 清本地 token
-  /// 退出登录：**先清本地登录态，再通知服务端**。
-  ///
-  /// 之前是"先发请求、成功后再清本地"，dio 的 connect 5s + receive 10s，
-  /// 服务器慢或不可达时最多要等 15s —— 用户点了"退出登录"却半天没反应（B-18）。
-  /// 本地 token 必须先清（这是退出登录唯一必须成功的事），
-  /// 服务端通知失败不影响本地已登出，且整段调用 4s 封顶。
-  Future<void> logout() async {
-    final t = await readToken();
-    await _clearAuth(); // 先清本地：access + refresh 一起删
+  /// 清本地登录态 + 各类用户缓存（换账号前不能闪现上一个账号资料）。
+  /// 主动 logout 与 服务端强制 forceLogout 共用，避免逻辑漂移。
+  Future<void> _clearLocalData() async {
+    await clearAuth(); // access + refresh 一起删
     // 清 UI 缓存（我的资料/通讯录/发现列表/会话列表/关于页配置）：
     // 换账号登录时不能闪现上一个账号的资料
     unawaited(writePref('profile', null));
@@ -180,6 +174,27 @@ class ApiClient {
     unawaited(PushService.instance.stop());
     // 停掉保活前台服务：通知栏消失，进程可被正常回收
     unawaited(KeepAliveService.instance.stop());
+  }
+
+  /// 服务端强制下线（后台禁用账号 / 踢人）→ 清登录态并跳登录页。
+  /// 与用户主动 logout 不同：不发服务端注销请求（账号已被服务端作废，
+  /// 本地 token 即将/已经失效）。由 ws_service 的 forceLogout 事件驱动，
+  /// WS 连接的关闭也由事件监听方（GlobalWs）负责，避免 api_client 反向依赖 ws_service。
+  Future<void> forceLogout() async {
+    await _clearLocalData();
+    onUnauthorized?.call();
+  }
+
+  /// 退出登录：调后端注销 + 清本地 token
+  /// 退出登录：**先清本地登录态，再通知服务端**。
+  ///
+  /// 之前是"先发请求、成功后再清本地"，dio 的 connect 5s + receive 10s，
+  /// 服务器慢或不可达时最多要等 15s —— 用户点了"退出登录"却半天没反应（B-18）。
+  /// 本地 token 必须先清（这是退出登录唯一必须成功的事），
+  /// 服务端通知失败不影响本地已登出，且整段调用 4s 封顶。
+  Future<void> logout() async {
+    final t = await readToken();
+    await _clearLocalData(); // 先清本地：登录态 + 各类用户缓存一起删
     if (t == null || t.isEmpty) return;
     try {
       await _dio

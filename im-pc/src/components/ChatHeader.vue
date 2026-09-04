@@ -11,7 +11,29 @@ const inspector = useInspector();
 
 const current = computed(() => messages.current || {});
 const isGroup = computed(() => current.value.type === 'group');
-const title = computed(() => current.value.title || '会话');
+const members = computed(() => messages.currentDetail?.members || []);
+const title = computed(() => {
+  const c = current.value;
+  if (isGroup.value) {
+    // 群昵称(人数)，如「项目交流群 (9)」
+    const n = (messages.currentDetail?.members?.length) || c.member_count_cache || 0;
+    return (c.title || '群聊') + (n ? ` (${n})` : '');
+  }
+  return c.title || '会话';
+});
+// 头部头像：群聊用成员拼图（avatar_members）；单聊用对方头像（peer.avatar 兜底 conv.avatar）
+const headerAvatar = computed(() => {
+  const c = current.value;
+  if (!c.id) return { nickname: '' };
+  if (isGroup.value) {
+    return {
+      nickname: c.title || '群聊',
+      avatar: c.avatar || '',
+      avatar_members: (members.value || []).slice(0, 9).map(m => ({ avatar: m.avatar || '', nickname: m.nickname || m.username || String(m.id) }))
+    };
+  }
+  return { nickname: c.title || '会话', avatar: c.peer?.avatar || c.avatar || '' };
+});
 
 // 在线/离线文案（在线时显示设备类型：手机在线/H5在线/电脑在线）
 const statusText = computed(() => {
@@ -69,7 +91,7 @@ function startCall(type) {
 <template>
   <header class="chat-header">
     <div class="chat-identity">
-      <Avatar :user="current" size="large" />
+      <Avatar :user="headerAvatar" size="large" />
       <div class="chat-identity-text">
         <div class="chat-title-row">
           <h2>{{ title }}</h2>

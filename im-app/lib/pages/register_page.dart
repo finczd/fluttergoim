@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -23,6 +26,8 @@ class _RegisterPageState extends State<RegisterPage> {
   final _password = TextEditingController();
   final _inviteCode = TextEditingController();
   final _confirmPwd = TextEditingController();
+  final _captchaCode = TextEditingController();
+  final _smsCode = TextEditingController();
 
   final _svc = AuthService();
   final _api = ApiClient.instance;
@@ -34,29 +39,110 @@ class _RegisterPageState extends State<RegisterPage> {
   bool _pwdVisible = false;
   bool _confirmPwdVisible = false;
 
+  // 图形验证码 + 短信验证码
+  Captcha? _captcha;
+  Uint8List? _captchaBytes; // 解码一次，避免倒计时每秒重建导致闪烁
+  int _smsLeft = 0;
+  Timer? _smsTimer;
+
   @override
   void initState() {
     super.initState();
     _load();
   }
 
+  /// 后台开启短信/邮箱认证（authMode != none）时，需要图形验证码（发码前置）+ 短信验证码
+  bool get _needAuth {
+    final m = _config?.authMode ?? 'none';
+    return m.isNotEmpty && m != 'none';
+  }
+
   Future<void> _load() async {
     final cfg = await _svc.getConfig();
-    if (mounted) {
-      setState(() {
-        _config = cfg;
-        _logoUrl = cfg.appLogo.isNotEmpty ? cfg.appLogo : cfg.brandLogo;
-      });
+    if (!mounted) return;
+    setState(() {
+      _config = cfg;
+      _logoUrl = cfg.appLogo.isNotEmpty ? cfg.appLogo : cfg.brandLogo;
+    });
+    if (_needAuth) {
+      await _loadCaptcha();
     }
   }
 
-  @override
-  void dispose() {
-    _account.dispose();
-    _password.dispose();
-    _inviteCode.dispose();
-    _confirmPwd.dispose();
-    super.dispose();
+  Future<void> _loadCaptcha() async {
+    try {
+      final c = await _svc.getCaptcha();
+      if (!mounted) return;
+      Uint8List bytes;
+      try {
+        bytes = base64Decode(c.imageBase64);
+      } catch (_) {
+        bytes = Uint8List(0);
+      }
+      // 只在拿到新验证码时解码一次，避免倒计时每秒重建导致图片闪烁
+      setState(() {
+        _captcha = c;
+        _captchaBytes = bytes;
+      });
+    } catch (_) {
+      // 静默失败：保留旧验证码或空；用户可点击图片重试
+    }
+  }
+
+  void _startSmsCountdown() {
+    _smsTimer?.cancel();
+    _smsTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_smsLeft <= 1) {
+        timer.cancel();
+        setState(() => _smsLeft = 0);
+      } else {
+        setState(() => _smsLeft--);
+      }
+    });
+  }
+
+  Future<void> _sendCode() async {
+    final acc = _account.text.trim();
+    if (acc.isEmpty) {
+      setState(() => _error = '请先填写手机号 / 账号');
+      return;
+    }
+    if (_captcha == null) {
+      setState(() => _error = '图形验证码加载中，请稍候');
+      return;
+    }
+    if (_captchaCode.text.trim().isEmpty) {
+      setState(() => _error = '请先填写图形验证码');
+      return;
+    }
+    // 账号含 @ 视为邮箱，走邮箱渠道；否则走短信渠道
+    final channel = acc.contains('@') ? 'email' : 'sms';
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
+    try {
+      final ch = await _svc.sendCode(acc, _captcha!.captchaId,
+          _captchaCode.text.trim(),
+          channel: channel);
+      if (!mounted) return;
+      setState(() => _smsLeft = 60);
+      _startSmsCountdown();
+      final label =
+          ch == 'email' ? '验证码已发送至邮箱' : '验证码已发送至短信';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(label),
+        duration: const Duration(seconds: 2),
+      ));
+    } catch (e) {
+      setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   Future<void> _register() async {
@@ -73,6 +159,21 @@ class _RegisterPageState extends State<RegisterPage> {
       setState(() => _error = '账号至少 3 位');
       return;
     }
+    // 后台开启认证模式时的前置校验
+    if (_needAuth) {
+      if (_captcha == null) {
+        setState(() => _error = '图形验证码加载中，请稍候');
+        return;
+      }
+      if (_captchaCode.text.trim().isEmpty) {
+        setState(() => _error = '请填写图形验证码');
+        return;
+      }
+      if (_smsCode.text.trim().isEmpty) {
+        setState(() => _error = '请填写短信验证码');
+        return;
+      }
+    }
     setState(() {
       _loading = true;
       _error = '';
@@ -84,8 +185,10 @@ class _RegisterPageState extends State<RegisterPage> {
         nickname: _account.text.trim(),
         inviteCode:
             (_config?.inviteCodeOn ?? false) ? _inviteCode.text.trim() : null,
-        captchaId: null,
-        captchaCode: null,
+        code: _needAuth ? _smsCode.text.trim() : null,
+        captchaId: _needAuth && _captcha != null ? _captcha!.captchaId : null,
+        captchaCode: _needAuth ? _captchaCode.text.trim() : null,
+        channel: _account.text.trim().contains('@') ? 'email' : 'sms',
       );
       await _api.saveToken(r.accessToken);
       await _api.saveRefresh(r.refreshToken);
@@ -97,6 +200,18 @@ class _RegisterPageState extends State<RegisterPage> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  @override
+  void dispose() {
+    _account.dispose();
+    _password.dispose();
+    _inviteCode.dispose();
+    _confirmPwd.dispose();
+    _captchaCode.dispose();
+    _smsCode.dispose();
+    _smsTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -129,7 +244,8 @@ class _RegisterPageState extends State<RegisterPage> {
             top: true,
             child: Stack(
               children: [
-                SingleChildScrollView(
+                // 单屏展示：去掉滚动，所有信息压缩在一屏内（Issue 2）
+                Padding(
                   padding: const EdgeInsets.fromLTRB(28, 0, 28, 16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
@@ -191,7 +307,7 @@ class _RegisterPageState extends State<RegisterPage> {
                           height: 1.4,
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 14),
                       // 单大卡片
                       _buildRegisterCard(t, scheme, primary, isDark, cfg),
                       const SizedBox(height: 12),
@@ -225,7 +341,7 @@ class _RegisterPageState extends State<RegisterPage> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 14),
                     ],
                   ),
                 ),
@@ -335,6 +451,7 @@ class _RegisterPageState extends State<RegisterPage> {
     bool isDark,
     AuthConfig? cfg,
   ) {
+    final needAuth = _needAuth;
     return Container(
       decoration: BoxDecoration(
         color: scheme.surface,
@@ -363,6 +480,7 @@ class _RegisterPageState extends State<RegisterPage> {
             prefixIcon: Icons.person_outline_rounded,
             scheme: scheme,
             isDark: isDark,
+            keyboardType: TextInputType.phone,
           ),
           const SizedBox(height: 12),
           _field(
@@ -411,6 +529,100 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
             ),
           ),
+          // ===== 图形验证码 + 短信验证码（后台开启认证模式时显示）=====
+          if (needAuth) ...[
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _field(
+                    controller: _captchaCode,
+                    hint: t('graphicCaptcha'),
+                    prefixIcon: Icons.verified_user_outlined,
+                    scheme: scheme,
+                    isDark: isDark,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: _loadCaptcha,
+                  child: Container(
+                    width: 112,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: isDark
+                              ? scheme.outlineVariant
+                              : const Color(0xFFE2E5EA)),
+                      color: isDark
+                          ? scheme.surfaceContainerHighest
+                          : const Color(0xFFF7F8FA),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: _captchaBytes == null
+                          ? const Center(
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
+                          : Image.memory(
+                              _captchaBytes!,
+                              fit: BoxFit.fill,
+                              errorBuilder: (_, __, ___) =>
+                                  const Icon(Icons.refresh),
+                            ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox.shrink(),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _field(
+                    controller: _smsCode,
+                    hint: t('smsCode'),
+                    prefixIcon: Icons.sms_outlined,
+                    scheme: scheme,
+                    isDark: isDark,
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: (_smsLeft > 0 || _loading) ? null : _sendCode,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primary,
+                      foregroundColor: Colors.white,
+                      disabledForegroundColor: scheme.onSurfaceVariant,
+                      disabledBackgroundColor: isDark
+                          ? scheme.surfaceContainerHighest
+                          : const Color(0xFFEDEFF2),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                    ),
+                    child: Text(
+                      _smsLeft > 0 ? '$_smsLeft s' : t('sendCode'),
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
           if (cfg != null && cfg.inviteCodeOn) ...[
             const SizedBox(height: 12),
             _field(
@@ -468,10 +680,12 @@ class _RegisterPageState extends State<RegisterPage> {
     required bool isDark,
     Widget? suffix,
     bool obscureText = false,
+    TextInputType? keyboardType,
   }) {
     return TextField(
       controller: controller,
       obscureText: obscureText,
+      keyboardType: keyboardType,
       style: TextStyle(fontSize: 15, color: scheme.onSurface),
       decoration: InputDecoration(
         hintText: hint,
@@ -493,7 +707,7 @@ class _RegisterPageState extends State<RegisterPage> {
         fillColor:
             isDark ? scheme.surfaceContainerHighest : const Color(0xFFF7F8FA),
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,

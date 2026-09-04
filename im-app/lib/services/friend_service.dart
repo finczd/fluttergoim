@@ -9,12 +9,18 @@ class FriendRequest {
   final String fromUser;
   final String message;
   final int status;
+  final String fromUserName; // 申请人昵称（后端 incoming 接口已注入）
+  final String fromUserAccount; // 申请人账号
+  final String fromUserAvatar; // 申请人头像
 
   FriendRequest.fromJson(Map<String, dynamic> j)
       : id = j['id']?.toString() ?? '',
         fromUser = j['fromUser']?.toString() ?? '',
         message = j['message']?.toString() ?? '',
-        status = (j['status'] as num?)?.toInt() ?? 0;
+        status = (j['status'] as num?)?.toInt() ?? 0,
+        fromUserName = j['fromUserName']?.toString() ?? '',
+        fromUserAccount = j['fromUserAccount']?.toString() ?? '',
+        fromUserAvatar = j['fromUserAvatar']?.toString() ?? '';
 }
 
 class FriendService {
@@ -106,7 +112,13 @@ class FriendService {
     final r = await _dio.get('/api/v1/user/profile',
         options: Options(
             headers: {'Authorization': 'Bearer ${await _api.readToken()}'}));
-    return (r.data as Map<String, dynamic>)['data'] as Map<String, dynamic>;
+    final body = r.data as Map<String, dynamic>;
+    final code = (body['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) throw ApiException(code, body['message']?.toString() ?? '');
+    // 防「未登录」闪现：data 为 null 时返回空 Map 而非抛 CastError
+    // （旧写法 `['data'] as Map` 在 data:null 时直接崩，me_page 重试耗尽就卡在"未登录"）。
+    final d = (body['data'] as Map?)?.cast<String, dynamic>() ?? {};
+    return d;
   }
 
   /// 按 ID 查用户公开资料（GET /user/:id，服务端附带在线状态）。

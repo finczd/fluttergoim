@@ -1,0 +1,36 @@
+{
+  "name": "chatpulse-electron",
+  "version": "1.0.0",
+  "description": "ChatPulse PC 客户端 Electron 包装，用于打包 Windows exe",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.chatpulse.pc",
+    "productName": "ChatPulse",
+    "copyright": "Copyright © ChatPulse",
+    "files": [
+      "main.js",
+      "preload.js",
+      "../dist/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3"
+  }
+}

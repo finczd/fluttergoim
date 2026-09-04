@@ -8,9 +8,13 @@ const props = defineProps({
   extra: { type: String, default: '' }
 });
 
-const name = computed(() => props.user.remark || props.user.alias || props.user.nickname || props.user.title || '用户');
-const avatar = computed(() => props.user.avatar || props.user.sender_avatar || '');
-const members = computed(() => (Array.isArray(props.user.avatar_members) ? props.user.avatar_members.filter(Boolean).slice(0, 9) : []));
+// 父组件可能显式传入 null（如未登录时 auth.user 为 null、inspector.user 未打开时为 null）。
+// Vue 的 prop default 仅在值为 undefined 时生效，传 null 不会回退，故这里统一兜底为空对象，
+// 否则 props.user.avatar_members / props.user.avatar 会抛 TypeError，导致整个头像区渲染失败。
+const safeUser = computed(() => props.user || {});
+const name = computed(() => safeUser.value.remark || safeUser.value.alias || safeUser.value.nickname || safeUser.value.title || '用户');
+const avatar = computed(() => safeUser.value.avatar || safeUser.value.sender_avatar || '');
+const members = computed(() => (Array.isArray(safeUser.value.avatar_members) ? safeUser.value.avatar_members.filter(Boolean).slice(0, 9) : []));
 const url = computed(() => asset(avatar.value));
 // 用 Image 预加载探测 URL 是否可加载；加载失败时回退首字（@error 对 background-image 不生效）
 const imageFailed = ref(false);
@@ -31,7 +35,7 @@ const initialChar = computed(() => initials(name.value));
 
 <template>
   <span
-    v-if="!avatar && members.length"
+    v-if="(!avatar || imageFailed) && members.length"
     class="avatar"
     :class="[size, extra, 'group-mosaic', 'count-' + members.length]"
   >

@@ -16,6 +16,7 @@ import 'group_qr_page.dart';
 import 'video_call_page.dart';
 import 'voice_call_page.dart';
 import 'moments_page.dart';
+import 'user_qr_profile_page.dart';
 
 /// 会话设置：群聊 → 群资料；单聊 → 个人资料
 class ConvSettingsPage extends StatefulWidget {
@@ -80,9 +81,9 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     });
   }
 
-  /// 成员隐私开启且我是普通成员：最多显示 2 排成员预览，不可查看全部
-  bool get _privacyLimited =>
-      !_isManager && (_groupSettings['privacyEnabled'] == true || _privacyOn);
+  /// 成员隐私限制：仅当服务端以 4006 明确拦我（即我是普通成员）时生效。
+  /// 群主 / 管理员能正常拉到成员列表，_privacyOn 恒为 false，因此永不被限制。
+  bool get _privacyLimited => _privacyOn;
 
   @override
   void initState() {
@@ -1298,18 +1299,31 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
           Stack(
             clipBehavior: Clip.none,
             children: [
-              CircleAvatar(
-                radius: 22,
-                backgroundColor: AppTheme
-                    .avatarColors[name.length % AppTheme.avatarColors.length],
-                backgroundImage: url.isNotEmpty ? NetworkImage(url) : null,
-                child: url.isEmpty
-                    ? Text(initial,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600))
-                    : null,
+              GestureDetector(
+                onTap: () {
+                  final uid =
+                      m['id']?.toString() ?? m['userId']?.toString() ?? '';
+                  if (uid.isEmpty) return;
+                  if (_privacyLimited) {
+                    AppDialogs.toast(context, t('groupPrivacyProfileBlocked'));
+                    return;
+                  }
+                  Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => UserQrProfilePage(uid: uid)));
+                },
+                child: CircleAvatar(
+                  radius: 22,
+                  backgroundColor: AppTheme
+                      .avatarColors[name.length % AppTheme.avatarColors.length],
+                  backgroundImage: url.isNotEmpty ? NetworkImage(url) : null,
+                  child: url.isEmpty
+                      ? Text(initial,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600))
+                      : null,
+                ),
               ),
               // 群主标识：头像右上角小角标
               if (role == 1)

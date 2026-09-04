@@ -6,6 +6,7 @@ var (
 	ParamError   = &Err{Code: 1001, Msg: "参数错误"}
 	Unauthorized = &Err{Code: 1002, Msg: "未登录或登录过期"}
 	Forbidden    = &Err{Code: 1003, Msg: "无权限"}
+	Banned       = &Err{Code: 1004, Msg: "您当前已经被封禁"}
 
 	AccountExists = &Err{Code: 2001, Msg: "账号已存在"}
 	CodeInvalid   = &Err{Code: 2002, Msg: "验证码错误或过期"}

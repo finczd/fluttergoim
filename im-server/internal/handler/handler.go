@@ -113,6 +113,8 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 			user.PUT("/user/profile", UpdateProfileHandler())
 			user.PUT("/user/password", ChangePasswordHandler())
 			user.DELETE("/user", DeleteAccountHandler())
+			user.POST("/user/bind-phone/send-code", BindPhoneSendCodeHandler(cfg))
+			user.POST("/user/bind-phone", BindPhoneHandler())
 
 			// ===== 钱包（零钱）=====
 			user.GET("/wallet/me", func(c *gin.Context) {

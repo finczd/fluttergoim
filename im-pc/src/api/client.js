@@ -13,12 +13,12 @@ const WS = import.meta.env.VITE_WS_BASE || '/ws';
 
 /** 消息类型映射：Go 数字类型 → 青鸟字符串类型 */
 function goTypeToStr(t) {
-  return ({ 1: 'text', 2: 'image', 3: 'file', 4: 'voice', 5: 'video', 6: 'card', 7: 'call', 8: 'redpacket', 9: 'transfer' })[Number(t)] || 'text';
+  return ({ 1: 'text', 2: 'image', 3: 'file', 4: 'voice', 5: 'video', 6: 'system', 7: 'call', 8: 'redpacket', 9: 'transfer' })[Number(t)] || 'text';
 }
 
 /** 青鸟字符串类型 → Go 数字类型 */
 function strTypeToGo(t) {
-  return ({ text: 1, image: 2, file: 3, voice: 4, video: 5, card: 6, call: 7, redpacket: 8, transfer: 9 })[t] || 1;
+  return ({ text: 1, image: 2, file: 3, voice: 4, video: 5, system: 6, card: 6, call: 7, redpacket: 8, transfer: 9 })[t] || 1;
 }
 
 /** Go 消息对象 → 青鸟消息字段（组件/Store 期望的契约） */
@@ -86,6 +86,9 @@ function goConvToQm(item, myId = '') {
       id: String(item.peerId ?? ''),
       nickname: isGroup ? '' : (item.conversationName || ''),
       avatar: conv.avatar || '',
+      // 需求1：单聊对方账号为空时回退显示短 id
+      short_id: item.peerShortId || '',
+      public_id: item.peerAccount || '',
       is_online: peerOnline,
       online_device: peerDev,
       online_text: peerOnline ? onlineZh : '离线',
@@ -105,6 +108,8 @@ function goUserToQm(u) {
     id: String(u.id ?? ''),
     username: u.account || u.username || '',
     public_id: u.account || u.public_id || '',
+    // 需求1：账号为空时回退显示短 id（靓号），由资料接口 shortId 字段透传
+    short_id: u.shortId || '',
     nickname: u.nickname || u.account || '',
     avatar: u.avatar || '',
     phone: u.phone || '',
@@ -238,6 +243,35 @@ async function api(path, data = {}, method = 'GET', auth = true, options = {}) {
     // ---------- 认证 ----------
     case 'auth/login': {
       const r = await http('/auth/login', { account: data.account, password: data.password, deviceType: 3 }, 'POST', false, options);
+      return { token: r.accessToken, refresh_token: r.refreshToken, user: goUserToQm(r.user) };
+    }
+    case 'auth/captcha': {
+      // 图形验证码：返回 { captchaId, image(base64) }
+      return await http('/auth/captcha', {}, 'GET', false, options);
+    }
+    case 'auth/send-code': {
+      // 发送短信/邮箱验证码（注册用，需先通过图形验证码）
+      return await http('/auth/send-code', {
+        account: data.account,
+        countryCode: data.countryCode || '+86',
+        captchaId: data.captchaId || '',
+        captchaCode: data.captchaCode || ''
+      }, 'POST', false, options);
+    }
+    case 'auth/register': {
+      const r = await http('/auth/register', {
+        account: data.account,
+        password: data.password,
+        nickname: data.nickname || '',
+        countryCode: data.countryCode || '+86',
+        departmentId: data.departmentId || 0,
+        code: data.code || '',
+        inviteCode: data.inviteCode || '',
+        captchaId: data.captchaId || '',
+        captchaCode: data.captchaCode || '',
+        deviceId: deviceId(),
+        deviceType: 3
+      }, 'POST', false, options);
       return { token: r.accessToken, refresh_token: r.refreshToken, user: goUserToQm(r.user) };
     }
     case 'system/config': {
@@ -481,6 +515,55 @@ async function api(path, data = {}, method = 'GET', auth = true, options = {}) {
     case 'groups/announcement/read':
       // 后端无公告已读接口
       return { ok: true };
+
+    // ---------- 个人资料（昵称 / 头像 / 密码） ----------
+    case 'me/update': {
+      // 后端 PUT /user/profile 仅返回 {code,message}，成功后重新拉取确保本地同步
+      await http('/user/profile', {
+        nickname: data.nickname || '',
+        avatar: data.avatar || ''
+      }, 'PUT', auth, options);
+      return { ok: true };
+    }
+    case 'me/password': {
+      await http('/user/password', {
+        oldPassword: data.oldPassword || '',
+        newPassword: data.newPassword || ''
+      }, 'PUT', auth, options);
+      return { ok: true };
+    }
+
+    // ---------- 群管理（群主） ----------
+    case 'groups/settings': {
+      const id = String(data.conversation_id ?? '');
+      if (method === 'PUT') {
+        const patch = {};
+        if (typeof data.privacyEnabled === 'boolean') patch.privacyEnabled = data.privacyEnabled;
+        if (typeof data.muteAll === 'boolean') patch.muteAll = data.muteAll;
+        if (typeof data.allowMemberInvite === 'boolean') patch.allowMemberInvite = data.allowMemberInvite;
+        if (typeof data.qrJoinEnabled === 'boolean') patch.qrJoinEnabled = data.qrJoinEnabled;
+        await http(`/conversation/${id}/settings`, patch, 'PUT', auth, options);
+        return { ok: true };
+      }
+      const r = await http(`/conversation/${id}/settings`, {}, 'GET', auth, options);
+      return r || {};
+    }
+    case 'groups/update': {
+      const id = String(data.conversation_id ?? '');
+      await http(`/conversation/${id}`, {
+        nameZh: data.nameZh || '',
+        avatar: data.avatar || ''
+      }, 'PUT', auth, options);
+      return { ok: true };
+    }
+    case 'groups/add-admin': {
+      const id = String(data.conversation_id ?? '');
+      await http(`/conversation/${id}/admin`, {
+        userId: String(data.userId || ''),
+        admin: !!data.admin
+      }, 'PUT', auth, options);
+      return { ok: true };
+    }
 
     // ---------- 扫码登录（Go 后端：/auth/qr/ticket + /auth/qr/status） ----------
     case 'pc/qr/create': {

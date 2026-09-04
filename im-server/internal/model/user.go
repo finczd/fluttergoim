@@ -39,6 +39,7 @@ type User struct {
 	DepartmentID int64      `gorm:"index" json:"departmentId,string"`
 	Status       int        `gorm:"default:1" json:"status"`
 	Role         int        `gorm:"default:1" json:"role"`
+	MyInviteCode string     `gorm:"size:32" json:"myInviteCode"` // 我的邀请码（后台关联：用户中心展示 + 点击复制）
 	LastLoginAt  *time.Time `json:"lastLoginAt"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`

@@ -13,14 +13,12 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/yourcompany/im-server/internal/config"
 )
 
 // ============ 阿里云短信（国内 + 国际） ============
 
-func sendSMSCode(cfg *config.Config, countryCode, phone, code string) error {
-	if cfg.AliyunSMSAccessKey == "" || cfg.AliyunSMSTemplateCode == "" {
+func sendSMSCode(accessKey, secretKey, signName, templateCode, countryCode, phone, code string) error {
+	if accessKey == "" || templateCode == "" {
 		return fmt.Errorf("aliyun sms not configured")
 	}
 	cc := countryCode
@@ -31,7 +29,7 @@ func sendSMSCode(cfg *config.Config, countryCode, phone, code string) error {
 		"Action":           "SendSms",
 		"Version":          "2017-05-25",
 		"RegionId":         "cn-hangzhou",
-		"AccessKeyId":      cfg.AliyunSMSAccessKey,
+		"AccessKeyId":      accessKey,
 		"SignatureMethod":  "HMAC-SHA1",
 		"SignatureVersion": "1.0",
 		"SignatureNonce":   fmt.Sprintf("%d", nonce()),
@@ -43,17 +41,17 @@ func sendSMSCode(cfg *config.Config, countryCode, phone, code string) error {
 		params["Action"] = "SendInternationalSms"
 		params["CountryCode"] = strings.TrimPrefix(cc, "+")
 		params["PhoneNumbers"] = phone
-		params["SignName"] = cfg.AliyunSMSSignName
-		params["TemplateCode"] = cfg.AliyunSMSTemplateCode
+		params["SignName"] = signName
+		params["TemplateCode"] = templateCode
 		params["TemplateParam"] = fmt.Sprintf(`{"code":"%s"}`, code)
 	} else {
 		params["PhoneNumbers"] = phone
-		params["SignName"] = cfg.AliyunSMSSignName
-		params["TemplateCode"] = cfg.AliyunSMSTemplateCode
+		params["SignName"] = signName
+		params["TemplateCode"] = templateCode
 		params["TemplateParam"] = fmt.Sprintf(`{"code":"%s"}`, code)
 	}
 
-	params["Signature"] = aliyunSign(cfg.AliyunSMSSecretKey, params)
+	params["Signature"] = aliyunSign(secretKey, params)
 	query := encodeParams(params)
 
 	resp, err := httpGet("https://dysmsapi.aliyuncs.com/?" + query)
@@ -123,14 +121,13 @@ func percentEncode(s string) string {
 
 // ============ SMTP 邮件 ============
 
-func sendEmailCode(cfg *config.Config, to, code string) error {
-	if cfg.SMTPHost == "" || cfg.SMTPUser == "" {
+func sendEmailCode(host string, port int, user, password, from, to, code string) error {
+	if host == "" || user == "" {
 		return fmt.Errorf("smtp not configured")
 	}
-	addr := fmt.Sprintf("%s:%d", cfg.SMTPHost, cfg.SMTPPort)
-	from := cfg.SMTPFrom
+	addr := fmt.Sprintf("%s:%d", host, port)
 	if from == "" {
-		from = cfg.SMTPUser
+		from = user
 	}
 	subject := "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte("企业IM验证码")) + "?="
 	body := fmt.Sprintf("您的验证码是：%s，5 分钟内有效。\r\nYour verification code: %s, valid for 5 minutes.\r\n", code, code)
@@ -142,10 +139,10 @@ func sendEmailCode(cfg *config.Config, to, code string) error {
 		body
 
 	var auth smtp.Auth
-	if cfg.SMTPUser != "" {
-		auth = smtp.PlainAuth("", cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPHost)
+	if user != "" {
+		auth = smtp.PlainAuth("", user, password, host)
 	}
-	if cfg.SMTPPort == 465 {
+	if port == 465 {
 		// SSL 直连
 		return smtpSendSSL(addr, auth, from, []string{to}, []byte(msg))
 	}

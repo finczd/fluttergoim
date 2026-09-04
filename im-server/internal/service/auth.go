@@ -71,6 +71,7 @@ type RegisterReq struct {
 	InviteCode   string `json:"inviteCode"` // 邀请码（开关开启时必填）
 	CaptchaID    string `json:"captchaId"`  // 图形验证码 ID（防刷）
 	CaptchaCode  string `json:"captchaCode"`
+	Channel      string `json:"channel"`    // sms / email / ""（为空时按 AUTH_MODE 决定）
 	DeviceID     string `json:"deviceId"`
 	DeviceType   int    `json:"deviceType"`
 }
@@ -109,8 +110,12 @@ func Register(ctx context.Context, cfg *config.Config, req *RegisterReq) (*model
 			}
 		}
 	}
-	// 6. 按认证模式校验验证码
-	switch cfg.AuthMode {
+	// 6. 按认证模式校验验证码（channel 显式指定时优先，否则用 AUTH_MODE）
+	channel := req.Channel
+	if channel == "" {
+		channel = cfg.AuthMode
+	}
+	switch channel {
 	case authModeSMS:
 		if !isPhone(account) {
 			return nil, "", "", &errs.Err{Code: 1001, Msg: "短信认证模式需使用手机号"}
@@ -215,7 +220,8 @@ func Login(ctx context.Context, cfg *config.Config, req *LoginReq, ip string) (*
 	}
 	if u.Status != model.StatusNormal {
 		writeLoginLog(req.Account, ip, "", 0)
-		return nil, "", "", errs.Forbidden
+		// 账号被封禁：明确提示"已被封禁"，不要复用通用的"无权限"
+		return nil, "", "", errs.Banned
 	}
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) != nil {
 		writeLoginLog(req.Account, ip, "", 0)
@@ -296,48 +302,126 @@ type SendCodeReq struct {
 	CountryCode string `json:"countryCode"`                // 国际区号，默认 +86
 	CaptchaID   string `json:"captchaId" binding:"required"`
 	CaptchaCode string `json:"captchaCode" binding:"required"`
+	Channel     string `json:"channel"` // sms / email / ""（为空时按 AUTH_MODE 决定）
 }
 
-// SendCode 发送注册/找回验证码（按认证模式）
-func SendCode(ctx context.Context, cfg *config.Config, req *SendCodeReq) error {
+// SendCode 发送注册/找回验证码（按认证模式或客户端显式指定的渠道）
+// 返回实际使用的发送渠道（sms / email），供前端提示"已发送至短信/邮箱"
+func SendCode(ctx context.Context, cfg *config.Config, req *SendCodeReq) (string, error) {
 	if err := verifyCaptcha(ctx, req.CaptchaID, req.CaptchaCode); err != nil {
-		return err
+		return "", err
 	}
 	// 限流：每账号 1 次/60s
 	if err := rateLimit(ctx, "sendcode:"+req.Account, 1, 60*time.Second); err != nil {
-		return err
+		return "", err
 	}
 
 	code, err := genCode(6)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	switch cfg.AuthMode {
+	channel := req.Channel
+	if channel == "" {
+		channel = cfg.AuthMode
+	}
+
+	// 短信/邮件配置：优先读取后台 sys_config（管理后台「系统设置-短信/邮件」），回退到环境变量。
+	// 这样在后台配置阿里云短信/SMTP 后即可生效，无需改环境变量重启。
+	smsAK := strVal(SysConfigGet(ctx, "sms_access_key", cfg.AliyunSMSAccessKey))
+	smsSK := strVal(SysConfigGet(ctx, "sms_secret", cfg.AliyunSMSSecretKey))
+	smsSign := strVal(SysConfigGet(ctx, "sms_sign_name", cfg.AliyunSMSSignName))
+	smsTpl := strVal(SysConfigGet(ctx, "sms_template_code", cfg.AliyunSMSTemplateCode))
+	smtpHost := strVal(SysConfigGet(ctx, "smtp_host", cfg.SMTPHost))
+	smtpUser := strVal(SysConfigGet(ctx, "smtp_user", cfg.SMTPUser))
+	smtpPass := strVal(SysConfigGet(ctx, "smtp_password", cfg.SMTPPassword))
+	smtpFrom := strVal(SysConfigGet(ctx, "smtp_from", cfg.SMTPFrom))
+
+	switch channel {
 	case authModeSMS:
 		if !isPhone(req.Account) {
-			return &errs.Err{Code: 1001, Msg: "请输入手机号"}
+			return "", &errs.Err{Code: 1001, Msg: "短信验证码需使用手机号"}
 		}
-		if err := sendSMSCode(cfg, req.CountryCode, req.Account, code); err != nil {
+		if smsAK == "" || smsTpl == "" {
+			return "", &errs.Err{Code: 2002, Msg: "短信服务未配置（请在后台系统设置中配置阿里云短信，或设置环境变量 ALIYUN_SMS_*）"}
+		}
+		if err := sendSMSCode(smsAK, smsSK, smsSign, smsTpl, req.CountryCode, req.Account, code); err != nil {
 			log.Printf("send sms failed: %v", err)
-			return &errs.Err{Code: 2002, Msg: "短信发送失败，请检查配置"}
+			return "", &errs.Err{Code: 2002, Msg: "短信发送失败：" + err.Error()}
 		}
 		if err := storeCode(ctx, "sms", req.Account, code); err != nil {
-			return err
+			return "", err
 		}
 	case authModeEmail:
 		if !isEmail(req.Account) {
-			return &errs.Err{Code: 1001, Msg: "请输入邮箱"}
+			return "", &errs.Err{Code: 1001, Msg: "邮箱验证码需使用邮箱"}
 		}
-		if err := sendEmailCode(cfg, req.Account, code); err != nil {
+		if smtpHost == "" || smtpUser == "" {
+			return "", &errs.Err{Code: 2002, Msg: "邮件服务未配置（请在后台系统设置中配置 SMTP，或设置环境变量 SMTP_*）"}
+		}
+		if err := sendEmailCode(smtpHost, cfg.SMTPPort, smtpUser, smtpPass, smtpFrom, req.Account, code); err != nil {
 			log.Printf("send email failed: %v", err)
-			return &errs.Err{Code: 2002, Msg: "邮件发送失败，请检查配置"}
+			return "", &errs.Err{Code: 2002, Msg: "邮件发送失败：" + err.Error()}
 		}
 		if err := storeCode(ctx, "email", req.Account, code); err != nil {
-			return err
+			return "", err
 		}
 	default:
-		return &errs.Err{Code: 1001, Msg: "当前为不认证模式，无需验证码"}
+		return "", &errs.Err{Code: 1001, Msg: "当前未开启验证码服务"}
+	}
+	return channel, nil
+}
+
+// ============ 绑定手机号 ============
+
+// SendBindPhoneCode 绑定手机号：校验图形验证码后，向该手机号发送短信验证码（走已配置的短信服务）
+func SendBindPhoneCode(ctx context.Context, cfg *config.Config, uid int64, phone, countryCode, captchaID, captchaCode string) error {
+	if err := verifyCaptcha(ctx, captchaID, captchaCode); err != nil {
+		return err
+	}
+	if !isPhone(phone) {
+		return &errs.Err{Code: 1001, Msg: "请输入正确的手机号"}
+	}
+	// 限流：每手机号 1 次/60s
+	if err := rateLimit(ctx, "bindphone:"+phone, 1, 60*time.Second); err != nil {
+		return err
+	}
+	code, err := genCode(6)
+	if err != nil {
+		return err
+	}
+	// 短信配置：优先后台 sys_config（sms_access_key 等），回退到环境变量
+	smsAK := strVal(SysConfigGet(ctx, "sms_access_key", cfg.AliyunSMSAccessKey))
+	smsSK := strVal(SysConfigGet(ctx, "sms_secret", cfg.AliyunSMSSecretKey))
+	smsSign := strVal(SysConfigGet(ctx, "sms_sign_name", cfg.AliyunSMSSignName))
+	smsTpl := strVal(SysConfigGet(ctx, "sms_template_code", cfg.AliyunSMSTemplateCode))
+	if smsAK == "" || smsTpl == "" {
+		return &errs.Err{Code: 2002, Msg: "短信服务未配置（请在后台系统设置中配置阿里云短信）"}
+	}
+	if err := sendSMSCode(smsAK, smsSK, smsSign, smsTpl, countryCode, phone, code); err != nil {
+		log.Printf("send bind-phone sms failed: %v", err)
+		return &errs.Err{Code: 2002, Msg: "短信发送失败：" + err.Error()}
+	}
+	return storeCode(ctx, "bindphone", phone, code)
+}
+
+// BindPhone 绑定手机号：校验短信验证码后写入用户手机号（校验唯一性，避免被他人占用）
+func BindPhone(ctx context.Context, uid int64, phone, countryCode, code string) error {
+	if err := verifyCode(ctx, "bindphone", phone, code); err != nil {
+		return err
+	}
+	var cnt int64
+	store.DB.Model(&model.User{}).Where("phone = ? AND id <> ?", phone, uid).Count(&cnt)
+	if cnt > 0 {
+		return &errs.Err{Code: 1001, Msg: "该手机号已被其他账号绑定"}
+	}
+	cc := countryCode
+	if cc == "" {
+		cc = "+86"
+	}
+	if err := store.DB.Model(&model.User{}).Where("id = ?", uid).
+		Updates(map[string]interface{}{"phone": phone, "country_code": cc}).Error; err != nil {
+		return err
 	}
 	return nil
 }

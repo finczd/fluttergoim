@@ -4,6 +4,7 @@ import { useConversationsStore } from '../stores/conversations';
 import { useMessagesStore } from '../stores/messages';
 import { useContactsStore } from '../stores/contacts';
 import { useUiStore } from '../stores/ui';
+import { clearAllMessageCaches } from '../utils/messageCache';
 
 // 实时同步引擎：适配当前 Go 后端（WebSocket 推送）。
 // 原青鸟长轮询 sync/bootstrap + sync/poll 被替换为：
@@ -178,7 +179,7 @@ function adaptMessage(m, myId = '') {
     conversation_id: String(m.conversationId ?? ''),
     sender_id: String(m.senderId ?? ''),
     sender_name: m.senderName || '',
-    type: ({ 1: 'text', 2: 'image', 3: 'file', 4: 'voice', 5: 'video', 6: 'card', 7: 'call' })[Number(m.type)] || 'text',
+    type: ({ 1: 'text', 2: 'image', 3: 'file', 4: 'voice', 5: 'video', 6: 'system', 7: 'call' })[Number(m.type)] || 'text',
     content: m.content || '',
     file_url: file.url || '',
     file_name: file.name || '',
@@ -350,6 +351,8 @@ function stop() {
     ws = null;
   }
   syncStatus.value = 'connecting';
+  // 需求⑤：登出时清空所有会话的消息缓存
+  clearAllMessageCaches();
 }
 
 export function useSync() {

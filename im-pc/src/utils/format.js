@@ -29,7 +29,9 @@ export function replyPreview(reply) {
 
 export function asset(value) {
   if (!value) return '';
-  let raw = String(value);
+  let raw = String(value).trim();
+  if (!raw) return '';
+  // 已是绝对地址（http(s)://）→ 直接返回，兼容存量数据里就是完整 URL 的情况，绝不再二次拼接 origin
   if (/^https?:\/\//i.test(raw)) {
     // 需求2修复：存量消息里的 localhost:9000（MinIO）对手机/局域网不可达 → 换成当前访问主机
     if (/localhost|127\.0\.0\.1/.test(raw)) {
@@ -37,10 +39,19 @@ export function asset(value) {
     }
     return raw;
   }
+  // 协议相对地址（//host/path）→ 补当前协议
+  if (raw.startsWith('//')) {
+    return window.location.protocol + raw;
+  }
   // 所有非 http(s) 路径都拼到站点 origin 根目录下
   // （无论页面在 /pc/ 还是 /pc-vue-test/，资源都在 /admin/、/uploads/ 等根路径下）
   const rel = raw.replace(/^\/+/, '');
-  return new URL(rel, window.location.origin + '/').href;
+  const out = new URL(rel, window.location.origin + '/').href;
+  // 双保险：若拼接结果在 origin 之后仍残留另一个协议（说明入参其实是完整地址但被正则漏判），退回原值，
+  // 避免拼出 “origin/origin” 双重地址（如 https://im.x123.wang/https://im.x123.wang/im-files/brand/... 404）
+  const afterOrigin = out.slice(window.location.origin.length);
+  if (/^\/https?:\/\//i.test(afterOrigin) || afterOrigin.includes('://')) return raw;
+  return out;
 }
 
 export function avatarStyle(value) {
@@ -142,4 +153,80 @@ function formatDuration(seconds) {
   const s = seconds % 60;
   if (m > 0) return `${m}:${String(s).padStart(2, '0')}`;
   return `${s}秒`;
+}
+
+// 判断是否为 http(s) 链接（用于消息内容兜底渲染图片）
+export function isHttpUrl(s) {
+  return /^https?:\/\//i.test(String(s || ''));
+}
+
+// 群系统消息：后端下发 JSON 字符串（如 {"actor":"在线客服","kind":"kick","target":"334455"}），
+// 解析为可读中文。nameOf(id) 负责把 actor/target 的 id 解析成昵称（查不到则原样返回，兼容“在线客服”等角色名）。
+export function systemMessageText(content, nameOf) {
+  if (!content) return '';
+  let m = {};
+  try { m = typeof content === 'string' ? JSON.parse(content) : (content || {}); }
+  catch (_) { return String(content); }
+  const actor = nameOf ? nameOf(m.actor) : String(m.actor || '');
+  const target = nameOf ? nameOf(m.target) : String(m.target || '');
+  switch (m.kind) {
+    case 'join': return `${target} 加入了群聊`;
+    case 'leave': return `${target} 退出了群聊`;
+    case 'kick': return `${actor} 将 ${target} 移出群聊`;
+    case 'invite': return `${actor} 邀请了 ${target} 加入群聊`;
+    case 'mute': return `${target} 被禁言`;
+    case 'unmute': return `${target} 被取消禁言`;
+    case 'create': return `${actor} 创建了群聊`;
+    case 'rename': return `${actor} 修改群名为 “${m.name || ''}”`;
+    case 'avatar': return `${actor} 更新了群头像`;
+    case 'notice': return `${actor} 更新了群公告`;
+    default: return String(content);
+  }
+}
+
+// 语音/视频通话气泡：统一 call 信令消息 与 voice_call/video_call 卡片的渲染结构。
+// 返回 null 表示不是通话消息（交给其它分支处理）。
+export function callBubble(message) {
+  if (!message) return null;
+  const m = message;
+  if (m.type === 'call') {
+    let sig = {};
+    try { sig = typeof m.content === 'string' ? JSON.parse(m.content) : (m.content || {}); } catch (_) {}
+    const isVideo = sig.callType === 'video';
+    const kind = isVideo ? 'video' : 'voice';
+    const action = sig.action || 'hangup';
+    const duration = Number(sig.duration || 0);
+    const mm = String(Math.floor(duration / 60)).padStart(2, '0');
+    const ss = String(duration % 60).padStart(2, '0');
+    let status = 'ended';
+    let statusLabel = `${mm}:${ss}`;
+    let statusClass = '';
+    if (action === 'hangup') {
+      if (duration > 0) { status = 'connected'; statusLabel = `通话时长 ${mm}:${ss}`; statusClass = 'connected'; }
+      else { status = 'missed'; statusLabel = m.is_mine ? '对方已取消' : '未接听'; statusClass = 'missed'; }
+    } else if (action === 'accept') {
+      status = 'connected'; statusLabel = '通话已接通'; statusClass = 'connected';
+    } else if (action === 'reject') {
+      status = 'rejected'; statusLabel = '对方已拒绝'; statusClass = 'rejected';
+    } else if (action === 'cancel') {
+      status = 'canceled'; statusLabel = '通话已取消'; statusClass = 'canceled';
+    } else {
+      status = 'invited'; statusLabel = isVideo ? '视频通话' : '语音通话'; statusClass = 'invited';
+    }
+    return { kind, status, statusLabel, statusClass, durationText: `${mm}:${ss}` };
+  }
+  if (m.type === 'card') {
+    const extra = m.extra || {};
+    if (['voice_call', 'video_call'].includes(extra.card_type)) {
+      const isVideo = extra.card_type === 'video_call';
+      return {
+        kind: isVideo ? 'video' : 'voice',
+        status: 'ended',
+        statusLabel: extra.display_text || (isVideo ? '视频通话' : '语音通话'),
+        statusClass: 'connected',
+        durationText: ''
+      };
+    }
+  }
+  return null;
 }

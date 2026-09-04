@@ -482,7 +482,7 @@ class _LoginPageState extends State<LoginPage> {
         fillColor:
             isDark ? scheme.surfaceContainerHighest : const Color(0xFFF7F8FA),
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,

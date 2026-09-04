@@ -6,6 +6,7 @@ import (
 
 	"github.com/yourcompany/im-server/internal/config"
 	"github.com/yourcompany/im-server/internal/model"
+	"github.com/yourcompany/im-server/internal/store"
 	"github.com/yourcompany/im-server/internal/pkg/errs"
 	jwtx "github.com/yourcompany/im-server/internal/pkg/jwt"
 
@@ -33,6 +34,16 @@ func Auth(cfg *config.Config) gin.HandlerFunc {
 		token := strings.TrimPrefix(header, "Bearer ")
 		claims, err := jwtx.Parse(cfg.JWTSecret, token)
 		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, errs.Unauthorized)
+			return
+		}
+		// 复核账号状态：禁用账号的 access token 在有效期内本应继续可用，
+		// 但后台"禁用"必须即时生效 —— 任何请求都返回 401，
+		// 三端据此清登录态并跳登录页（见各端 onUnauthorized / forceLogout 处理）。
+		// 仅在能确认查到用户且状态非"正常"时才拦截；DB 瞬时故障则放行，
+		// 避免一次数据库抖动把全体在线用户踢下线。
+		var u model.User
+		if err := store.DB.Select("status").Where("id = ?", claims.UserID).First(&u).Error; err == nil && u.Status != model.StatusNormal {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, errs.Unauthorized)
 			return
 		}

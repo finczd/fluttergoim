@@ -15,6 +15,14 @@ func GetProfile(ctx context.Context, userID int64) (*model.User, error) {
 	if err := store.DB.First(&u, userID).Error; err != nil {
 		return nil, errs.Unauthorized
 	}
+	// 我的邀请码：优先取 user.my_invite_code；为空则回退到 invite_code.used_by = 本人
+	// （后台在 invite_code 表把某个码关联到该用户时也视为「我的邀请码」）
+	if u.MyInviteCode == "" {
+		var ic model.InviteCode
+		if err := store.DB.Where("used_by = ?", userID).Order("id desc").First(&ic).Error; err == nil {
+			u.MyInviteCode = ic.Code
+		}
+	}
 	return &u, nil
 }
 

@@ -31,11 +31,12 @@ func SendCodeHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
 			return
 		}
-		if err := service.SendCode(c.Request.Context(), cfg, &req); err != nil {
+		channel, err := service.SendCode(c.Request.Context(), cfg, &req)
+		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"channel": channel}})
 	}
 }
 

@@ -43,7 +43,7 @@ function viewProfile() {
 
       <div class="inspector-section">
         <div class="detail-list">
-          <div class="detail-button"><span>账号</span><small>{{ contact.public_id || contact.username || '' }}</small></div>
+          <div class="detail-button"><span>账号</span><small>{{ contact.public_id || contact.short_id || contact.username || '' }}</small></div>
           <div class="detail-button"><span>备注</span><small>{{ contact.remark || '未设置' }}</small></div>
           <div class="detail-button"><span>所在地</span><small>{{ contact.region || '未设置' }}</small></div>
           <div class="detail-button"><span>个性签名</span><small>{{ contact.bio || '未设置' }}</small></div>

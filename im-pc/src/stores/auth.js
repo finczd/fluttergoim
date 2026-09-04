@@ -18,6 +18,7 @@ export const useAuthStore = defineStore('auth', () => {
   const qr = ref(null);
   const qrStatus = ref('正在生成登录二维码');
   const qrOverlay = ref(false);
+  const captcha = ref(null);
 
   const brand = computed(() => {
     const cfg = config.value || {};
@@ -55,7 +56,18 @@ export const useAuthStore = defineStore('auth', () => {
     document.querySelectorAll('[data-brand-short]').forEach(el => (el.textContent = b.shortName));
     document.querySelectorAll('[data-brand-mark]').forEach(el => {
       el.textContent = b.mark;
-      const url = b.logo ? new URL('../' + b.logo.replace(/^\//, ''), location.href).href : '';
+      // 兼容 brand_logo 两种形态：
+      // ① 相对路径（im-files/brand/xx.png）→ 拼到 origin 根目录；
+      // ② 已是完整 http(s):// 或 //host 绝对地址 → 直接当绝对地址用。
+      // 旧写法 new URL('../'+logo, href) 在 logo 为完整 URL 时会把内嵌的 https: 当成相对路径，
+      // 拼出 “origin/origin” 双重地址导致 404（如 https://im.x123.wang/https://im.x123.wang/im-files/brand/...）。
+      let url = '';
+      if (b.logo) {
+        const logo = String(b.logo).trim();
+        if (/^https?:\/\//i.test(logo)) url = logo;
+        else if (logo.startsWith('//')) url = window.location.protocol + logo;
+        else url = new URL(logo.replace(/^\/+/, ''), window.location.origin + '/').href;
+      }
       if (url) {
         el.style.backgroundImage = `url('${url.replace(/'/g, '%27')}')`;
         el.style.backgroundSize = 'cover';
@@ -90,6 +102,23 @@ export const useAuthStore = defineStore('auth', () => {
     } catch (_) {}
   }
 
+  // 需求⑥：修改个人资料（昵称 / 头像）。后端 PUT /user/profile 不回传资料，成功后重新拉取。
+  async function updateProfile(payload = {}) {
+    try {
+      await api('me/update', {
+        nickname: payload.nickname || '',
+        avatar: payload.avatar || ''
+      }, 'PUT');
+      await loadMe();
+      return user.value;
+    } catch (e) { throw e; }
+  }
+
+  // 需求⑥：修改登录密码（需校验原密码）
+  async function changePassword(oldPassword, newPassword) {
+    return api('me/password', { oldPassword, newPassword }, 'PUT');
+  }
+
   async function passwordLogin(account, password) {
     const ui = useUiStore();
     loginError.value = '';
@@ -104,6 +133,53 @@ export const useAuthStore = defineStore('auth', () => {
         device_id: deviceId(),
         device_name: navigator.platform || '电脑浏览器',
         platform: 'web-pc'
+      }, 'POST', false, { timeout: 12000 });
+      setToken(result.token, result.user);
+      await enterMain();
+      return true;
+    } catch (error) {
+      loginError.value = error.message;
+      return false;
+    }
+  }
+
+  // 获取/刷新图形验证码（注册前置）
+  async function refreshCaptcha() {
+    try {
+      const r = await api('auth/captcha', {}, 'GET', false);
+      captcha.value = r || null;
+    } catch (_) {
+      captcha.value = null;
+    }
+  }
+
+  // 发送注册短信验证码（需先通过图形验证码）
+  async function sendRegisterCode(account, captchaId, captchaCode) {
+    await api('auth/send-code', { account, countryCode: '+86', captchaId, captchaCode }, 'POST', false, { timeout: 10000 });
+  }
+
+  // 注册：后端开启短信+图形验证码时，account / code / captchaId / captchaCode 均需提供
+  async function register(payload = {}) {
+    const ui = useUiStore();
+    loginError.value = '';
+    if (!payload.account || !payload.password) {
+      loginError.value = '请输入账号和密码';
+      return false;
+    }
+    if (payload.password !== payload.confirm) {
+      loginError.value = '两次输入的密码不一致';
+      return false;
+    }
+    try {
+      const result = await api('auth/register', {
+        account: payload.account,
+        password: payload.password,
+        nickname: payload.nickname || '',
+        countryCode: '+86',
+        code: payload.code || '',
+        inviteCode: payload.inviteCode || '',
+        captchaId: payload.captchaId || '',
+        captchaCode: payload.captchaCode || ''
       }, 'POST', false, { timeout: 12000 });
       setToken(result.token, result.user);
       await enterMain();
@@ -191,8 +267,10 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    token, user, config, license, loginError, qr, qrStatus, qrOverlay, brand, preferences,
+    token, user, config, license, loginError, qr, qrStatus, qrOverlay, captcha, brand, preferences,
     setToken, handleExpiredLogin, requireLicense, applyBrand, loadConfig, loadPreferences, loadMe,
-    passwordLogin, startQr, checkQr, stopQr, enterMain, logout
+    updateProfile, changePassword,
+    passwordLogin, refreshCaptcha, sendRegisterCode, register,
+    startQr, checkQr, stopQr, enterMain, logout
   };
 });

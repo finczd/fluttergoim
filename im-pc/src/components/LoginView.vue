@@ -10,6 +10,15 @@ const busy = ref(false);
 const qrCanvas = ref(null);
 const qrLoading = ref(false);
 
+// 注册表单
+const regNickname = ref('');
+const regPassword = ref('');
+const regConfirm = ref('');
+const regSms = ref('');
+const regCaptcha = ref('');
+const smsLeft = ref(0);
+let smsTimer = null;
+
 async function startQr() {
   qrLoading.value = true;
   try {
@@ -18,7 +27,7 @@ async function startQr() {
     const payload = auth.qr?.payload || '';
     if (payload && qrCanvas.value) {
       const QRCode = await import('qrcode');
-      await QRCode.toCanvas(qrCanvas.value, payload, { width: 180, margin: 1 });
+      await QRCode.toCanvas(qrCanvas.value, payload, { width: 232, margin: 1 });
     }
   } catch (e) {
     auth.qrStatus = e?.message || '二维码生成失败';
@@ -35,6 +44,10 @@ function switchTab(tab) {
   } else {
     auth.stopQr();
   }
+  if (tab === 'register') {
+    // 进入注册页先拉一张图形验证码
+    auth.refreshCaptcha();
+  }
 }
 
 async function submit() {
@@ -43,17 +56,59 @@ async function submit() {
   busy.value = false;
 }
 
+async function getSmsCode() {
+  if (smsLeft.value > 0) return;
+  if (!account.value) {
+    auth.loginError = '请先填写手机号 / 账号';
+    return;
+  }
+  if (!auth.captcha?.captchaId || !regCaptcha.value) {
+    auth.loginError = '请先填写图形验证码';
+    return;
+  }
+  try {
+    await auth.sendRegisterCode(account.value, auth.captcha.captchaId, regCaptcha.value);
+    smsLeft.value = 60;
+    smsTimer = setInterval(() => {
+      smsLeft.value -= 1;
+      if (smsLeft.value <= 0) { clearInterval(smsTimer); smsTimer = null; }
+    }, 1000);
+    auth.loginError = '';
+  } catch (e) {
+    auth.loginError = e?.message || '验证码发送失败';
+    // 图形验证码可能已失效，刷新一张
+    auth.refreshCaptcha();
+  }
+}
+
+async function submitRegister() {
+  busy.value = true;
+  const ok = await auth.register({
+    account: account.value,
+    nickname: regNickname.value,
+    password: regPassword.value,
+    confirm: regConfirm.value,
+    code: regSms.value,
+    captchaId: auth.captcha?.captchaId || '',
+    captchaCode: regCaptcha.value
+  });
+  busy.value = false;
+}
+
 // 二维码状态变化（scanned/confirmed）自动刷新 UI
 watch(() => auth.qrStatus, () => {});
 watch(() => auth.qr?.payload, () => {
   if (activeTab.value === 'qr' && auth.qr?.payload) {
     import('qrcode').then(QRCode => {
-      if (qrCanvas.value) QRCode.toCanvas(qrCanvas.value, auth.qr.payload, { width: 180, margin: 1 });
+      if (qrCanvas.value) QRCode.toCanvas(qrCanvas.value, auth.qr.payload, { width: 232, margin: 1 });
     });
   }
 });
 
-onBeforeUnmount(() => auth.stopQr());
+onBeforeUnmount(() => {
+  auth.stopQr();
+  if (smsTimer) clearInterval(smsTimer);
+});
 </script>
 
 <template>
@@ -81,11 +136,12 @@ onBeforeUnmount(() => auth.stopQr());
         <div class="login-tabs" role="tablist">
           <button class="login-tab" :class="{ active: activeTab === 'qr' }" type="button" @click="switchTab('qr')">扫码登录</button>
           <button class="login-tab" :class="{ active: activeTab === 'password' }" type="button" @click="switchTab('password')">账号登录</button>
+          <button class="login-tab" :class="{ active: activeTab === 'register' }" type="button" @click="switchTab('register')">注册</button>
         </div>
 
         <div v-show="activeTab === 'qr'" class="login-pane active">
           <div class="qr-shell">
-            <canvas v-show="auth.qr?.payload" ref="qrCanvas" width="180" height="180"></canvas>
+            <canvas v-show="auth.qr?.payload" ref="qrCanvas" width="232" height="232"></canvas>
             <div v-if="qrLoading || (!auth.qr?.payload && !auth.qrOverlay)" class="qr-placeholder">
               <span>{{ qrLoading ? '正在生成…' : '二维码加载中…' }}</span>
             </div>
@@ -103,6 +159,27 @@ onBeforeUnmount(() => auth.stopQr());
           <label class="field"><span>账号</span><input v-model="account" autocomplete="username" placeholder="账号、手机号或邮箱"></label>
           <label class="field"><span>密码</span><input v-model="password" type="password" autocomplete="current-password" placeholder="请输入登录密码"></label>
           <button class="primary-button wide" type="submit" :disabled="busy">{{ busy ? '登录中…' : '登录' }}</button>
+        </form>
+
+        <form v-show="activeTab === 'register'" class="login-pane" novalidate @submit.prevent="submitRegister">
+          <label class="field"><span>手机号 / 账号</span><input v-model="account" autocomplete="username" placeholder="用于登录的手机号或邮箱"></label>
+          <label class="field"><span>昵称（选填）</span><input v-model="regNickname" placeholder="展示名称"></label>
+          <label class="field"><span>密码</span><input v-model="regPassword" type="password" autocomplete="new-password" placeholder="8-20 位，含字母和数字"></label>
+          <label class="field"><span>确认密码</span><input v-model="regConfirm" type="password" autocomplete="new-password" placeholder="再次输入密码"></label>
+          <label class="field"><span>短信验证码</span>
+            <div class="field-inline">
+              <input v-model="regSms" placeholder="6 位短信验证码">
+              <button type="button" class="mini-button" :disabled="smsLeft > 0" @click="getSmsCode">{{ smsLeft > 0 ? smsLeft + 's' : '获取验证码' }}</button>
+            </div>
+          </label>
+          <label class="field"><span>图形验证码</span>
+            <div class="field-inline">
+              <input v-model="regCaptcha" placeholder="输入图中字符">
+              <img v-if="auth.captcha?.image" class="captcha-img" :src="'data:image/png;base64,' + auth.captcha.image" alt="图形验证码" @click="auth.refreshCaptcha()" />
+              <button v-else type="button" class="mini-button" @click="auth.refreshCaptcha()">加载</button>
+            </div>
+          </label>
+          <button class="primary-button wide" type="submit" :disabled="busy">{{ busy ? '注册中…' : '注册并登录' }}</button>
         </form>
 
         <div v-if="auth.loginError" class="form-error" aria-live="polite">{{ auth.loginError }}</div>

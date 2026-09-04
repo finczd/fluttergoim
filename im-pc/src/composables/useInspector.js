@@ -8,10 +8,19 @@ export function useInspector() {
   const messages = useMessagesStore();
 
   async function openUser(userId, fallback = null) {
-    if (fallback) ui.openUserInspector(fallback);
-    else ui.openUserInspector({ id: String(userId), nickname: '用户' });
+    const id = String(userId);
+    if (!id) return;
+    const contacts = useContactsStore();
+    const cached = contacts.getUserDetail(id);
+    if (cached) {
+      ui.openUserInspector(cached);
+      return;
+    }
+    if (fallback) ui.openUserInspector({ ...fallback });
+    else ui.openUserInspector({ id, nickname: '用户' });
     try {
-      const user = await api('users/detail', { user_id: String(userId) });
+      const user = await api('users/detail', { user_id: id });
+      if (user && user.id) contacts.setUserDetail(user);
       if (ui.inspector.kind === 'user') ui.openUserInspector(user);
     } catch (_) {}
   }
@@ -48,5 +57,22 @@ export function useInspector() {
     if (memberId) openUser(String(memberId));
   }
 
-  return { openUser, openConversation, messageUser, openMember };
+  // ---------- 群管理（群主） ----------
+  async function loadGroupSettings(id) {
+    return api('groups/settings', { conversation_id: String(id) }, 'GET');
+  }
+  async function setGroupSetting(id, patch) {
+    return api('groups/settings', { conversation_id: String(id), ...patch }, 'PUT');
+  }
+  async function renameGroup(id, name) {
+    return api('groups/update', { conversation_id: String(id), nameZh: name }, 'PUT');
+  }
+  async function updateGroupAvatar(id, url) {
+    return api('groups/update', { conversation_id: String(id), avatar: url }, 'PUT');
+  }
+  async function addGroupAdmin(id, userId, admin) {
+    return api('groups/add-admin', { conversation_id: String(id), userId: String(userId), admin }, 'PUT');
+  }
+
+  return { openUser, openConversation, messageUser, openMember, loadGroupSettings, setGroupSetting, renameGroup, updateGroupAvatar, addGroupAdmin };
 }

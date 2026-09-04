@@ -3,12 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../l10n/app_locale.dart';
-import '../services/api_client.dart';
 import '../services/call_service.dart';
 import '../services/keep_alive_service.dart';
 import '../services/push_service.dart';
 import '../services/sound_service.dart';
 import '../services/unread_store.dart';
+import '../services/friend_req_store.dart';
 import '../services/wallet_store.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
@@ -28,7 +28,6 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _index = 0;
-  int _friendReqCount = 0; // 通讯录 tab 新朋友申请红点
 
   late final List<Widget> _pages;
   VoidCallback? _offFriend;
@@ -44,9 +43,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       const DiscoverPage(),
       const MePage(),
     ];
-    _loadFriendReqCount();
+    FriendReqStore.instance.refresh();
     _offFriend = GlobalWs.instance.onFriend((_) {
-      _loadFriendReqCount();
+      FriendReqStore.instance.refresh();
       // 需求：被添加好友提示音
       SoundService.instance.playFriendAdded();
     });
@@ -74,18 +73,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
     unawaited(WalletStore.instance.refresh());
-    _loadFriendReqCount();
-  }
-
-  Future<void> _loadFriendReqCount() async {
-    try {
-      final api = ApiClient.instance;
-      final r = await api.get('/api/v1/friend/request/incoming');
-      final list = (r.data['data'] as List<dynamic>? ?? [])
-          .where((e) => (e as Map<String, dynamic>)['status'] == 0)
-          .length;
-      if (mounted) setState(() => _friendReqCount = list);
-    } catch (_) {}
+    FriendReqStore.instance.refresh();
   }
 
   @override
@@ -170,11 +158,16 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                       color: active
                           ? AppTheme.primary
                           : context.cs.onSurfaceVariant),
-                if (i == 1 && _friendReqCount > 0)
-                  Positioned(
-                    right: -7,
-                    top: -7,
-                    child: _badge(_friendReqCount),
+                if (i == 1)
+                  ValueListenableBuilder<int>(
+                    valueListenable: FriendReqStore.instance.count,
+                    builder: (_, c, __) => c > 0
+                        ? Positioned(
+                            right: -7,
+                            top: -7,
+                            child: _badge(c),
+                          )
+                        : const SizedBox.shrink(),
                   ),
               ],
             ),

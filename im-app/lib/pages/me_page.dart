@@ -41,10 +41,15 @@ class _MePageState extends State<MePage> {
   final _svc = FriendService();
   final _api = ApiClient.instance;
   Map<String, dynamic>? _profile;
+  String _inviteCode = ''; // 我的邀请码（用户中心展示 + 点击复制）
 
   @override
   void initState() {
     super.initState();
+    // 立刻用全局身份缓存垫底：登录后消息列表/通讯录已拉过我的资料并写入 UserCache，
+    // 这里直接显示，避免 profile 接口偶发抖动时"我的"页闪/卡在"未登录"。
+    final ident = UserCache.myProfileData;
+    if (ident != null) _profile = ident;
     _loadCachedProfile();
     _load();
     _refreshBalance();
@@ -87,7 +92,12 @@ class _MePageState extends State<MePage> {
     try {
       final p = await _svc.profile();
       if (mounted) {
-        setState(() => _profile = p);
+        setState(() {
+          _profile = p;
+          _inviteCode = p['myInviteCode']?.toString() ?? '';
+        });
+        // 同步全局身份缓存：供失败兜底，也避免其他页面再拉一遍
+        UserCache.setMyProfile(p);
         // 资料写入本地缓存，下次进 App / 切 tab 首帧即有昵称头像
         unawaited(_api.writePref('profile', jsonEncode(p)));
       }
@@ -98,6 +108,11 @@ class _MePageState extends State<MePage> {
         await Future.delayed(Duration(milliseconds: 600 * (retry + 1)));
         if (!mounted) return;
         return _load(retry: retry + 1);
+      }
+      // 重试耗尽也不应卡在"未登录"：用全局身份缓存（消息列表/通讯录已拉过）兜底
+      if (mounted) {
+        final fallback = UserCache.myProfileData;
+        if (fallback != null) setState(() => _profile = fallback);
       }
     }
   }
@@ -141,8 +156,12 @@ class _MePageState extends State<MePage> {
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
-    final p = _profile;
-    final name = p?['nickname']?.toString() ?? t('meNotLoggedIn');
+    // 已登录时绝不应显示"未登录"：优先用本页 profile，再退回全局身份缓存
+    // （profile 接口偶发抖动时，消息列表/通讯录早已写入 UserCache，可兜底显示真实昵称）。
+    final p = _profile ?? UserCache.myProfileData;
+    final name = (p?['nickname']?.toString() ?? '').isNotEmpty
+        ? p!['nickname'].toString()
+        : t('meNotLoggedIn');
     final account = p?['account']?.toString() ?? '';
     final shortId = p?['shortId']?.toString() ?? '';
     // 靓号标识：short_id 来自后台靓号池（已分配）→ ID 前显示红色「靓ID」徽标
@@ -314,10 +333,37 @@ class _MePageState extends State<MePage> {
                                 builder: (_) => const FavoritesPage()));
                           }),
                           if (FeatureFlags.instance.inviteOn.value)
-                            _row(Icons.share_outlined, t('meInviteCode'),
-                                color: AppTheme.green, onTap: () {
-                              AppDialogs.toast(context, t('meInviteCodeToast'));
-                            }),
+                            _row(
+                              Icons.share_outlined,
+                              t('meInviteCode'),
+                              color: AppTheme.green,
+                              // 后台关联的邀请码：直接展示 + 整行可点复制
+                              trailingWidget: _inviteCode.isNotEmpty
+                                  ? Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(_inviteCode,
+                                            style: TextStyle(
+                                                fontSize: 13,
+                                                color: scheme.onSurfaceVariant)),
+                                        const SizedBox(width: 4),
+                                        Icon(Icons.copy_all_rounded,
+                                            size: 15,
+                                            color: scheme.onSurfaceVariant),
+                                      ],
+                                    )
+                                  : null,
+                              onTap: () {
+                                if (_inviteCode.isNotEmpty) {
+                                  Clipboard.setData(
+                                      ClipboardData(text: _inviteCode));
+                                  AppDialogs.toast(context, t('meCopied'));
+                                } else {
+                                  AppDialogs.toast(
+                                      context, t('meInviteCodeToast'));
+                                }
+                              },
+                            ),
                         ])),
               ),
               // 设置（账号安全/切换语言/检测更新/设置）

@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show VoidCallback;
+import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../app_navigator.dart';
 import '../config/app_config.dart';
+import '../l10n/app_locale.dart';
 import 'api_client.dart';
 import 'wallet_store.dart';
 
@@ -19,7 +21,8 @@ class WsService {
       this.onReconnected,
       this.onRead,
       this.onWallet,
-      this.onFriendRequest});
+      this.onFriendRequest,
+      this.onForceLogout});
 
   /// 收到新消息：data = 服务端消息对象 Map
   final void Function(Map<String, dynamic> data) onMessage;
@@ -37,6 +40,9 @@ class WsService {
 
   /// 收到好友申请/通过事件（需求6：通讯录红点）
   final void Function(Map<String, dynamic> data)? onFriendRequest;
+
+  /// 服务端强制下线事件（后台禁用账号 / 踢人）：收到即清登录态并跳登录页
+  final void Function(Map<String, dynamic> data)? onForceLogout;
 
   /// 重连成功回调（用于按 lastSeq 补拉缺失消息）
   final void Function()? onReconnected;
@@ -122,6 +128,11 @@ class WsService {
         final data = frame['data'];
         onWallet?.call(data is Map<String, dynamic> ? data : const {});
         break;
+      case 'forceLogout':
+        // 后台禁用账号等：服务端强制下线，清登录态并跳登录页
+        final data = frame['data'];
+        onForceLogout?.call(data is Map<String, dynamic> ? data : const {});
+        break;
     }
   }
 
@@ -162,7 +173,32 @@ class WsService {
 /// 需求7：消息列表实时接收推送，无需刷新
 class GlobalWs {
   static final GlobalWs instance = GlobalWs._();
-  GlobalWs._();
+  GlobalWs._() {
+    // 后台禁用账号 → 服务端推 forceLogout：
+    // 先弹"账号已被封禁"提示，用户确认后再清登录态并跳登录页
+    onForceLogout((_) async {
+      final nav = appNavigatorKey.currentState;
+      if (nav != null && nav.mounted) {
+        final ctx = nav.context;
+        await showDialog<void>(
+          context: ctx,
+          barrierDismissible: false,
+          builder: (c) => AlertDialog(
+            title: Text(AppLocalizations.instance.t('accountBannedTitle')),
+            content: Text(AppLocalizations.instance.t('accountBannedMsg')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(c).pop(),
+                child: Text(AppLocalizations.instance.t('accountBannedConfirm')),
+              ),
+            ],
+          ),
+        );
+      }
+      unawaited(ApiClient.instance.forceLogout());
+      GlobalWs.instance.close();
+    });
+  }
 
   WsService? _ws;
   bool _connecting = false;
@@ -171,6 +207,7 @@ class GlobalWs {
   final List<void Function(Map<String, dynamic>)> _recallListeners = [];
   final List<void Function(Map<String, dynamic>)> _readListeners = [];
   final List<void Function(Map<String, dynamic>)> _friendListeners = [];
+  final List<void Function(Map<String, dynamic>)> _forceLogoutListeners = [];
   final List<void Function()> _reconnectedListeners = [];
 
   /// 建立全局连接（登录成功后调用；已有连接则复用）
@@ -185,6 +222,7 @@ class GlobalWs {
         onRecall: (m) => _notify(_recallListeners, m),
         onRead: (m) => _notify(_readListeners, m),
         onFriendRequest: (m) => _notify(_friendListeners, m),
+        onForceLogout: (m) => _notify(_forceLogoutListeners, m),
         // B-24：余额变动是**全局**事件，与当前停在哪个页面无关，
         // 所以不走页面监听器列表，直接刷 WalletStore（valueNotifier 会自动驱动 UI）。
         onWallet: (_) => unawaited(WalletStore.instance.refresh()),
@@ -230,6 +268,12 @@ class GlobalWs {
     return () => _friendListeners.remove(cb);
   }
 
+  /// 注册强制下线监听，返回取消函数
+  VoidCallback onForceLogout(void Function(Map<String, dynamic>) cb) {
+    _forceLogoutListeners.add(cb);
+    return () => _forceLogoutListeners.remove(cb);
+  }
+
   VoidCallback onReconnected(void Function() cb) {
     _reconnectedListeners.add(cb);
     return () => _reconnectedListeners.remove(cb);
@@ -242,6 +286,7 @@ class GlobalWs {
     _recallListeners.clear();
     _readListeners.clear();
     _friendListeners.clear();
+    _forceLogoutListeners.clear();
     _reconnectedListeners.clear();
   }
 }

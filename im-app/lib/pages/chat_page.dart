@@ -25,6 +25,7 @@ import 'image_viewer_page.dart';
 import 'red_packet_detail_page.dart';
 import 'red_packet_page.dart';
 import 'transfer_page.dart';
+import 'user_qr_profile_page.dart';
 import 'video_call_page.dart';
 import 'voice_call_page.dart';
 
@@ -131,6 +132,12 @@ class _ChatPageState extends State<ChatPage> {
   bool _loadingOlder = false; // 正在加载更早的历史
   bool _hasMoreOlder = true; // 还有更早的历史可拉（拉空后置 false）
 
+  /// 当前登录用户 ID（权威来源：UserCache，避免入口页误传对方 ID 导致左右对齐反了）
+  String get _myUid {
+    final cached = UserCache.myId;
+    return (cached != null && cached.isNotEmpty) ? cached : widget.myId;
+  }
+
   // 群功能
   List<Map<String, dynamic>> _members = [];
   int _memberCount = 0; // 群成员人数（标题显示：群名字(9)）
@@ -142,6 +149,9 @@ class _ChatPageState extends State<ChatPage> {
   // 全员禁言 / 我的角色（禁言时输入框置灰提示；群主/管理员不受限）
   bool _muteAll = false;
   int _myRole = 3;
+  // 群成员隐私：仅当服务端以 4006 明确拦我（即我是普通成员）时置 true，
+  // 群主/管理员能正常拉到成员列表，_privacyOn 恒为 false，因此永不被限制。
+  bool _privacyOn = false;
 
   // 长按全屏遮罩状态
   ChatMsg? _longPressedMsg;
@@ -212,7 +222,7 @@ class _ChatPageState extends State<ChatPage> {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     for (final m in _members) {
       final uid = m['userId']?.toString() ?? m['id']?.toString() ?? '';
-      if (uid == widget.myId) {
+      if (uid == _myUid) {
         final until = (m['speakMutedUntil'] as num?)?.toInt() ?? 0;
         if (until > nowSec) return _t('chatMutedBanner');
         break;
@@ -366,7 +376,7 @@ class _ChatPageState extends State<ChatPage> {
         var myRole = _myRole;
         for (final m in list) {
           final uid = m['userId']?.toString() ?? m['id']?.toString() ?? '';
-          if (uid == widget.myId) {
+          if (uid == _myUid) {
             myRole = (m['role'] as num?)?.toInt() ?? 3;
             break;
           }
@@ -378,7 +388,24 @@ class _ChatPageState extends State<ChatPage> {
           if (_svc.lastMembersCount > 0) _memberCount = _svc.lastMembersCount;
         });
       }
+    } on ApiException catch (e) {
+      // 群隐私开启：服务端只对普通成员（role=3）返回 4006 拦截成员列表
+      if (e.code == 4006 && mounted) setState(() => _privacyOn = true);
     } catch (_) {}
+  }
+
+  // 点消息气泡里的头像：看资料 / 加好友（复用扫个人码落地页）
+  // 群隐私开启（且我是被限制的普通成员）时拦截并提示。
+  void _openMemberProfile(String uid) {
+    if (uid.isEmpty || uid == '-1') return; // 空或虚拟小助手不处理
+    if (isGroup && _privacyOn) {
+      AppDialogs.toast(
+          context, AppLocalizations.of(context).t('groupPrivacyProfileBlocked'));
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => UserQrProfilePage(uid: uid)),
+    );
   }
 
   Future<void> _loadHistory({int retry = 0}) async {
@@ -402,7 +429,7 @@ class _ChatPageState extends State<ChatPage> {
           _msgs = list.map(ChatMsg.fromServer).toList();
           // 需求3：历史消息里自己发的、deliveryState=read → 标为已读
           for (final x in _msgs) {
-            if (x.senderId == widget.myId && x.deliveryState == 'read') {
+            if (x.senderId == _myUid && x.deliveryState == 'read') {
               x.status = MsgStatus.read;
             }
           }
@@ -473,7 +500,7 @@ class _ChatPageState extends State<ChatPage> {
             if (msgId == null) return;
             setState(() {
               for (final x in _msgs) {
-                if (x.msgId == msgId && x.senderId == widget.myId) {
+                if (x.msgId == msgId && x.senderId == _myUid) {
                   x.status = MsgStatus.read;
                 }
               }
@@ -566,7 +593,7 @@ class _ChatPageState extends State<ChatPage> {
     setState(() => _quoteMsg = null);
     final local = ChatMsg(
       clientMsgId: clientMsgId,
-      senderId: widget.myId,
+      senderId: _myUid,
       type: 1,
       content: text,
       status: MsgStatus.sending,
@@ -634,7 +661,7 @@ class _ChatPageState extends State<ChatPage> {
         final claimedCnt = (d['claimedCnt'] as num?)?.toInt() ?? 0;
         final count = (d['count'] as num?)?.toInt() ?? 1;
         final claimedByMe =
-            list.any((c) => c['userId']?.toString() == widget.myId);
+            list.any((c) => c['userId']?.toString() == _myUid);
         if (claimedByMe || claimedCnt >= count) {
           _claimedMoneyIds.add(id);
           if (mounted) {
@@ -676,11 +703,11 @@ class _ChatPageState extends State<ChatPage> {
     } else {
       // 转账：仅收款人可领
       final toId = (data['toUserId'] ?? '').toString();
-      if (toId.isNotEmpty && toId != widget.myId) {
+      if (toId.isNotEmpty && toId != _myUid) {
         AppDialogs.toast(context, _t('chatWaitingAccept'));
         return;
       }
-      if (toId.isEmpty && m.senderId == widget.myId) {
+      if (toId.isEmpty && m.senderId == _myUid) {
         AppDialogs.toast(context, _t('chatWaitingAccept'));
         return;
       }
@@ -740,7 +767,7 @@ class _ChatPageState extends State<ChatPage> {
         final picked = await Navigator.of(context).push<Map<String, dynamic>>(
           MaterialPageRoute(
               builder: (_) =>
-                  GroupMemberPickerPage(members: _members, myId: widget.myId)),
+                  GroupMemberPickerPage(members: _members, myId: _myUid)),
         );
         if (picked == null || !mounted) return;
         peerId = picked['id']?.toString();
@@ -795,7 +822,7 @@ class _ChatPageState extends State<ChatPage> {
     setState(() {
       _msgs.add(ChatMsg(
         clientMsgId: clientMsgId,
-        senderId: widget.myId,
+        senderId: _myUid,
         type: isRed ? 8 : 9,
         content: jsonEncode(contentData),
         status: MsgStatus.sending,
@@ -1192,7 +1219,7 @@ class _ChatPageState extends State<ChatPage> {
       final clientMsgId = _uuid();
       final local = ChatMsg(
         clientMsgId: clientMsgId,
-        senderId: widget.myId,
+        senderId: _myUid,
         type: 2,
         content: url, // 图片 bubble 用 content 存 URL
         status: MsgStatus.sending,
@@ -1317,8 +1344,8 @@ class _ChatPageState extends State<ChatPage> {
           _MsgRow(
             msg: m,
             colors: _bubbleColors,
-            myId: widget.myId,
-            isMine: m.senderId == widget.myId,
+            myId: _myUid,
+            isMine: m.senderId.trim() == _myUid.trim(),
             senderName: _senderName(m.senderId),
             showSenderName: isGroup,
             // 头像：单聊（含小助手）用对方会话头像，群聊按成员查
@@ -1332,6 +1359,7 @@ class _ChatPageState extends State<ChatPage> {
             onCallTap: () => _openCallFromSignal(m.content),
             moneyClaimed: _claimedMoneyIds.contains(m.msgId),
             onMoneyTap: () => _claimMoney(m),
+            onAvatarTap: (uid) => _openMemberProfile(uid),
           ),
       ],
     );
@@ -1422,7 +1450,7 @@ class _ChatPageState extends State<ChatPage> {
             : _LongPressOverlay(
                 msg: _longPressedMsg!,
                 convName: widget.conv.conversationName,
-                myId: widget.myId,
+                myId: _myUid,
                 colors: _bubbleColors,
                 onClose: _closeLongPressOverlay,
                 onCopy: () => _copy(_longPressedMsg!),
@@ -1445,7 +1473,7 @@ class _ChatPageState extends State<ChatPage> {
     final clientMsgId = _uuid();
     final local = ChatMsg(
       clientMsgId: clientMsgId,
-      senderId: widget.myId,
+      senderId: _myUid,
       type: 1,
       content: text,
       status: MsgStatus.sending,
@@ -1604,6 +1632,7 @@ class _MsgRow extends StatelessWidget {
   final bool showSenderName;
   final bool moneyClaimed; // 红包/转账已领取
   final VoidCallback? onMoneyTap; // 红包/转账点击领取
+  final ValueChanged<String>? onAvatarTap; // 点头像看资料/加好友（群隐私拦截在外层）
   final String myAvatar; // 我方头像 URL
   final String peerAvatar; // 单聊对方头像 URL（含小助手后台配置头像）
   final String senderAvatar; // 群聊该消息发送者头像 URL
@@ -1622,6 +1651,7 @@ class _MsgRow extends StatelessWidget {
     this.showSenderName = false,
     this.moneyClaimed = false,
     this.onMoneyTap,
+    this.onAvatarTap,
     this.myAvatar = '',
     this.peerAvatar = '',
     this.senderAvatar = '',
@@ -1735,7 +1765,10 @@ class _MsgRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isMine) ...[
-            _avatar(senderColor, senderText),
+            GestureDetector(
+              onTap: () => onAvatarTap?.call(msg.senderId),
+              child: _avatar(senderColor, senderText),
+            ),
             const SizedBox(width: 8),
           ],
           Flexible(
@@ -1795,7 +1828,10 @@ class _MsgRow extends StatelessWidget {
           ),
           if (isMine) ...[
             const SizedBox(width: 8),
-            _avatar(senderColor, senderText),
+            GestureDetector(
+              onTap: () => onAvatarTap?.call(myId),
+              child: _avatar(senderColor, senderText),
+            ),
           ],
         ],
       ),
@@ -2967,7 +3003,7 @@ class _LongPressOverlayState extends State<_LongPressOverlay> {
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
     final m = widget.msg;
-    final isMine = m.senderId == widget.myId;
+    final isMine = m.senderId.trim() == widget.myId.trim();
     final color =
         widget.colors[m.senderId.hashCode.abs() % widget.colors.length];
 

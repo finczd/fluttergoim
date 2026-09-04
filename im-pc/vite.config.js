@@ -11,11 +11,16 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      // 开发代理到线上网关。目标用 https/wss，但本地 dev 访问源是 http://localhost:5173，
+      // vite 的 TLS 校验会以 localhost 去对证书 altnames（DNS:im.x123.wang）导致
+      // ERR_TLS_CERT_ALTNAME_INVALID / ECONNRESET，进而把 /api 与 /ws 全部打挂。
+      // secure:false 关闭本地对目标证书的校验（仅开发期；线上 nginx 用真实证书不受影响）。
+      '/api': { target: 'https://im.x123.wang', changeOrigin: true, secure: false },
       '/ws': {
         // WS 反代到 Go 网关（gateway:9090 在 container 内，dev 用 9090 端口透出）
-        target: 'ws://127.0.0.1:9090',
+        target: 'wss://im.x123.wang/ws',
         ws: true,
+        secure: false, // 同 /api：关闭本地对目标证书的校验，修复 ERR_TLS_CERT_ALTNAME_INVALID
         // 修复：vite 5 ws proxy 客户端断开时 ECONNRESET 报错刷屏
         // 关闭自动重连 + 长超时，断连日志降级
         configure: (proxy) => {

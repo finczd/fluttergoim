@@ -60,14 +60,23 @@ class AuthService {
     return Captcha.fromJson(r.data['data']);
   }
 
-  Future<void> sendCode(String account, String captchaId, String captchaCode,
-      {String countryCode = '+86'}) async {
-    await _dio.post('/api/v1/auth/send-code', data: {
+  /// 发送验证码。channel: sms(短信) / email(邮箱)，为空时由后端按 AUTH_MODE 决定。
+  /// 返回实际发送渠道（'sms' / 'email'），供 UI 提示"已发送至短信/邮箱"。
+  /// 注意：必须检查响应 code，否则短信发送失败会被静默吞掉（用户看到"已发送"却收不到码）。
+  Future<String> sendCode(String account, String captchaId, String captchaCode,
+      {String countryCode = '+86', String channel = 'sms'}) async {
+    final r = await _dio.post('/api/v1/auth/send-code', data: {
       'account': account,
       'countryCode': countryCode,
       'captchaId': captchaId,
       'captchaCode': captchaCode,
+      'channel': channel,
     });
+    _check(r);
+    final data = r.data['data'];
+    return (data is Map && data['channel'] is String)
+        ? data['channel'] as String
+        : channel;
   }
 
   Future<AuthResult> login(String account, String password,
@@ -92,6 +101,7 @@ class AuthService {
     String? inviteCode,
     String? captchaId,
     String? captchaCode,
+    String channel = 'sms',
   }) async {
     final data = <String, dynamic>{
       'account': account,
@@ -100,6 +110,7 @@ class AuthService {
       'code': code,
       'inviteCode': inviteCode,
       'deviceType': 1,
+      'channel': channel,
     };
     // 图形验证码（后端若启用则传，UI 已不再收集）
     if (captchaId != null && captchaId.isNotEmpty) {
@@ -109,6 +120,29 @@ class AuthService {
     final r = await _dio.post('/api/v1/auth/register', data: data);
     _check(r);
     return AuthResult.fromJson(r.data['data']);
+  }
+
+  /// 绑定手机号：发送短信验证码（需登录 + 图形验证码）
+  Future<void> sendBindPhoneCode(String phone, String countryCode,
+      String captchaId, String captchaCode) async {
+    final r = await _dio.post('/api/v1/user/bind-phone/send-code', data: {
+      'phone': phone,
+      'countryCode': countryCode,
+      'captchaId': captchaId,
+      'captchaCode': captchaCode,
+    });
+    _check(r);
+  }
+
+  /// 绑定手机号：校验短信验证码后写入
+  Future<void> bindPhone(
+      String phone, String countryCode, String code) async {
+    final r = await _dio.post('/api/v1/user/bind-phone', data: {
+      'phone': phone,
+      'countryCode': countryCode,
+      'code': code,
+    });
+    _check(r);
   }
 
   void _check(Response r) {

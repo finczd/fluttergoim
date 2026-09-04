@@ -768,7 +768,7 @@ class _ChatListPageState extends State<ChatListPage> {
     final color = AppTheme
         .avatarColors[c.id.hashCode.abs() % AppTheme.avatarColors.length];
     final isGroup = (c.conversation['type'] as num?)?.toInt() == 2;
-    return SizedBox(
+    final avatar = SizedBox(
       width: 48,
       height: 48,
       child: Stack(
@@ -804,6 +804,18 @@ class _ChatListPageState extends State<ChatListPage> {
             ),
         ],
       ),
+    );
+    if (!isGroup) return avatar;
+    // 群聊：头像下方加"群聊"标识
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        avatar,
+        const SizedBox(height: 3),
+        Text(AppLocalizations.of(context).t('chatListGroupBadge'),
+            style: TextStyle(
+                fontSize: 10, color: context.cs.onSurfaceVariant)),
+      ],
     );
   }
 

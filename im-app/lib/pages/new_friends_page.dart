@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/friend_service.dart';
+import '../services/friend_req_store.dart';
 import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
@@ -45,6 +46,36 @@ class _NewFriendsPageState extends State<NewFriendsPage> {
     AppDialogs.toast(context,
         agree ? t('newFriendsApproved') : t('newFriendsRejectedToast'));
     _load();
+    // 审批后主动刷新全局申请数（被申请人收不到 friend.accepted WS 事件）
+    FriendReqStore.instance.refresh();
+  }
+
+  /// 申请人头像：有头像加载网络图，失败/无头像回落首字母色块
+  Widget _avatar(FriendRequest r, String name) {
+    final initial = name.isNotEmpty ? name[0] : '?';
+    final color =
+        AppTheme.avatarColors[name.hashCode.abs() % AppTheme.avatarColors.length];
+    final block = Container(
+      width: 44,
+      height: 44,
+      color: color,
+      alignment: Alignment.center,
+      child: Text(initial,
+          style: const TextStyle(
+              color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+    );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: (r.fromUserAvatar.isNotEmpty)
+          ? Image.network(
+              r.fromUserAvatar,
+              width: 44,
+              height: 44,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => block,
+            )
+          : block,
+    );
   }
 
   @override
@@ -76,6 +107,10 @@ class _NewFriendsPageState extends State<NewFriendsPage> {
     final t = AppLocalizations.of(context).t;
     final approved = r.status == 1;
     final rejected = r.status == 2;
+    // 优先用后端注入的申请人昵称/账号，兜底到 ID
+    final name = r.fromUserName.isNotEmpty
+        ? r.fromUserName
+        : (r.fromUserAccount.isNotEmpty ? r.fromUserAccount : r.fromUser);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -84,18 +119,13 @@ class _NewFriendsPageState extends State<NewFriendsPage> {
       ),
       child: Row(
         children: [
-          const CircleAvatar(
-            radius: 22,
-            backgroundColor: AppTheme.primary,
-            child:
-                Text('?', style: TextStyle(color: Colors.white, fontSize: 16)),
-          ),
+          _avatar(r, name),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(r.fromUser,
+                Text(name,
                     style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w500,

@@ -194,8 +194,30 @@ func AdminUserCreate(ctx context.Context, account, password, nickname string, de
 	return u, nil
 }
 
+// AdminUserSetStatus 启用/禁用用户。
+// 禁用（status=StatusDisabled）时额外做两件事，保证"禁用立即生效"，而不是等 access token 自然过期：
+//  1) 清掉该用户的 refresh 白名单（Redis key refresh:{uid}），
+//     使其 access token 过期后无法用 refresh 续命；refresh 直接失败 → 客户端 401 清登录态；
+//  2) 通过 Redis 事件总线推送 forceLogout 给该用户所有在线设备，
+//     网关收到后立刻下发 WS 事件，客户端收到即清登录态并跳登录页（见各端 forceLogout 处理）。
+// 此外鉴权中间件 Auth 会对每次请求复核 u.Status，禁用账号的 access token 在下次任意请求即被 401 拦截。
 func AdminUserSetStatus(ctx context.Context, id int64, status int) error {
-	return store.DB.Model(&model.User{}).Where("id = ?", id).Update("status", status).Error
+	if err := store.DB.Model(&model.User{}).Where("id = ?", id).Update("status", status).Error; err != nil {
+		return err
+	}
+	if status == model.StatusDisabled {
+		// 1) 清 refresh 白名单，使其续命失败
+		if store.RDB != nil {
+			store.RDB.Del(ctx, fmt.Sprintf("refresh:%d", id))
+		}
+		// 2) 推送强制下线事件，网关即时下发到在线设备
+		_ = PublishEvent(ctx, &Event{
+			Type:    "forceLogout",
+			UserIDs: []int64{id},
+			Data:    json.RawMessage(`{"reason":"account_disabled"}`),
+		})
+	}
+	return nil
 }
 
 func AdminUserResetPassword(ctx context.Context, id int64, newPass string) error {

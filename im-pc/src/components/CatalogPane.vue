@@ -105,11 +105,17 @@ async function openUser(userOrId) {
   const fallback = userOrId && typeof userOrId === 'object' ? userOrId : null;
   const userId = String(fallback ? fallback.id : userOrId);
   if (!userId) return;
-  ui.openContact({ ...(fallback || {}), id: userId });
+  const cached = contacts.getUserDetail(userId);
+  if (cached) {
+    ui.openContact({ ...cached, id: userId });
+    return;
+  }
+  if (fallback) ui.openContact({ ...fallback, id: userId });
   try {
     const detail = await api('users/detail', { user_id: userId });
-    if (detail && String(ui.selectedContact?.id) === userId) {
-      ui.openContact({ ...(fallback || {}), ...detail, id: userId });
+    if (detail && detail.id) contacts.setUserDetail(detail);
+    if (String(ui.selectedContact?.id) === userId) {
+      ui.openContact({ ...(fallback || {}), ...(detail || {}), id: userId });
     }
   } catch (_) {
     /* 保留列表里的基础数据即可 */
@@ -179,6 +185,7 @@ function openMediaItem(item) {
           <span class="catalog-item-main">
             <span class="catalog-item-top">
               <span class="catalog-item-title">{{ item.title || '未命名会话' }}</span>
+              <span v-if="item.type === 'group'" class="type-badge">群聊</span>
               <span class="catalog-item-time">{{ timeText(item.last_message?.created_at) }}</span>
             </span>
             <span class="catalog-item-bottom">

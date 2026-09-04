@@ -170,4 +170,47 @@ func DeleteAccountHandler() gin.HandlerFunc {
 	}
 }
 
+// BindPhoneSendCodeHandler 绑定手机号：发送短信验证码（需登录 + 图形验证码）
+func BindPhoneSendCodeHandler(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		var req struct {
+			Phone       string `json:"phone" binding:"required"`
+			CountryCode string `json:"countryCode"`
+			CaptchaID   string `json:"captchaId" binding:"required"`
+			CaptchaCode string `json:"captchaCode" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		if err := service.SendBindPhoneCode(c.Request.Context(), cfg, uid, req.Phone, req.CountryCode, req.CaptchaID, req.CaptchaCode); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
+// BindPhoneHandler 绑定手机号：校验验证码后写入
+func BindPhoneHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := middleware.CurrentUserID(c)
+		var req struct {
+			Phone       string `json:"phone" binding:"required"`
+			CountryCode string `json:"countryCode"`
+			Code        string `json:"code" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		if err := service.BindPhone(c.Request.Context(), uid, req.Phone, req.CountryCode, req.Code); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+	}
+}
+
 var _ = errs.Forbidden

@@ -8,6 +8,7 @@ import '../services/conversation_service.dart';
 import '../services/friend_service.dart';
 import '../services/user_cache.dart';
 import '../services/ws_service.dart';
+import '../services/friend_req_store.dart';
 import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
@@ -203,6 +204,9 @@ class _ContactsPageState extends State<ContactsPage> {
   Future<void> _handleReq(String reqId, bool agree) async {
     await _svc.handle(reqId, agree);
     await _load();
+    // 审批后主动刷新全局申请数：被申请方收不到 friend.accepted WS 事件，
+    // 不主动刷则底部"通讯录"tab 红点要等杀进程重进才消失
+    FriendReqStore.instance.refresh();
   }
 
   Color _color(String id) => _colors[id.hashCode.abs() % _colors.length];
@@ -350,11 +354,11 @@ class _ContactsPageState extends State<ContactsPage> {
                 ),
                 const Spacer(),
                 Padding(
-                  padding: const EdgeInsets.only(right: 8, top: 4),
+                  padding: const EdgeInsets.only(right: 8),
                   child: IconButton(
                     onPressed: _goAddFriend,
                     icon: Icon(Icons.person_add_alt_1,
-                        size: 24, color: context.cs.onSurface),
+                        size: 26, color: context.cs.onSurface),
                     splashRadius: 22,
                   ),
                 ),
@@ -385,6 +389,10 @@ class _ContactsPageState extends State<ContactsPage> {
                           hintStyle: TextStyle(
                               fontSize: 14, color: context.cs.onSurface),
                           isDense: true,
+                          // 关键：全局主题 inputDecorationTheme 设了 filled:true + 灰色 fillColor，
+                          // 这里搜索框背景由外层 Container 提供，必须显式 opt-out 否则文字后面会有一道灰条
+                          filled: false,
+                          fillColor: Colors.transparent,
                           border: InputBorder.none,
                           contentPadding: EdgeInsets.zero,
                           suffixIcon: _searchCtrl.text.isEmpty
@@ -439,6 +447,8 @@ class _ContactsPageState extends State<ContactsPage> {
                                               builder: (_) =>
                                                   const NewFriendsPage()));
                                       if (mounted) _load();
+                                      // 从新朋友页返回后同步底部 tab 红点
+                                      FriendReqStore.instance.refresh();
                                     }),
                                     _divider(),
                                     // 需求9：群聊 → 我的群聊列表
@@ -572,6 +582,12 @@ class _ContactsPageState extends State<ContactsPage> {
 
   Widget _requestTile(FriendRequest r) {
     final t = AppLocalizations.of(context).t;
+    // 优先用后端注入的申请人昵称/账号，兜底到 ID（避免只显示一串数字）
+    final name = r.fromUserName.isNotEmpty
+        ? r.fromUserName
+        : (r.fromUserAccount.isNotEmpty
+            ? r.fromUserAccount
+            : t('contactsUserWithId', {'id': r.fromUser}));
     return Container(
       margin: const EdgeInsets.fromLTRB(0, 4, 0, 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -581,13 +597,13 @@ class _ContactsPageState extends State<ContactsPage> {
       ),
       child: Row(
         children: [
-          _avatarOf(t('contactsFriendRequestLabel'), r.fromUser, size: 42),
+          _avatarOf(name, r.fromUser, size: 42, url: r.fromUserAvatar),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(t('contactsUserWithId', {'id': r.fromUser}),
+                Text(name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(

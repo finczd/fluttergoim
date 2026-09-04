@@ -5,7 +5,8 @@ import { useAuthStore } from '../stores/auth';
 import { useConversationsStore } from '../stores/conversations';
 import { useContactsStore } from '../stores/contacts';
 import { useNavigation } from '../composables/useNavigation';
-import { initials } from '../utils/format';
+import Avatar from './Avatar.vue';
+import ProfileEdit from './ProfileEdit.vue';
 
 const ui = useUiStore();
 const auth = useAuthStore();
@@ -14,6 +15,7 @@ const contacts = useContactsStore();
 const { switchView } = useNavigation();
 
 const showProfile = ref(false);
+const showProfileEdit = ref(false);
 
 const rail = [
   { view: 'chats', label: '消息', icon: 'i-chat' },
@@ -41,7 +43,7 @@ function logout() {
 }
 function openProfile() {
   showProfile.value = false;
-  switchView('settings');
+  showProfileEdit.value = true;
 }
 </script>
 
@@ -73,7 +75,7 @@ function openProfile() {
         <svg><use href="#i-settings" /></svg>
       </button>
       <button class="self-avatar" data-label="我" type="button" :title="auth.user?.nickname || '我'" @click="showProfile = !showProfile">
-        {{ initials(auth.user?.nickname) }}
+        <Avatar :user="auth.user" size="medium" />
       </button>
     </div>
     <div v-if="showProfile" class="popover profile-menu">
@@ -81,5 +83,6 @@ function openProfile() {
       <button type="button" @click="themeToggle"><svg><use href="#i-moon" /></svg><span>切换主题</span></button>
       <button type="button" class="danger" @click="logout"><svg><use href="#i-logout" /></svg><span>退出登录</span></button>
     </div>
+    <ProfileEdit v-if="showProfileEdit" @close="showProfileEdit = false" />
   </nav>
 </template>

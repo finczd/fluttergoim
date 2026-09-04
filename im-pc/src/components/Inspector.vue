@@ -5,14 +5,17 @@ import { useInspector } from '../composables/useInspector';
 import { useAuthStore } from '../stores/auth';
 import { useContactsStore } from '../stores/contacts';
 import { useMessagesStore } from '../stores/messages';
-import api from '../api/client';
+import api, { uploadFile } from '../api/client';
 import Avatar from './Avatar.vue';
+import GroupAdminPicker from './GroupAdminPicker.vue';
 
 const ui = useUiStore();
 const inspector = useInspector();
 const auth = useAuthStore();
 const contacts = useContactsStore();
 const messages = useMessagesStore();
+// 当前查看的用户资料（来自用户缓存，避免每次重新拉取导致头像重载）
+const u = computed(() => ui.inspector.user || {});
 
 const conv = computed(() => ui.inspector.conversation || {});
 const isGroup = computed(() => conv.value?.type === 'group');
@@ -31,6 +34,69 @@ const myRole = computed(() => {
   return Number(r); // 1=群主 2=管理员 3=成员
 });
 const canManage = computed(() => myRole.value === 1 || myRole.value === 2);
+
+// ---- 群管理（仅群主 myRole===1） ----
+const groupSettings = ref({ privacyEnabled: false, muteAll: false, allowMemberInvite: false, qrJoinEnabled: false });
+const settingsBusy = ref(false);
+const showAdminPicker = ref(false);
+
+async function loadGroupSettings() {
+  if (!isGroup.value || myRole.value !== 1) return;
+  settingsBusy.value = true;
+  try {
+    const r = await inspector.loadGroupSettings(String(conv.value.id));
+    if (r) {
+      groupSettings.value = {
+        privacyEnabled: !!r.privacyEnabled,
+        muteAll: !!r.muteAll,
+        allowMemberInvite: !!r.allowMemberInvite,
+        qrJoinEnabled: !!r.qrJoinEnabled
+      };
+    }
+  } catch (_) {}
+  finally { settingsBusy.value = false; }
+}
+async function setGroupSetting(key, val) {
+  groupSettings.value[key] = val;
+  try {
+    await inspector.setGroupSetting(String(conv.value.id), { [key]: val });
+    ui.toast('已更新');
+  } catch (e) {
+    ui.toast('更新失败', e.message, 'error');
+    await loadGroupSettings();
+  }
+}
+async function doRenameGroup() {
+  const name = window.prompt('修改群昵称', conv.value.title || '');
+  if (!name || !name.trim()) return;
+  try {
+    await inspector.renameGroup(String(conv.value.id), name.trim());
+    ui.toast('群昵称已更新');
+    await inspector.openConversation(conv.value);
+  } catch (e) { ui.toast('修改失败', e.message, 'error'); }
+}
+async function doChangeGroupAvatar() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const up = await uploadFile(file);
+      await inspector.updateGroupAvatar(String(conv.value.id), up.url);
+      ui.toast('群头像已更新');
+      await inspector.openConversation(conv.value);
+    } catch (e) { ui.toast('修改失败', e.message, 'error'); }
+  };
+  input.click();
+}
+
+watch(
+  () => (ui.inspector.open && ui.inspector.kind === 'conversation' && isGroup.value && myRole.value === 1) ? String(conv.value?.id) : '',
+  id => { if (id) loadGroupSettings(); },
+  { immediate: true }
+);
 
 function memberInitial(m) {
   return m.alias || m.nickname || m.name || '成员';
@@ -175,7 +241,7 @@ async function kickMember(m) {
       </div>
       <div class="inspector-section">
         <div class="detail-list">
-          <div class="detail-button"><span>账号</span><small>{{ ui.inspector.user.public_id || ui.inspector.user.username || '' }}</small></div>
+          <div class="detail-button"><span>账号</span><small>{{ ui.inspector.user.public_id || ui.inspector.user.short_id || ui.inspector.user.username || '' }}</small></div>
           <div class="detail-button"><span>所在地</span><small>{{ ui.inspector.user.region || '未设置' }}</small></div>
           <div class="detail-button"><span>个性签名</span><small>{{ ui.inspector.user.bio || '未设置' }}</small></div>
         </div>
@@ -211,9 +277,27 @@ async function kickMember(m) {
         <div v-else class="empty-list-state"><span>{{ canManage ? '暂未发布群公告' : '群主暂未发布公告' }}</span></div>
       </div>
 
+      <!-- 群管理：仅群主可见 -->
+      <div v-if="isGroup && myRole === 1" class="inspector-section">
+        <div class="inspector-section-title"><strong>群管理</strong></div>
+        <div class="detail-list">
+          <label class="detail-switch">
+            <span>开启隐私</span>
+            <input type="checkbox" :checked="groupSettings.privacyEnabled" @change="setGroupSetting('privacyEnabled', $event.target.checked)" />
+          </label>
+          <label class="detail-switch">
+            <span>全员禁言</span>
+            <input type="checkbox" :checked="groupSettings.muteAll" @change="setGroupSetting('muteAll', $event.target.checked)" />
+          </label>
+          <button class="detail-button" type="button" @click="doRenameGroup"><span>修改群昵称</span><small>{{ conv.title }}</small></button>
+          <button class="detail-button" type="button" @click="doChangeGroupAvatar"><span>群头像</span><small>点击更换</small></button>
+          <button class="detail-button" type="button" @click="showAdminPicker = true"><span>群管理员</span><small>添加 / 管理</small></button>
+        </div>
+      </div>
+
       <div class="inspector-section">
         <div class="detail-list">
-          <div class="detail-button" v-if="!isGroup"><span>账号</span><small>{{ peer.public_id || peer.username || '' }}</small></div>
+          <div class="detail-button" v-if="!isGroup"><span>账号</span><small>{{ peer.public_id || peer.short_id || peer.username || '' }}</small></div>
           <div class="detail-button" v-if="!isGroup"><span>所在地</span><small>{{ peer.region || '未设置' }}</small></div>
           <div class="detail-button"><span>{{ isGroup ? '群号' : '签名' }}</span><small>{{ isGroup ? (conv.group_code || '—') : (peer.bio || '未设置') }}</small></div>
           <div v-if="isGroup" class="detail-button"><span>入群方式</span><small>{{ ({ invite: '邀请制', approval: '需审批', open: '自由加入' })[conv.join_mode] || '邀请制' }}</small></div>
@@ -295,6 +379,9 @@ async function kickMember(m) {
         </footer>
       </div>
     </div>
+
+    <!-- 群管理员管理弹窗 -->
+    <GroupAdminPicker v-if="showAdminPicker && isGroup" :conversation-id="String(conv.id)" @close="showAdminPicker = false" />
   </aside>
 </template>
 

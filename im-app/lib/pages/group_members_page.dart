@@ -5,6 +5,7 @@ import '../services/conversation_service.dart';
 import '../services/friend_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
+import 'user_qr_profile_page.dart';
 
 /// 群成员管理页：
 /// - 群主开启"成员隐私"后普通成员只见提示页（列表不可看）
@@ -325,7 +326,18 @@ class _GroupMembersPageState extends State<GroupMembersPage> {
       ),
       child: Row(
         children: [
-          _avatar(name, url, uid),
+          GestureDetector(
+            onTap: () {
+              // 隐私模式下整页已是提示页，这里仅兜底；正常情况点头像看资料/加好友
+              if (_privacyOn) {
+                AppDialogs.toast(context, t('groupPrivacyProfileBlocked'));
+                return;
+              }
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => UserQrProfilePage(uid: uid)));
+            },
+            child: _avatar(name, url, uid),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(

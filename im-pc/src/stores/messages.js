@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import api from '../api/client';
 import { cryptoRandom } from '../utils/helpers';
+import { loadCache, saveCache } from '../utils/messageCache';
 import { useAuthStore } from './auth';
 import { useUiStore } from './ui';
 import { useConversationsStore } from './conversations';
@@ -13,6 +14,8 @@ export const useMessagesStore = defineStore('messages', () => {
   const pins = ref([]);
   const hasMoreMessages = ref(false);
   const loadingOlder = ref(false);
+  // 进入会话拉取首屏消息期间为 true：此时消息列表可能尚无内容，用于显示“正在载入消息”进度条，避免被误认为白屏/卡死
+  const loadingInitial = ref(false);
   const replyTo = ref(null);
   const drafts = ref({});
   const draftDirty = ref(false);
@@ -52,6 +55,10 @@ export const useMessagesStore = defineStore('messages', () => {
       return String(a.id).localeCompare(String(b.id));
     });
     scrollSignal.value += 1;
+    // 需求⑤：合并后落盘缓存（仅当前会话）
+    try {
+      if (current.value?.id) saveCache(current.value.id, messages.value);
+    } catch (_) {}
     return true;
   }
 
@@ -67,12 +74,28 @@ export const useMessagesStore = defineStore('messages', () => {
     pins.value = [];
     hasMoreMessages.value = false;
     localStorage.setItem('qm_pc_current_conversation', String(id));
+    // 需求⑤：先同步渲染本地缓存（若有），再被下面网络数据覆盖，避免每次进入都白屏等全量拉取
+    try {
+      const cached = loadCache(id);
+      if (cached.length) mergeMessages(cached, false);
+    } catch (_) {}
     const loopId = ++messageLoopId;
+    loadingInitial.value = true;
     try {
       const bootstrap = await api('conversations/bootstrap', { conversation_id: id });
-      if (loopId !== messageLoopId) return;
+      if (loopId !== messageLoopId) { loadingInitial.value = false; return; }
       current.value = { ...(current.value || {}), ...bootstrap.conversation };
       currentDetail.value = bootstrap.conversation;
+      // 需求⑥：把群成员写回会话列表项，让左侧列表群头像显示成员拼图（与聊天头部一致）
+      if (currentDetail.value?.type === 'group' && Array.isArray(currentDetail.value.members)) {
+        conversations.upsert({
+          id: String(id),
+          avatar_members: currentDetail.value.members.slice(0, 9).map(m => ({
+            avatar: m.avatar || '',
+            nickname: m.nickname || m.username || String(m.id)
+          }))
+        });
+      }
       pins.value = bootstrap.pins || [];
       hasMoreMessages.value = Boolean(bootstrap.has_more);
       mergeMessages(bootstrap.messages || [], false);
@@ -80,8 +103,10 @@ export const useMessagesStore = defineStore('messages', () => {
       clearReply();
       scheduleReadReceipt();
     } catch (error) {
+      loadingInitial.value = false;
       throw error;
     }
+    loadingInitial.value = false;
   }
 
   async function loadOlderMessages() {
@@ -418,7 +443,7 @@ export const useMessagesStore = defineStore('messages', () => {
   }
 
   return {
-    current, currentDetail, messages, pins, hasMoreMessages, loadingOlder, replyTo, drafts, draftDirty, readState, scrollSignal,
+    current, currentDetail, messages, pins, hasMoreMessages, loadingOlder, loadingInitial, replyTo, drafts, draftDirty, readState, scrollSignal,
     mergeMessages, openConversation, loadOlderMessages, sendMessage, sendMoney, sendCallSignal, retryFailedMessage,
     recallMessage, editMessage, favoriteMessage, pinMessage, isPinned, dismissAnnouncement, openDirect, setReply, clearReply,
     draftFor, clearDraft, saveDraft, persistDraftCache, normalizeDraftRows, applyReadState, scheduleReadReceipt
