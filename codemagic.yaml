@@ -1,0 +1,54 @@
+# Codemagic CI 配置（放仓库根目录）
+# 仓库是 monorepo，Flutter 工程在 im-app/ 子目录 —— 所有脚本都必须 working_directory: im-app
+#
+# 签名说明（二选一）：
+#   A. 自动签名（推荐）：Codemagic 网页 → Teams → Developer accounts 绑定
+#      Apple 开发者账号（App Store Connect API Key），本 yaml 的 ios_signing 会自动取证书/描述文件
+#   B. 手动签名：删掉 environment 里的 ios_signing，改为在应用设置 → Code signing
+#      上传 .p12 证书 + .mobileprovision 描述文件
+#
+# distribution_type 取值：
+#   development / ad_hoc = 测试设备直装；app_store = TestFlight / 商店上架
+
+workflows:
+  ios-ipa:
+    name: iOS IPA
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      ios_signing:
+        distribution_type: ad_hoc          # 测试装真机用 ad_hoc；上 TestFlight 改 app_store
+        bundle_identifier: com.qingniao.im  # iOS Bundle ID（已从工程里确认）
+    scripts:
+      - name: 拉取 Flutter 依赖
+        working_directory: im-app
+        script: flutter packages pub get
+      - name: 生成导出配置并打包 IPA
+        working_directory: im-app
+        script: |
+          cat > /tmp/exportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          flutter build ipa --release --export-options-plist=/tmp/exportOptions.plist
+      # 上 TestFlight / 商店时把上面 method 改成 app-store（distribution_type 也同步改）
+    artifacts:
+      - im-app/build/ios/ipa/*.ipa
+    publishing:
+      email:
+        recipients:
+          - 3333774@qq.com
+        notify:
+          success: true
+          failure: true
