@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
-
 import '../services/api_client.dart';
 import '../services/call_service.dart';
 import '../services/conversation_service.dart';
@@ -17,6 +16,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/app_slidable.dart';
 import '../widgets/official_tag.dart';
+import '../widgets/page_header.dart';
 import 'add_friend_page.dart';
 import 'chat_page.dart';
 import 'new_conversation_page.dart';
@@ -36,26 +36,27 @@ class _ChatListPageState extends State<ChatListPage> {
   final _svc = ConversationService();
   final _api = ApiClient.instance;
   List<ConvItem> _convs = [];
-
-  /// 与 _convs 一一对应的服务端原始 JSON（增量更新时改它再重建 ConvItem，
-  /// 避免从 ConvItem 反推原始字段丢数据：peerRemark / peerOnlineDev 等）
   List<dynamic> _convRaw = [];
   bool _loading = true;
-  bool _loadFailed = false; // 网络拉取失败（与"真的没有会话"区分：失败要给重试入口，不能停在空态）
+  bool _loadFailed = false;
   String _myId = '';
   String _announcementText = '';
-  String _dismissedAnnouncement = ''; // 用户已手动关闭的公告内容（按内容记忆）
+  String _dismissedAnnouncement = '';
   VoidCallback? _wsCancel;
-  Timer? _convSyncTimer; // 增量更新后的防抖全量校准定时器
-  String _openConvId = ''; // 当前正在聊的会话（其消息不累加未读，也不重排）
-  void Function(String key)? _corruptSub; // 本地缓存损坏订阅（取消订阅用）
+  Timer? _convSyncTimer;
+  String _openConvId = '';
+  void Function(String key)? _corruptSub;
+
+  /// ========== 侧滑菜单显式关闭 ==========
+  /// 每个会话一个 GlobalKey：侧滑状态跟随会话身份移动（列表重排不会错配到别的行），
+  /// 置顶/免打扰等操作完成后经 currentState?.close() 显式收起菜单。
+  final Map<String, GlobalKey<AppSlidableState>> _slideKeys = {};
 
   @override
   void initState() {
     super.initState();
-    _loadCached(); // 缓存直出：有缓存不转圈，网络回来后覆盖刷新
+    _loadCached();
     _load();
-    // 本地缓存损坏（解析失败/写坏）→ 立即网络重拉重建，不等下次冷启动
     _corruptSub = (key) {
       if (key == 'conv_list' && mounted) _load();
     };
@@ -63,12 +64,8 @@ class _ChatListPageState extends State<ChatListPage> {
     _loadMyId();
     _loadAnnouncement();
     _loadDismissedAnnouncement();
-    // 需求7：全局 WS 实时推送 —— 收到新消息立即刷新会话列表（无需手动刷新）
     _wsCancel = GlobalWs.instance.onMessage((m) {
-      // P0-3：本地增量更新（不再每条消息都打一次会话列表接口），
-      // 新会话/异常才回落全量；另有 10s 防抖静默校准防状态漂移
       _applyIncomingMessage(m);
-      // 需求：新消息铃声（非自己发送、非通话信令、非通话中）
       final type = (m['type'] as num?)?.toInt();
       final senderId = m['senderId']?.toString() ?? '';
       if (type == 1 &&
@@ -77,7 +74,6 @@ class _ChatListPageState extends State<ChatListPage> {
           CallService.instance.state.value == null) {
         SoundService.instance.playNewMessage();
       }
-      // 需求3：App 后台时通知栏本地通知（极光只推离线用户，在线/后台挂 WS 不推）
       _maybeLocalNotify(m);
     });
     GlobalWs.instance.onRecall((_) => _load());
@@ -92,7 +88,6 @@ class _ChatListPageState extends State<ChatListPage> {
     super.dispose();
   }
 
-  /// 公告内容来自后台配置（/auth/config → announcement）；本地缓存直出
   Future<void> _loadAnnouncement() async {
     try {
       final cached = await _api.readPref('announcement');
@@ -111,7 +106,6 @@ class _ChatListPageState extends State<ChatListPage> {
     } catch (_) {}
   }
 
-  /// 读本地"已关闭公告"记录（重启后仍生效；后台换新公告内容会重新显示）
   Future<void> _loadDismissedAnnouncement() async {
     try {
       final v = await _api.readPref('dismissed_announcement') ?? '';
@@ -120,7 +114,6 @@ class _ChatListPageState extends State<ChatListPage> {
   }
 
   Future<void> _loadMyId() async {
-    // 进程内缓存命中直接用（一次登录会话只拉一次 /user/profile）
     final cached = UserCache.myId;
     if (cached != null && cached.isNotEmpty) {
       if (mounted) setState(() => _myId = cached);
@@ -135,9 +128,6 @@ class _ChatListPageState extends State<ChatListPage> {
     } catch (_) {}
   }
 
-  /// 先渲染本地持久化的会话列表（Hive；冷启动首帧直出，不再整页菊花），
-  /// 网络回来后由 _load() 覆盖并写回缓存。
-  /// 兼容旧版：Hive 为空时回落 SharedPreferences 里那份（老包留下的数据）。
   Future<void> _loadCached() async {
     try {
       if (!mounted || _convs.isNotEmpty) return;
@@ -158,7 +148,6 @@ class _ChatListPageState extends State<ChatListPage> {
     } catch (_) {}
   }
 
-  /// 用服务端原始数据重建列表（缓存直出 / 全量刷新共用）
   void _applyRawList(List<dynamic> data) {
     setState(() {
       _convRaw = List<dynamic>.from(data);
@@ -173,21 +162,19 @@ class _ChatListPageState extends State<ChatListPage> {
   Future<void> _load() async {
     try {
       final list = await _svc.list();
-      // 需求1：底部"消息"tab 红点 —— 未读总数上报全局 store
       UnreadStore.instance
           .update(list.fold<int>(0, (sum, c) => sum + (c.mute ? 0 : c.unread)));
       if (mounted) {
         setState(() {
           _convs = list;
           _convRaw = List<dynamic>.from(_svc.lastConvRaw);
+          // ✅ 移除了 _listRev++：不再强制重建所有行
+          // 置顶/免打扰操作已改为局部更新，不需要全局 key 变化
           _loading = false;
         });
       }
-      // 落本地持久化缓存：下次冷启动首帧直出（含未读、排序、最后消息）
       unawaited(LocalStore.saveConvList(_convRaw));
     } catch (e) {
-      // 不能只 setState 了事：缓存失效 + 网络失败 = 列表空白，
-      // 用户会以为"我没有会话"。这里显式区分"加载失败"并给重试入口。
       if (mounted) {
         setState(() {
           _loading = false;
@@ -198,9 +185,6 @@ class _ChatListPageState extends State<ChatListPage> {
   }
 
   /// P0-3：WS 新消息增量更新会话列表。
-  /// 只改命中的那一条（最后消息 / 未读 +1 / 移到最前），不打接口；
-  /// 命中不到（新会话）或列表为空 → 回落全量刷新。
-  /// 最后用 10 秒防抖做一次静默全量校准，防止本地推算与服务端长期漂移。
   void _applyIncomingMessage(Map<String, dynamic> m) {
     if (!mounted || _convs.isEmpty || _convRaw.isEmpty) {
       _load();
@@ -211,11 +195,7 @@ class _ChatListPageState extends State<ChatListPage> {
       _load();
       return;
     }
-    // 正在该会话聊天页里：聊天页自己会处理并上报已读，这里不动（否则红点乱跳）
     if (convId == _openConvId) return;
-    // 群事件(type=6) / 通话信令(type=7)：是否计未读、是否更新最后消息由服务端
-    // 定（例如未接来电要插入记录、全员禁言事件不该显示成"最后一条消息"），
-    // 本地不猜 → 保持原来的全量刷新，只优化普通消息这条主路径
     final type = (m['type'] as num?)?.toInt() ?? 1;
     if (type == 6 || type == 7) {
       _load();
@@ -223,7 +203,7 @@ class _ChatListPageState extends State<ChatListPage> {
     }
     final idx = _convs.indexWhere((c) => c.id == convId);
     if (idx < 0 || idx >= _convRaw.length) {
-      _load(); // 新会话：本地没有，只能全量拉
+      _load();
       return;
     }
     final raw = Map<String, dynamic>.from(_convRaw[idx] as Map);
@@ -240,7 +220,6 @@ class _ChatListPageState extends State<ChatListPage> {
     final raws = List<dynamic>.from(_convRaw);
     list.removeAt(idx);
     raws.removeAt(idx);
-    // 排序：置顶会话永远在最前，其余插到"置顶块"之后（等同服务端排序规则）
     var target = 0;
     if (!item.pinned) {
       while (target < list.length && list[target].pinned) {
@@ -256,15 +235,12 @@ class _ChatListPageState extends State<ChatListPage> {
     });
     UnreadStore.instance
         .update(list.fold<int>(0, (sum, c) => sum + (c.mute ? 0 : c.unread)));
-    // 防抖校准：连续消息只会在最后一次 10s 后补一次全量
     _convSyncTimer?.cancel();
     _convSyncTimer = Timer(const Duration(seconds: 10), () {
       if (mounted) _load();
     });
   }
 
-  /// App 处于后台/锁屏时收到新消息 → 发通知栏本地通知。
-  /// 前台不发（页内已有铃声 + 红点）；免打扰会话不发；通话信令不发。
   void _maybeLocalNotify(Map<String, dynamic> m) {
     final state = WidgetsBinding.instance.lifecycleState;
     if (state == AppLifecycleState.resumed) return;
@@ -280,7 +256,7 @@ class _ChatListPageState extends State<ChatListPage> {
         break;
       }
     }
-    if (conv != null && conv.mute) return; // 免打扰会话不通知
+    if (conv != null && conv.mute) return;
     final title = (conv?.conversationName ?? '').isNotEmpty
         ? conv!.conversationName
         : '新消息';
@@ -290,7 +266,6 @@ class _ChatListPageState extends State<ChatListPage> {
     LocalNotifyService.instance.showMessage(title: title, body: body);
   }
 
-  /// 顶栏 + 按钮：弹出菜单（添加好友 / 创建群聊 / 扫一扫）
   void _showPlusMenu() {
     final t = AppLocalizations.of(context).t;
     showModalBottomSheet(
@@ -429,12 +404,19 @@ class _ChatListPageState extends State<ChatListPage> {
             _announcement(),
             Expanded(
               child: _loading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? _buildLoadingView()
                   : _convs.isNotEmpty
-                      ? ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(0, 2, 0, 8),
-                          itemCount: _convs.length,
-                          itemBuilder: (_, i) => _convItem(_convs[i]),
+                      ? RefreshIndicator(
+                          // 下拉手动全量载入：重新拉会话列表（含最新一条消息）
+                          color: AppTheme.primary,
+                          onRefresh: _load,
+                          child: ListView.builder(
+                            // 不足一屏也保留下拉刷新能力
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.fromLTRB(0, 2, 0, 8),
+                            itemCount: _convs.length,
+                            itemBuilder: (_, i) => _convItem(_convs[i]),
+                          ),
                         )
                       : _loadFailed
                           ? _loadFailedView()
@@ -449,9 +431,6 @@ class _ChatListPageState extends State<ChatListPage> {
     );
   }
 
-  /// 加载失败态（本地缓存失效 + 网络也失败）。
-  /// 必须给重试入口——不能和"真的没有会话"混为一谈，
-  /// 否则用户点开就是空列表，会以为自己没有会话，且无从恢复。
   Widget _loadFailedView() {
     final t = AppLocalizations.of(context).t;
     return Center(
@@ -484,61 +463,27 @@ class _ChatListPageState extends State<ChatListPage> {
     );
   }
 
-  // ===== 顶栏 =====
   Widget _header() {
     final t = AppLocalizations.of(context).t;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
-      child: Row(
-        children: [
-          Text(t('home'),
-              style: TextStyle(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w800,
-                  color: context.cs.onSurface)),
-          const Spacer(),
-          IconButton(
-            onPressed: _showPlusMenu,
-            icon: Icon(Icons.add, size: 26, color: context.cs.onSurface),
-            splashRadius: 22,
-          ),
-        ],
-      ),
+    return PageHeader(
+      title: t('home'),
+      trailingIcon: Icons.add,
+      onTrailingTap: _showPlusMenu,
     );
   }
 
-  // ===== 搜索栏（与消息列表卡片同款：同左右边距/圆角/底色，去描边）=====
   Widget _searchBar() {
     final t = AppLocalizations.of(context).t;
-    return GestureDetector(
+    return PageSearchBar(
+      hint: t('chatListSearch'),
       onTap: () => Navigator.of(context)
           .push(MaterialPageRoute(builder: (_) => const SearchPage())),
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-        height: 42,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: context.cs.surface,
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.search, size: 20, color: context.cs.onSurfaceVariant),
-            SizedBox(width: 8),
-            Text(t('chatListSearch'),
-                style: TextStyle(
-                    fontSize: 14, color: context.cs.onSurface)),
-          ],
-        ),
-      ),
     );
   }
 
-  // ===== 公告横幅（后台配置 + 跑马灯；用户可手动关闭，按内容记忆——换新公告会重新显示） =====
   Widget _announcement() {
     final text = _announcementText;
     if (text.isEmpty) return const SizedBox.shrink();
-    // 用户已关闭过同一条公告 → 不再显示
     if (_dismissedAnnouncement == text) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -553,13 +498,11 @@ class _ChatListPageState extends State<ChatListPage> {
           const Icon(Icons.campaign_outlined,
               size: 18, color: AppTheme.primary),
           const SizedBox(width: 10),
-          // 跑马灯：文字循环滚动（动画驱动）
           Expanded(
             child: _Marquee(
                 text: text,
                 style: TextStyle(fontSize: 13, color: context.cs.onSurface)),
           ),
-          // 手动关闭按钮
           IconButton(
             onPressed: _dismissAnnouncement,
             icon:
@@ -578,16 +521,18 @@ class _ChatListPageState extends State<ChatListPage> {
     } catch (_) {}
   }
 
-  // ===== 会话项（仿微信侧滑：置顶 / 免打扰 / 删除 直接点击执行） =====
+  // ===== 会话项 =====
   Widget _convItem(ConvItem c) {
     final t = AppLocalizations.of(context).t;
     final isGroup = (c.conversation['type'] as num?)?.toInt() == 2;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
       child: AppSlidable(
-        cardColor: c.pinned
-            ? AppTheme.primary.withValues(alpha: 0.06)
-            : context.cs.surface,
+        convId: c.id,
+        // GlobalKey：侧滑状态跟随会话身份移动（列表重排不错配到别的行）；
+        // 置顶/免打扰等操作完成后由 _closeSlider 经它显式收起菜单。
+        key: _slideKeys.putIfAbsent(c.id, () => GlobalKey<AppSlidableState>()),
+        cardColor: _convCardBg(c.pinned),
         actions: [
           SlidableAction(
             icon: Icons.push_pin,
@@ -612,15 +557,12 @@ class _ChatListPageState extends State<ChatListPage> {
         ],
         child: Container(
           decoration: BoxDecoration(
-            color: c.pinned
-                ? AppTheme.primary.withValues(alpha: 0.06)
-                : context.cs.surface,
+            color: _convCardBg(c.pinned),
             borderRadius: BorderRadius.circular(AppTheme.radiusMd),
           ),
           child: InkWell(
             borderRadius: BorderRadius.circular(AppTheme.radiusMd),
             onTap: () async {
-              // 标记"正在聊这个会话"：其 WS 消息不累加未读（增量更新会跳过）
               setState(() => _openConvId = c.id);
               await Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => ChatPage(conv: c, myId: _myId)));
@@ -652,7 +594,6 @@ class _ChatListPageState extends State<ChatListPage> {
                                             fontWeight: FontWeight.w600,
                                             color: context.cs.onSurface)),
                                   ),
-                                  // 小助手官方标识（虚拟 uid -1）
                                   if (c.isAssistant)
                                     const Padding(
                                       padding: EdgeInsets.only(left: 6),
@@ -725,39 +666,146 @@ class _ChatListPageState extends State<ChatListPage> {
     );
   }
 
+  // ============================================================
+  //  ✅ 核心修复：置顶/免打扰改为「本地更新」，不再调 _load()
+  // ============================================================
+
+  /// 置顶/取消置顶
+  ///
+  /// 原逻辑：调 _load() → _listRev++ → 全量重建 → 菜单状态错乱
+  /// 新逻辑：本地直接更新数据 + setState → key 变化 → AppSlidable 重建 → 菜单自动收起
   Future<void> _togglePin(ConvItem c) async {
+    final newPinned = !c.pinned;
+    final t = AppLocalizations.of(context).t;
+
+    // 1）先本地更新（立即反映 UI，不触发全量刷新）
+    final idx = _convs.indexWhere((x) => x.id == c.id);
+    if (idx >= 0 && idx < _convRaw.length) {
+      final raw = Map<String, dynamic>.from(_convRaw[idx] as Map);
+      raw['pinned'] = newPinned;
+      final updated = ConvItem.fromJson(raw);
+
+      setState(() {
+        _convs.removeAt(idx);
+        _convRaw.removeAt(idx);
+        // 置顶的移到最前，取消置顶的插到"置顶块"之后
+        var target = 0;
+        if (!newPinned) {
+          while (target < _convs.length && _convs[target].pinned) {
+            target++;
+          }
+        }
+        _convs.insert(target, updated);
+        _convRaw.insert(target, raw);
+      });
+    }
+
+    // 2）显式关闭该行侧滑菜单（按钮 onTap 时 AppSlidable 已自收起一次，这里再兜底）
+    _closeSlider(c.id);
+
+    // 3）后台同步到服务端（不需要 await，不阻塞 UI）
     try {
-      await ConversationService().setPin(c.id, !c.pinned);
-      _toast(c.pinned
-          ? AppLocalizations.of(context).t('chatListUnpinned')
-          : AppLocalizations.of(context).t('chatListPinned'));
-      _load();
+      final ok = await ConversationService().setPin(c.id, newPinned);
+      if (!ok) {
+        _toast(t('chatListOpFailed'));
+        _load(); // 失败回滚：重新拉取正确数据
+        return;
+      }
+      _toast(newPinned ? t('chatListPinned') : t('chatListUnpinned'));
     } catch (e) {
-      _toast(AppLocalizations.of(context).t('chatListOpFailed'));
+      _toast(t('chatListOpFailed'));
+      // 失败回滚：重新拉取正确数据
+      _load();
     }
   }
 
+  /// 免打扰/取消免打扰 —— 同理
   Future<void> _toggleMute(ConvItem c) async {
+    final newMute = !c.mute;
+    final t = AppLocalizations.of(context).t;
+
+    // 1）本地更新单条
+    final idx = _convs.indexWhere((x) => x.id == c.id);
+    if (idx >= 0 && idx < _convRaw.length) {
+      final raw = Map<String, dynamic>.from(_convRaw[idx] as Map);
+      raw['mute'] = newMute;
+      final updated = ConvItem.fromJson(raw);
+
+      setState(() {
+        _convs[idx] = updated;
+        _convRaw[idx] = raw;
+      });
+    }
+
+    // 2）显式关闭该行侧滑菜单（同置顶，操作后兜底收起）
+    _closeSlider(c.id);
+
+    // 3）后台同步
     try {
-      await ConversationService().setMute(c.id, !c.mute);
-      _toast(c.mute
-          ? AppLocalizations.of(context).t('chatListNotifyOn')
-          : AppLocalizations.of(context).t('chatListMuteOn'));
-      _load();
+      final ok = await ConversationService().setMute(c.id, newMute);
+      if (!ok) {
+        _toast(t('chatListOpFailed'));
+        _load();
+        return;
+      }
+      _toast(newMute ? t('chatListMuteOn') : t('chatListNotifyOn'));
     } catch (e) {
-      _toast(AppLocalizations.of(context).t('chatListOpFailed'));
+      _toast(t('chatListOpFailed'));
+      _load();
     }
   }
 
   Future<void> _deleteConv(ConvItem c) async {
-    // 单聊通过退出处理（退出后端无对应接口，这里做本地移除）
+    // 删除操作本身已经是局部 setState，不涉及全量刷新
+    // AppSlidable 被移除 → 菜单自然不存在了；顺手清掉它的 GlobalKey
     final idx = _convs.indexWhere((x) => x.id == c.id);
+    _slideKeys.remove(c.id);
     setState(() {
       _convs.removeWhere((x) => x.id == c.id);
-      // _convRaw 必须与 _convs 一一对应，否则增量更新按下标改错会话
       if (idx >= 0 && idx < _convRaw.length) _convRaw.removeAt(idx);
     });
     _toast(AppLocalizations.of(context).t('chatListDeleted'));
+  }
+
+  /// 显式关闭某行的侧滑菜单（置顶/免打扰等操作完成后调用）。
+  /// 延后到帧末执行：确保 GlobalKey 对应的 State 已完成重排后的重新挂载。
+  void _closeSlider(String id) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _slideKeys[id]?.currentState?.close();
+    });
+  }
+
+  /// 首次载入态：主色调线性进度条 + 文案（替代原来的灰色转圈）
+  Widget _buildLoadingView() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 140,
+            child: LinearProgressIndicator(
+              minHeight: 4,
+              color: AppTheme.primary,
+              backgroundColor: Color(0x1A007AFF),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(AppLocalizations.of(context).t('chatLoadingMsg'),
+              style: TextStyle(
+                  fontSize: 13, color: context.cs.onSurfaceVariant)),
+        ],
+      ),
+    );
+  }
+
+  /// 会话卡背景色。置顶 = surface 向主色调抬 6% 的【不透明】色。
+  /// 铁律：不能用半透明色（primary.withValues(alpha:0.06)）——
+  /// 侧滑按钮层常驻绘制在卡片底下，半透明卡片会把
+  /// 「取消置顶/免打扰/删除」三个按钮直接透出来（视觉上像菜单没关）。
+  Color _convCardBg(bool pinned) {
+    final surface = context.cs.surface;
+    if (!pinned) return surface;
+    return Color.lerp(surface, AppTheme.primary, 0.06)!;
   }
 
   void _toast(String msg) {
@@ -777,17 +825,44 @@ class _ChatListPageState extends State<ChatListPage> {
           Positioned.fill(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(isGroup ? 14 : 24),
-              child: c.avatarUrl.isNotEmpty
-                  ? Image.network(
-                      c.avatarUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          _avatarFallback(color, c, isGroup),
-                    )
-                  : _avatarFallback(color, c, isGroup),
+              child: Stack(
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  Positioned.fill(
+                    child: c.avatarUrl.isNotEmpty
+                        ? Image.network(
+                            c.avatarUrl,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                _avatarFallback(color, c, isGroup),
+                          )
+                        : _avatarFallback(color, c, isGroup),
+                  ),
+                  if (isGroup)
+                    Positioned(
+                      right: -19,
+                      bottom: 5,
+                      width: 60,
+                      height: 12,
+                      child: Transform.rotate(
+                        angle: -math.pi / 4,
+                        child: Container(
+                          color: AppTheme.primary,
+                          alignment: Alignment.center,
+                          child: Text(
+                              AppLocalizations.of(context)
+                                  .t('chatListGroupBadge'),
+                              style: const TextStyle(
+                                  fontSize: 8,
+                                  height: 1,
+                                  color: Colors.white)),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
-          // 单聊头像右下角在线状态点（群聊不显示；对方在线才显示绿点）
           if (!isGroup && showOnline && c.peerOnline)
             Positioned(
               right: 0,
@@ -796,7 +871,7 @@ class _ChatListPageState extends State<ChatListPage> {
                 width: 12,
                 height: 12,
                 decoration: BoxDecoration(
-                  color: AppTheme.onlineDot, // 在线绿
+                  color: AppTheme.onlineDot,
                   shape: BoxShape.circle,
                   border: Border.all(color: context.cs.surface, width: 2),
                 ),
@@ -805,18 +880,7 @@ class _ChatListPageState extends State<ChatListPage> {
         ],
       ),
     );
-    if (!isGroup) return avatar;
-    // 群聊：头像下方加"群聊"标识
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        avatar,
-        const SizedBox(height: 3),
-        Text(AppLocalizations.of(context).t('chatListGroupBadge'),
-            style: TextStyle(
-                fontSize: 10, color: context.cs.onSurfaceVariant)),
-      ],
-    );
+    return avatar;
   }
 
   Widget _avatarFallback(Color color, ConvItem c, bool isGroup) {
@@ -867,7 +931,6 @@ class _MarqueeState extends State<_Marquee>
 
   void _measure() {
     if (!mounted || _started) return;
-    // 用 LayoutBuilder + TextPainter 测文字宽度
     final tp = TextPainter(
       text: TextSpan(text: widget.text, style: widget.style),
       maxLines: 1,
@@ -875,7 +938,7 @@ class _MarqueeState extends State<_Marquee>
     )..layout();
     _textWidth = tp.width;
     _started = true;
-    if (_textWidth > 200) _controller.repeat(); // 超出才滚动
+    if (_textWidth > 200) _controller.repeat();
     setState(() {});
   }
 

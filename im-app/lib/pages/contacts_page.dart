@@ -13,6 +13,7 @@ import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/official_tag.dart';
+import '../widgets/page_header.dart';
 import 'add_friend_page.dart';
 import 'chat_page.dart';
 import 'conv_settings_page.dart';
@@ -341,79 +342,23 @@ class _ContactsPageState extends State<ContactsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 顶栏：标题 + 添加好友入口
-            Row(
-              children: [
-                Padding(
-                  padding: EdgeInsets.fromLTRB(16, 8, 8, 0),
-                  child: Text(t('contactsTitle'),
-                      style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
-                          color: context.cs.onSurface)),
-                ),
-                const Spacer(),
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: IconButton(
-                    onPressed: _goAddFriend,
-                    icon: Icon(Icons.person_add_alt_1,
-                        size: 26, color: context.cs.onSurface),
-                    splashRadius: 22,
-                  ),
-                ),
-              ],
+            // 顶栏：标题 + 添加好友入口（与首页共用 PageHeader，保证 UI 完全一致）
+            PageHeader(
+              title: t('contactsTitle'),
+              trailingIcon: Icons.person_add_alt_1,
+              onTrailingTap: _goAddFriend,
             ),
-            // 搜索框：与首页搜索栏同款样式（surface 底色 + radiusMd 圆角、去描边、
-            // 同边距/高度/图标/文字），保持实时本地过滤能力（可输入 + 清除按钮）。
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-              child: Container(
-                height: 42,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration: BoxDecoration(
-                  color: context.cs.surface,
-                  borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.search,
-                        size: 20, color: context.cs.onSurfaceVariant),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _searchCtrl,
-                        style: TextStyle(fontSize: 14, color: context.cs.onSurface),
-                        decoration: InputDecoration(
-                          hintText: t('contactsSearchHint'),
-                          hintStyle: TextStyle(
-                              fontSize: 14, color: context.cs.onSurface),
-                          isDense: true,
-                          // 关键：全局主题 inputDecorationTheme 设了 filled:true + 灰色 fillColor，
-                          // 这里搜索框背景由外层 Container 提供，必须显式 opt-out 否则文字后面会有一道灰条
-                          filled: false,
-                          fillColor: Colors.transparent,
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.zero,
-                          suffixIcon: _searchCtrl.text.isEmpty
-                              ? null
-                              : IconButton(
-                                  icon: Icon(Icons.close,
-                                      size: 18,
-                                      color: context.cs.onSurfaceVariant),
-                                  onPressed: () => setState(() {
-                                    _searchCtrl.clear();
-                                    _searching = false;
-                                    _filteredFriends = [];
-                                  }),
-                                ),
-                        ),
-                        onChanged: _filter,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            // 搜索框：与首页共用 PageSearchBar（surface 底色 + radiusMd 圆角、去描边、
+            // 同边距/高度/图标/字号），保持实时本地过滤能力（可输入 + 清除按钮）。
+            PageSearchBar(
+              hint: t('contactsSearchHint'),
+              controller: _searchCtrl,
+              onChanged: _filter,
+              onClear: () => setState(() {
+                _searchCtrl.clear();
+                _searching = false;
+                _filteredFriends = [];
+              }),
             ),
             Expanded(
               child: _loading
@@ -421,7 +366,9 @@ class _ContactsPageState extends State<ContactsPage> {
                   : _loadFailed
                       ? _buildLoadFailed()
                       : ListView(
-                          padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
+                          // 顶部 6px = 与首页完全一致（首页：列表顶 2px + 条目上边距 4px），
+                          // 修复"通讯录搜索框与新朋友卡片间距比首页宽"的不统一
+                          padding: const EdgeInsets.fromLTRB(12, 6, 12, 16),
                           children: [
                             // 设计稿功能区：新朋友 / 群聊 / 小助手（需求8/9/10）
                             Padding(

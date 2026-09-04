@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../l10n/app_locale.dart';
 import '../services/call_service.dart';
@@ -79,7 +80,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
-    return Scaffold(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // 状态栏颜色 = 页面背景灰（4 个 tab 页 Scaffold 都是 scaffoldBackgroundColor）。
+    // 不设的话状态栏保持系统默认白色，只有进过带 AppBar 的二级页（如新朋友）
+    // 返回后才被它的 AnnotatedRegion 顺手染成灰色 —— 现在主界面自己声明，保证始终一致。
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: Theme.of(context).scaffoldBackgroundColor,
+        statusBarIconBrightness:
+            isDark ? Brightness.light : Brightness.dark, // 图标与底色反色
+      ),
+      child: Scaffold(
       // IndexedStack 保活 4 个 tab：切换时不销毁/重建页面，
       // 修复「快速点'我的'先闪'未登录'再加载头像昵称」「发现页每次切 tab 都重新加载」。
       // 代价是 4 页 initState 在进入首页时并发执行一次（各自拉一次接口），可接受。
@@ -109,6 +120,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             ),
           ),
         ),
+      ),
       ),
     );
   }

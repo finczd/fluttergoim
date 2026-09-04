@@ -5,6 +5,7 @@
 > 文档由 `internal/handler/*.go` 的路由注册与处理函数逐接口提取，字段名、类型、必填项、错误码均与源码一致。
 
 ## 通用约定
+
 - **Base URL 前缀**：`/api/v1`（管理后台为 `/api/v1/admin`）。
 - **统一响应信封**：`{"code":0,"message":"ok","data":{...}}`。`code=0` 表示成功；非 0 为业务错误，`message` 为可读说明。个别接口可能直接返回数据形态，以各接口“成功响应 data”为准。
 - **鉴权**：除特别标注「公开」的接口外，`/api/v1/*` 其余接口需在 Header 携带 `Authorization: Bearer <token>`。管理后台接口另需管理员角色（`middleware.RequireAdmin`）。
@@ -15,6 +16,7 @@
 ## 端点索引
 
 ### 认证与通用
+
 - `GET /api/v1/health`
 - `GET /api/v1/access/nodes`
 - `GET /api/v1/trtc/config`
@@ -34,6 +36,7 @@
 - `GET /api/v1/app/list`
 
 ### 用户与好友
+
 - `GET /api/v1/user/profile`
 - `PUT /api/v1/user/profile`
 - `PUT /api/v1/user/password`
@@ -52,6 +55,7 @@
 - `GET /api/v1/friend/blacklist`
 
 ### 会话与群组
+
 - `GET /api/v1/conversation/list`
 - `POST /api/v1/conversation/direct`
 - `POST /api/v1/conversation/group`
@@ -74,6 +78,7 @@
 - `GET /api/v1/conversation/:id/preview`
 
 ### 消息
+
 - `POST /api/v1/message/send`
 - `GET /api/v1/message/history`
 - `GET /api/v1/message/sync`
@@ -85,6 +90,7 @@
 - `GET /api/v1/message/favorites`
 
 ### 钱包 / 支付 / 朋友圈
+
 - `GET /api/v1/wallet/me`
 - `POST /api/v1/wallet/record`
 - `POST /api/v1/wallet/transfer/:msgId/accept`
@@ -103,7 +109,9 @@
 - `POST /api/v1/moments`
 - `POST /api/v1/moments/:id/like`
 
+
 ### 管理后台（一）：用户/配置/应用/助手/财务
+
 - `GET /api/v1/admin/users`
 - `POST /api/v1/admin/users`
 - `PUT /api/v1/admin/users/:id/status`
@@ -132,7 +140,9 @@
 - `PUT /api/v1/admin/recharge-orders/:id/approve`
 - `PUT /api/v1/admin/recharge-orders/:id/reject`
 
+
 ### 管理后台（二）：提现/群组/消息/统计/日志/靓号/邀请码/系统
+
 - `GET /api/v1/admin/withdraw-orders`
 - `PUT /api/v1/admin/withdraw-orders/:id/approve`
 - `PUT /api/v1/admin/withdraw-orders/:id/reject`
@@ -178,6 +188,7 @@
 ---
 
 ### `GET /api/v1/health`
+
 - 鉴权: 公开
 - 说明: 健康检查，返回服务存活状态。
 - 请求体: 无
@@ -186,6 +197,7 @@
 - 备注: 无副作用。
 
 ### `GET /api/v1/access/nodes`
+
 - 鉴权: 公开
 - 说明: 返回就近接入节点列表（后台 `sys_config.access_nodes` 优先，回退 `cfg.AccessNodes`）。
 - 请求体: 无
@@ -194,6 +206,7 @@
 - 备注: 客户端用于测速选路；data 可能为 `[]map[string]interface{}`。
 
 ### `GET /api/v1/trtc/config`
+
 - 鉴权: 公开
 - 说明: 返回 TRTC 配置（不含 secretKey）。
 - 请求体: 无
@@ -202,6 +215,7 @@
 - 备注: 由 `service.GetTRTCConfig` 读取后台 `trtc_app_id` 等，回退环境变量。
 
 ### `GET /api/v1/auth/captcha`
+
 - 鉴权: 公开
 - 说明: 生成图形验证码（防刷），返回验证码 ID 与 base64 图片。
 - 请求体: 无
@@ -209,7 +223,9 @@
 - 错误码: 500（验证码生成失败）
 - 备注: 后续 `/auth/send-code` 需回传 `captchaId` + `captchaCode`。
 
+
 ### `POST /api/v1/auth/send-code`
+
 - 鉴权: 公开
 - 说明: 发送短信/邮箱验证码（按认证模式或显式指定渠道），发送前校验图形验证码。
 - 请求体:
@@ -229,6 +245,7 @@
   - 图形验证码校验失败或限流时返回对应业务码；发送失败会在 message 中带上底层错误，便于排查。
 
 ### `POST /api/v1/auth/register`
+
 - 鉴权: 公开
 - 说明: 注册账号并返回登录令牌。
 - 请求体:
@@ -251,6 +268,7 @@
 - 备注: 受 `registerOn` 开关控制；`user` 字段为 `model.User`（注意 `id`/`departmentId` 以**字符串**形式输出，因 json tag `,string`；`shortId` 为可空字符串指针，未分配时为 `null`）。
 
 ### `POST /api/v1/auth/login`
+
 - 鉴权: 公开
 - 说明: 账号密码登录，返回用户信息与双令牌。
 - 请求体:
@@ -265,6 +283,7 @@
 - 备注: 记录登录 IP（入参 `c.ClientIP()`）；`user` 同上含 `id`/`departmentId` 字符串化字段。被封禁账号返回 1004（专用错误，不复用通用的「无权限」1003），客户端应明确提示封禁。
 
 ### `POST /api/v1/auth/refresh`
+
 - 鉴权: 公开
 - 说明: 用 refreshToken 换取新的 accessToken。
 - 请求体:
@@ -276,6 +295,7 @@
 - 备注: 仅返回新的 accessToken，refreshToken 不变。
 
 ### `GET /api/v1/auth/config`
+
 - 鉴权: 公开
 - 说明: 返回注册/登录页所需配置（数据库优先，回退环境变量）。
 - 请求体: 无
@@ -284,6 +304,7 @@
 - 备注: 客户端据此渲染注册/登录页、品牌与公告跑马灯、版本更新检查。
 
 ### `POST /api/v1/auth/qr/ticket`
+
 - 鉴权: 公开
 - 说明: 创建扫码登录 ticket，返回二维码内容（payload）与状态信息。
 - 请求体: 无
@@ -292,6 +313,7 @@
 - 备注: ticket 用于 PC 端轮询；secret 不应对客户端暴露，仅用于生成 payload。
 
 ### `GET /api/v1/auth/qr/status`
+
 - 鉴权: 公开
 - 说明: PC 端轮询二维码状态；confirmed 且用户有效时直接下发令牌。
 - 查询参数: `ticket:string`（必填，二维码 ticket）
@@ -301,6 +323,7 @@
 - 备注: confirmed 后保留 60s 供轮询取 token；未确认时 `accessToken`/`refreshToken`/`user` 为空或 null。
 
 ### `POST /api/v1/auth/logout`
+
 - 鉴权: 需要Token
 - 说明: 登出（当前实现仅取 uid 调 Logout，未做令牌吊销）。
 - 请求体: 无
@@ -309,6 +332,7 @@
 - 备注: 无状态令牌场景下登出多为客户端丢弃令牌。
 
 ### `POST /api/v1/upload`
+
 - 鉴权: 需要Token
 - 说明: 文件上传至 MinIO，支持 chat/avatar 目录分类。
 - 请求体: multipart/form-data
@@ -319,6 +343,7 @@
 - 备注: 字段取自 `c.Request.FormFile("file")` 与 `c.PostForm("dir")`；`name` 取上传原始文件名。
 
 ### `POST /api/v1/auth/qr/scanned`
+
 - 鉴权: 需要Token
 - 说明: 手机端扫码成功，将 ticket 状态 pending → scanned（幂等，重复上报不报错）。
 - 请求体:
@@ -330,6 +355,7 @@
 - 备注: `uid` 取自 Token；已 scanned/confirmed 直接成功。
 
 ### `POST /api/v1/auth/qr/confirm`
+
 - 鉴权: 需要Token
 - 说明: 手机端确认登录，ticket pending/scanned → confirmed（兼容无 scanned 直接 confirm）。
 - 请求体:
@@ -341,6 +367,7 @@
 - 备注: 确认后保留 60s 供 PC 端 `/auth/qr/status` 取令牌。
 
 ### `GET /api/v1/trtc/usersig`
+
 - 鉴权: 需要Token
 - 说明: 为当前用户生成 TRTC UserSig（后端用 secretKey 签名后下发）。
 - 查询参数: `room:string`（可选，房间号，原样回显到 data.roomId）
@@ -350,6 +377,7 @@
 - 备注: TRTC 未启用时返回 `code:500`；`userId` 取自 Token 的 uid。
 
 ### `GET /api/v1/app/list`
+
 - 鉴权: 需要Token
 - 说明: 已上架小程序列表（发现页）。
 - 请求体: 无
@@ -359,13 +387,14 @@
 
 ---
 
-> 基址 `/api/v1`，以下全部接口位于 `user` 子组，**需要 Bearer Token**（middleware.Auth）。
-> 统一信封：`{"code":0,"message":"ok","data":{...}}`，非 0 为业务错误。
+> 基址 `/api/v1`，以下全部接口位于 `user` 子组，**需要 Bearer Token**（middleware.Auth）。>   
+> 统一信封：`{"code":0,"message":"ok","data":{...}}`，非 0 为业务错误。>   
 > 注意：所有 `id` 路径/返回字段在代码内为 `int64`，但 JSON 中以字符串形式传输（Go json tag `,string`），文档中标注 `int64(string)`。
 
 ---
 
 ### `GET /api/v1/user/profile`
+
 - 鉴权: 需要Token
 - 说明: 获取当前登录用户自己的资料，附带在线设备、在线状态与靓号标识。
 - 路径参数: 无
@@ -373,11 +402,12 @@
 - 请求体: 无
 - 成功响应 data: `model.User` 全部字段（`id:int64(string)`、`account`、`nickname`、`avatar`、`signature`、`phone`、`email`、`countryCode`、`shortId:string?`、`balance:number`、`frozen:number`、`departmentId:int64(string)`、`status:int`、`role:int`、`myInviteCode:string`、`lastLoginAt:string?`、`createdAt`、`updatedAt`）+ 额外字段 `online:bool`、`onlineDevice:[]string`、`vipShortId:bool`
 - 错误码: 服务错误走 `errCode(err)`（如用户不存在等）
-- 备注: 额外三字段由 handler 注入，非 User 表字段；`shortId` 为指针类型，未分配时为 `null`；`lastLoginAt` 可为 `null`。
+- 备注: 额外三字段由 handler 注入，非 User 表字段；`shortId` 为指针类型，未分配时为 `null`；`lastLoginAt` 可为 `null`。`myInviteCode` 为空时服务端按回退链自动回填：①`user.my_invite_code` → ②`invite_code.used_by`=本人 → ③`invite_friend_code.friend_ids` 包含本人（后台自定义码关联的好友，带引号整串匹配防误伤）。
 
 ---
 
 ### `PUT /api/v1/user/profile`
+
 - 鉴权: 需要Token
 - 说明: 更新当前用户资料；非必填字段仅在提供时更新，且 `nickname/avatar/departmentId` 空值视为不更新。
 - 路径参数: 无
@@ -398,6 +428,7 @@
 ---
 
 ### `PUT /api/v1/user/password`
+
 - 鉴权: 需要Token
 - 说明: 修改登录密码，需先校验原密码。
 - 路径参数: 无
@@ -416,6 +447,7 @@
 ---
 
 ### `DELETE /api/v1/user`
+
 - 鉴权: 需要Token
 - 说明: 注销当前登录账户。
 - 路径参数: 无
@@ -428,6 +460,7 @@
 ---
 
 ### `POST /api/v1/user/bind-phone/send-code`
+
 - 鉴权: 需要Token
 - 说明: 绑定手机号时发送短信验证码。需先校验图形验证码（防刷），再经已配置的短信服务（阿里云）下发。
 - 请求体:
@@ -442,6 +475,7 @@
 - 备注: 仅校验图形验证码与下发短信，不写入手机号；真正绑定在 `/user/bind-phone`。
 
 ### `POST /api/v1/user/bind-phone`
+
 - 鉴权: 需要Token
 - 说明: 校验短信验证码后写入当前账号的手机号（含国家区号）。
 - 请求体:
@@ -457,6 +491,7 @@
 ---
 
 ### `GET /api/v1/user/search`
+
 - 鉴权: 需要Token
 - 说明: 按关键字搜索用户（全员可见），结果附带在线状态。
 - 路径参数: 无
@@ -469,6 +504,7 @@
 ---
 
 ### `GET /api/v1/user/:id`
+
 - 鉴权: 需要Token
 - 说明: 获取指定用户详情，附带在线状态。
 - 路径参数: `id:int64(string) // 目标用户ID`
@@ -481,6 +517,7 @@
 ---
 
 ### `GET /api/v1/friend/list`
+
 - 鉴权: 需要Token
 - 说明: 获取我的好友列表，附带在线状态、备注与靓号标识。
 - 路径参数: 无
@@ -493,6 +530,7 @@
 ---
 
 ### `POST /api/v1/friend/request`
+
 - 鉴权: 需要Token
 - 说明: 向指定用户发起好友申请。
 - 路径参数: 无
@@ -511,6 +549,7 @@
 ---
 
 ### `GET /api/v1/friend/request/incoming`
+
 - 鉴权: 需要Token
 - 说明: 获取我收到的待处理好友申请，并附带对方昵称/账号/头像。
 - 路径参数: 无
@@ -523,6 +562,7 @@
 ---
 
 ### `GET /api/v1/friend/request/outgoing`
+
 - 鉴权: 需要Token
 - 说明: 获取我发出的待处理好友申请。
 - 路径参数: 无
@@ -535,6 +575,7 @@
 ---
 
 ### `POST /api/v1/friend/request/:id/handle`
+
 - 鉴权: 需要Token
 - 说明: 处理（同意/拒绝）一条收到的好友申请。
 - 路径参数: `id:int64(string) // 好友申请记录 ID`
@@ -547,6 +588,7 @@
 ---
 
 ### `DELETE /api/v1/friend/:id`
+
 - 鉴权: 需要Token
 - 说明: 删除指定好友。
 - 路径参数: `id:int64(string) // 好友用户ID`
@@ -559,6 +601,7 @@
 ---
 
 ### `PUT /api/v1/friend/:id/remark`
+
 - 鉴权: 需要Token
 - 说明: 设置/清空对某好友的备注。
 - 路径参数: `id:int64(string) // 好友用户ID`
@@ -576,6 +619,7 @@
 ---
 
 ### `POST /api/v1/friend/blacklist`
+
 - 鉴权: 需要Token
 - 说明: 将指定用户加入黑名单。
 - 路径参数: 无
@@ -593,6 +637,7 @@
 ---
 
 ### `DELETE /api/v1/friend/blacklist/:id`
+
 - 鉴权: 需要Token
 - 说明: 将指定用户移出黑名单。
 - 路径参数: `id:int64(string) // 被拉黑用户ID`
@@ -605,6 +650,7 @@
 ---
 
 ### `GET /api/v1/friend/blacklist`
+
 - 鉴权: 需要Token
 - 说明: 获取我的黑名单列表（返回对应用户信息）。
 - 路径参数: 无
@@ -616,14 +662,15 @@
 
 ---
 
-> 基础前缀 `/api/v1`，本文件所有接口均挂在 `user` 子组下，**需要 Bearer Token**（`middleware.Auth`）。
-> 统一响应：`{"code":0,"message":"ok","data":...}`，`code=0` 成功；错误时 `code≠0` 且通常无 `data`。
-> 路径/请求体中的 ID 均为雪花 ID，JSON 中以**字符串**传输（`json:"...,string"`），Go 侧为 `int64`。
+> 基础前缀 `/api/v1`，本文件所有接口均挂在 `user` 子组下，**需要 Bearer Token**（`middleware.Auth`）。>   
+> 统一响应：`{"code":0,"message":"ok","data":...}`，`code=0` 成功；错误时 `code≠0` 且通常无 `data`。>   
+> 路径/请求体中的 ID 均为雪花 ID，JSON 中以**字符串**传输（`json:"...,string"`），Go 侧为 `int64`。>   
 > 返回对象 `Conversation`（多个接口复用）字段：`id:string` `type:int(1=单聊 2=群聊)` `nameZh:string` `nameEn:string` `avatar:string` `ownerId:string` `announcementZh:string` `announcementEn:string` `maxMembers:int` `status:int(1=正常 2=解散)` `pinnedMsgId:string` `pinnedMsgContent:string` `pinnedMsgIds:string(JSON数组)` `muteAll:int(0/1)` `privacyEnabled:int(0/1)` `allowMemberInvite:int(0/1)` `qrJoinEnabled:int(0/1)` `createdAt:string` `updatedAt:string` `lastLoginAt:string|null`。
 
 ---
 
 ### `GET /api/v1/conversation/list`
+
 - 鉴权: 需要Token
 - 说明: 获取当前用户会话列表（聚合未读、最后一条消息、单聊对方在线状态）。
 - 路径参数: 无
@@ -636,6 +683,7 @@
 ---
 
 ### `POST /api/v1/conversation/direct`
+
 - 鉴权: 需要Token
 - 说明: 创建（或复用）单聊会话。
 - 路径参数: 无
@@ -651,6 +699,7 @@
 ---
 
 ### `POST /api/v1/conversation/group`
+
 - 鉴权: 需要Token
 - 说明: 创建群聊，当前用户为群主。
 - 路径参数: 无
@@ -666,6 +715,7 @@
 ---
 
 ### `GET /api/v1/conversation/:id/members`
+
 - 鉴权: 需要Token
 - 说明: 获取会话成员列表（含角色与好友备注）。
 - 路径参数: `id:int64`
@@ -678,6 +728,7 @@
 ---
 
 ### `PUT /api/v1/conversation/:id/pin-message`
+
 - 鉴权: 需要Token
 - 说明: 置顶 / 取消置顶消息（支持多条）。
 - 路径参数: `id:int64`
@@ -693,6 +744,7 @@
 ---
 
 ### `GET /api/v1/conversation/:id/pins`
+
 - 鉴权: 需要Token
 - 说明: 获取置顶消息列表（按置顶顺序）。
 - 路径参数: `id:int64`
@@ -705,6 +757,7 @@
 ---
 
 ### `PUT /api/v1/conversation/:id/announcement`
+
 - 鉴权: 需要Token
 - 说明: 更新群公告。**仅群主 / 管理员**。
 - 路径参数: `id:int64`
@@ -720,6 +773,7 @@
 ---
 
 ### `POST /api/v1/conversation/:id/invite`
+
 - 鉴权: 需要Token
 - 说明: 邀请成员加入群。**群主/管理员可邀；普通成员仅当群开启「允许成员邀请」**。
 - 路径参数: `id:int64`
@@ -735,6 +789,7 @@
 ---
 
 ### `DELETE /api/v1/conversation/:id/members/:userId`
+
 - 鉴权: 需要Token
 - 说明: 移除群成员。**仅群主/管理员，且有层级约束**。
 - 路径参数: `id:int64`、`userId:int64`（目标成员）
@@ -747,6 +802,7 @@
 ---
 
 ### `POST /api/v1/conversation/:id/quit`
+
 - 鉴权: 需要Token
 - 说明: 退出群聊（成员本人）。
 - 路径参数: `id:int64`
@@ -759,6 +815,7 @@
 ---
 
 ### `POST /api/v1/conversation/:id/disband`
+
 - 鉴权: 需要Token
 - 说明: 解散群。**仅群主**。
 - 路径参数: `id:int64`
@@ -771,6 +828,7 @@
 ---
 
 ### `PUT /api/v1/conversation/:id`
+
 - 鉴权: 需要Token
 - 说明: 更新群信息（群名/公告/头像）。**仅群主/管理员**。
 - 路径参数: `id:int64`
@@ -786,6 +844,7 @@
 ---
 
 ### `PUT /api/v1/conversation/:id/pin`
+
 - 鉴权: 需要Token
 - 说明: 个人置顶 / 取消置顶会话（仅影响本人）。
 - 路径参数: `id:int64`
@@ -801,6 +860,7 @@
 ---
 
 ### `PUT /api/v1/conversation/:id/mute`
+
 - 鉴权: 需要Token
 - 说明: 个人会话免打扰开关（仅影响本人）。
 - 路径参数: `id:int64`
@@ -816,6 +876,7 @@
 ---
 
 ### `GET /api/v1/conversation/:id/settings`
+
 - 鉴权: 需要Token
 - 说明: 读取群管理设置。**全体成员可读**（成员页依「允许邀请」决定入口）。
 - 路径参数: `id:int64`
@@ -828,6 +889,7 @@
 ---
 
 ### `PUT /api/v1/conversation/:id/settings`
+
 - 鉴权: 需要Token
 - 说明: 更新群管理设置。**仅群主**。
 - 路径参数: `id:int64`
@@ -843,6 +905,7 @@
 ---
 
 ### `PUT /api/v1/conversation/:id/admin`
+
 - 鉴权: 需要Token
 - 说明: 设置 / 取消管理员。**仅群主**。
 - 路径参数: `id:int64`
@@ -858,6 +921,7 @@
 ---
 
 ### `PUT /api/v1/conversation/:id/mute-member`
+
 - 鉴权: 需要Token
 - 说明: 禁言 / 解除禁言成员。**群主/管理员**。
 - 路径参数: `id:int64`
@@ -873,6 +937,7 @@
 ---
 
 ### `POST /api/v1/conversation/:id/join`
+
 - 鉴权: 需要Token
 - 说明: 扫码二维码进群（需群开启「二维码进群」）。
 - 路径参数: `id:int64`
@@ -885,6 +950,7 @@
 ---
 
 ### `GET /api/v1/conversation/:id/preview`
+
 - 鉴权: 需要Token（由 `user` 组中间件统一校验；handler 本身不读取 uid）
 - 说明: 扫码进群前的群信息预览（二次确认页：群名/头像/成员数）。
 - 路径参数: `id:int64`
@@ -896,11 +962,12 @@
 
 ---
 
-> 统一响应包：`{"code":0,"message":"ok","data":{...}}`，HTTP 200。所有接口位于 `user` 子组，需 `Authorization: Bearer <token>`（middleware.Auth）。
-> 消息类型枚举 `type`：1 文本 / 2 图片 / 3 文件 / 4 语音 / 5 视频 / 6 系统 / 7 音视频通话 / 8 红包 / 9 转账。
+> 统一响应包：`{"code":0,"message":"ok","data":{...}}`，HTTP 200。所有接口位于 `user` 子组，需 `Authorization: Bearer <token>`（middleware.Auth）。>   
+> 消息类型枚举 `type`：1 文本 / 2 图片 / 3 文件 / 4 语音 / 5 视频 / 6 系统 / 7 音视频通话 / 8 红包 / 9 转账。>   
 > 注意：所有 `conversationId`、`msgId`、`senderId` 等在 JSON 中以**字符串形式的雪花 ID** 返回（`json:"...,string"`），避免 JS 精度丢失。时间字段为 RFC3339 字符串。
 
 ### `POST /api/v1/message/send`
+
 - 鉴权: 需要Token
 - 说明: 发送一条消息（幂等落库 + 未读计数 + Redis 广播推送），红包/转账会先冻结资金。
 - 路径参数: 无
@@ -922,6 +989,7 @@
 - 备注: 返回消息对象包含 `msgId`(雪花ID)、`seq`(会话内单调递增序号)、`clientMsgId`(幂等ID)；引用消息时返回 `replySnapshot`(content/senderName/senderId/type)。幂等：同一 sender+clientMsgId 重复提交直接返回原消息。群聊按 `memberRole` 校验禁言。
 
 ### `GET /api/v1/message/history`
+
 - 鉴权: 需要Token
 - 说明: 拉取某会话历史消息（游标分页：beforeMsgId 之前 limit 条，按时间正序）。
 - 路径参数: 无
@@ -932,6 +1000,7 @@
 - 备注: 单聊时服务端为「我发出」且对方已读的消息填充 `deliveryState:"read"`，否则 `"sent"`。被后台屏蔽(`blocked`)的消息不下发。limit 越界自动收敛为 50。
 
 ### `GET /api/v1/message/sync`
+
 - 鉴权: 需要Token
 - 说明: 增量补拉（重连补偿/上线拉取）：拉取 `seq > afterSeq` 的消息，按 seq 升序。
 - 路径参数: 无
@@ -942,6 +1011,7 @@
 - 备注: `afterSeq` 为上次断点 seq（见 `GET .../conversations` 等返回的会话最新 seq），用于重连补偿。被屏蔽消息不下发。limit 越界自动收敛为 100。
 
 ### `GET /api/v1/message/search`
+
 - 鉴权: 需要Token
 - 说明: 关键词搜索自己参与会话内的消息（分页）。
 - 路径参数: 无
@@ -952,6 +1022,7 @@
 - 备注: 仅搜索当前用户参与的会话；空 kw 返回 1001。被屏蔽消息不出现。size 越界收敛为 20，page 默认 1。
 
 ### `POST /api/v1/message/:id/recall`
+
 - 鉴权: 需要Token
 - 说明: 撤回一条消息（本人 2 分钟内；群主/管理员不限时撤群成员消息）。
 - 路径参数: `id:string(必填,雪花ID,目标消息 msgId)`
@@ -962,6 +1033,7 @@
 - 备注: 路径 `:id` 为 msgId 雪花字符串。成功后广播 `recall` 事件（携带 conversationId/msgId/recalledBy），消息标记 `recalled=true,status=2`。
 
 ### `POST /api/v1/message/read`
+
 - 鉴权: 需要Token
 - 说明: 上报已读（更新已读位点 + 清未读 + 写回执 + 广播 read 事件）。
 - 路径参数: 无
@@ -978,6 +1050,7 @@
 - 备注: `conversationId` 缺失或解析为 0 返回 1001。群聊且 `msgId>0` 时写入按人回执（`message_receipt`），用于「已读成员列表」展示。
 
 ### `GET /api/v1/message/receipts`
+
 - 鉴权: 需要Token
 - 说明: 获取某条消息的已读成员回执列表（群聊按人展示）。
 - 路径参数: 无
@@ -988,6 +1061,7 @@
 - 备注: 回执对象 `model.MessageReceipt` 字段：`conversationId`(string雪花ID)、`msgId`(string雪花ID)、`userId`(string雪花ID)、`readAt`(time)。未读成员不在列表中。
 
 ### `POST /api/v1/message/favorite`
+
 - 鉴权: 需要Token
 - 说明: 收藏一条消息。
 - 路径参数: 无
@@ -1003,7 +1077,9 @@
 - 错误码: 1001 参数错误 / 500 收藏失败
 - 备注: 写入 `message_favorite`（user_id/conversation_id/msg_id）。同一消息重复收藏会插入多条（无唯一约束去重）。
 
+
 ### `GET /api/v1/message/favorites`
+
 - 鉴权: 需要Token
 - 说明: 获取我的收藏消息列表（按收藏时间倒序）。
 - 路径参数: 无
@@ -1017,37 +1093,38 @@
 
 **消息对象（model.Message）JSON 字段表**（send/history/sync/search/favorites 返回的元素）：
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| conversationId | string(雪花ID) | 会话ID |
-| msgId | string(雪花ID) | 消息全局ID |
-| clientMsgId | string | 客户端幂等ID(UUID) |
-| seq | int | 会话内单调递增序号（补拉游标） |
-| senderId | string(雪花ID) | 发送者ID |
-| type | int | 消息类型(1~9) |
-| content | string | 内容（文本/文件JSON/红包JSON等） |
-| file | object(opt) | 文件元信息 |
-| mention | array<int64>(opt) | @成员 |
-| replyTo | string(opt,雪花ID) | 引用消息ID |
-| replySnapshot | object(opt) | 引用快照{content,senderName,senderId,type} |
-| recalled | bool | 是否已撤回 |
-| recalledBy | string(opt,雪花ID) | 撤回操作者 |
-| status | int | 状态 1正常/2已撤回 |
-| deliveryState | string(opt) | 仅单聊历史填充："read"/"sent" |
-| encrypted | bool | 是否端到端加密 |
-| blocked | bool | 是否被后台屏蔽 |
-| createdAt | time | 创建时间(RFC3339) |
+| 字段             | 类型                | 说明                                     |
+| -------------- | ----------------- | -------------------------------------- |
+| conversationId | string(雪花ID)      | 会话ID                                   |
+| msgId          | string(雪花ID)      | 消息全局ID                                 |
+| clientMsgId    | string            | 客户端幂等ID(UUID)                          |
+| seq            | int               | 会话内单调递增序号（补拉游标）                        |
+| senderId       | string(雪花ID)      | 发送者ID                                  |
+| type           | int               | 消息类型(1~9)                              |
+| content        | string            | 内容（文本/文件JSON/红包JSON等）                  |
+| file           | object(opt)       | 文件元信息                                  |
+| mention        | array<int64>(opt) | @成员                                    |
+| replyTo        | string(opt,雪花ID)  | 引用消息ID                                 |
+| replySnapshot  | object(opt)       | 引用快照{content,senderName,senderId,type} |
+| recalled       | bool              | 是否已撤回                                  |
+| recalledBy     | string(opt,雪花ID)  | 撤回操作者                                  |
+| status         | int               | 状态 1正常/2已撤回                            |
+| deliveryState  | string(opt)       | 仅单聊历史填充："read"/"sent"                  |
+| encrypted      | bool              | 是否端到端加密                                |
+| blocked        | bool              | 是否被后台屏蔽                                |
+| createdAt      | time              | 创建时间(RFC3339)                          |
 
 ---
 
-> 统一响应信封：`{"code":0,"message":"ok","data":{...}}`，HTTP 200；`code!=0` 为业务错误。
-> 以下接口均在 `/api/v1` 下、位于 `user` 子组、需 `Authorization: Bearer <token>`（middleware.Auth）。
-> 通用分页查询参数：`page`(int, 默认1)、`size`(int, 默认20)。
+> 统一响应信封：`{"code":0,"message":"ok","data":{...}}`，HTTP 200；`code!=0` 为业务错误。>   
+> 以下接口均在 `/api/v1` 下、位于 `user` 子组、需 `Authorization: Bearer <token>`（middleware.Auth）。>   
+> 通用分页查询参数：`page`(int, 默认1)、`size`(int, 默认20)。>   
 > 金额安全：转账收款(`/wallet/transfer/:msgId/accept`)与红包领取(`/wallet/redpacket/:msgId/claim`)的金额**一律以服务端按消息内容核算**，不接受客户端上报金额；入账类记账(`red_in`/`tr_in`)接口已停用，防自助充值。旧 `/wallet/record` 仅对出账类(`red_out`/`tr_out`)做幂等 no-op。
 
 ---
 
 ### `GET /api/v1/wallet/me`
+
 - 鉴权: 需要Token
 - 说明: 查我的钱包余额、冻结额及最近 100 条流水。
 - 请求体: 无
@@ -1058,6 +1135,7 @@
 ---
 
 ### `POST /api/v1/wallet/record`
+
 - 鉴权: 需要Token
 - 说明: 旧记账接口（已废弃 B-21）；入账类拒绝，出账类幂等 no-op 直接返回当前余额，不再重复扣款。
 - 请求体:
@@ -1071,6 +1149,7 @@
 ---
 
 ### `POST /api/v1/wallet/transfer/:msgId/accept`
+
 - 鉴权: 需要Token
 - 说明: 转账收款（金额服务端按消息内容核算 + 会话成员校验 + 唯一索引幂等）。
 - 路径参数: `msgId:string`
@@ -1082,6 +1161,7 @@
 ---
 
 ### `POST /api/v1/wallet/redpacket/:msgId/claim`
+
 - 鉴权: 需要Token
 - 说明: 领取红包（结算发送方冻结资金 + 写领取记录，返回本次金额与领取列表）。
 - 路径参数: `msgId:string`
@@ -1093,6 +1173,7 @@
 ---
 
 ### `GET /api/v1/wallet/redpacket/:msgId`
+
 - 鉴权: 需要Token
 - 说明: 红包详情（不含本人本次金额）。
 - 路径参数: `msgId:string`
@@ -1104,6 +1185,7 @@
 ---
 
 ### `GET /api/v1/wallet/records`
+
 - 鉴权: 需要Token
 - 说明: 账单流水（按时间筛选 + 分页）。
 - 查询参数: `page:int(可选,默认1)`, `size:int(可选,默认20)`, `start:string(可选,格式 2006-01-02)`, `end:string(可选,格式 2006-01-02)`
@@ -1115,6 +1197,7 @@
 ---
 
 ### `GET /api/v1/pay/config`
+
 - 鉴权: 需要Token
 - 说明: 获取充值/提现通道配置（收款码、提示、提现限额与费率）。
 - 请求体: 无
@@ -1125,6 +1208,7 @@
 ---
 
 ### `POST /api/v1/wallet/recharge/submit`
+
 - 鉴权: 需要Token
 - 说明: 提交充值订单（上传支付凭证，待后台审核）。
 - 请求体:
@@ -1138,6 +1222,7 @@
 ---
 
 ### `GET /api/v1/wallet/recharge/orders`
+
 - 鉴权: 需要Token
 - 说明: 我的充值订单列表（分页）。
 - 查询参数: `page:int(可选,默认1)`, `size:int(可选,默认20)`
@@ -1149,6 +1234,7 @@
 ---
 
 ### `GET /api/v1/wallet/withdraw-account`
+
 - 鉴权: 需要Token
 - 说明: 获取我的提现收款账户绑定（未绑定返回空对象）。
 - 请求体: 无
@@ -1159,6 +1245,7 @@
 ---
 
 ### `PUT /api/v1/wallet/withdraw-account`
+
 - 鉴权: 需要Token
 - 说明: 绑定/更新我的提现收款账户（按 `accountType` 校验必填项，其余类型字段清空）。
 - 请求体: `WithdrawAccount`（同 GET 响应结构；至少 `accountType` 必填）
@@ -1172,6 +1259,7 @@
 ---
 
 ### `POST /api/v1/wallet/withdraw/submit`
+
 - 鉴权: 需要Token
 - 说明: 提交提现申请（可用余额→冻结，写提现订单待审核）。
 - 请求体:
@@ -1185,6 +1273,7 @@
 ---
 
 ### `GET /api/v1/wallet/withdraw/orders`
+
 - 鉴权: 需要Token
 - 说明: 我的提现订单列表（分页）。
 - 查询参数: `page:int(可选,默认1)`, `size:int(可选,默认20)`
@@ -1196,6 +1285,7 @@
 ---
 
 ### `GET /api/v1/moments`
+
 - 鉴权: 需要Token
 - 说明: 朋友圈时间线（含自己全部、小助手公开、好友公开动态，分页）。
 - 查询参数: `page:int(可选,默认1)`, `size:int(可选,默认20,上限50)`
@@ -1207,6 +1297,7 @@
 ---
 
 ### `GET /api/v1/moments/:ownerId`
+
 - 鉴权: 需要Token
 - 说明: 查看指定用户的朋友圈（他人仅见非屏蔽动态，分页）。
 - 路径参数: `ownerId:string`
@@ -1219,6 +1310,7 @@
 ---
 
 ### `POST /api/v1/moments`
+
 - 鉴权: 需要Token
 - 说明: 发布一条朋友圈动态。
 - 请求体:
@@ -1232,6 +1324,7 @@
 ---
 
 ### `POST /api/v1/moments/:id/like`
+
 - 鉴权: 需要Token
 - 说明: 点赞/取消点赞（toggle），返回切换后状态。
 - 路径参数: `id:string`
@@ -1242,12 +1335,13 @@
 
 ---
 
-> 通用说明：所有接口前缀 `/api/v1/admin`，均经 `middleware.Auth` + `middleware.RequireAdmin`，即**需 Bearer Token 且当前用户具备管理员角色**。
+> 通用说明：所有接口前缀 `/api/v1/admin`，均经 `middleware.Auth` + `middleware.RequireAdmin`，即**需 Bearer Token 且当前用户具备管理员角色**。>   
 > 响应统一信封：`{"code":0,"message":"ok","data":{...}}`，`code=0` 成功。错误时 `code` 为 `1001`（参数错误）、`500`（服务错误）或业务错误码（由 `errCode(err)` 映射，如账号已存在等），`message` 为可读信息。
 
 ---
 
 ### `GET /api/v1/admin/users`
+
 - 鉴权: 需管理员
 - 说明: 用户列表，支持关键字/状态/部门筛选与分页。
 - 查询参数: `kw:string`（账号/昵称/靓号/手机/邮箱模糊）、`status:int`（1 正常 2 禁用，0/缺省=全部）、`dept:int64`（部门 ID，0=全部）、`page:int`（默认 1）、`size:int`（默认 20，最大 100）
@@ -1257,6 +1351,7 @@
 - 备注: 分页由 `page/size` 控制，`total` 为总数。
 
 ### `POST /api/v1/admin/users`
+
 - 鉴权: 需管理员
 - 说明: 后台新建账号。
 - 请求体:
@@ -1268,6 +1363,7 @@
 - 备注: 成功后写管理员操作日志 `user.create`。
 
 ### `PUT /api/v1/admin/users/:id/status`
+
 - 鉴权: 需管理员
 - 说明: 启用/禁用用户。
 - 路径参数: `id:int64`
@@ -1284,6 +1380,7 @@
 - 此外鉴权中间件对每次请求复核账号状态，禁用账号的 access token 在下次任意请求即被 401 拦截；新登录 / 刷新也已被 `Login` / `Refresh` 拒绝（两者都校验 `u.Status != StatusNormal`）。
 
 ### 强制下线（WebSocket 事件）`forceLogout`
+
 - 触发：后台 `PUT /admin/users/:id/status` 将账号置为禁用时，服务端经 Redis 事件总线下发。
 - 帧格式（网关透传，客户端 WS 收到）：
   ```json
@@ -1292,6 +1389,7 @@
 - 客户端行为（三端一致）：收到后立即清本地登录态（access/refresh + 用户缓存）、关闭 WS 长连接、跳转到登录页。该事件与"群成员被踢（`kick`，属群系统消息）"无关，仅用于账号级强制下线。
 
 ### `PUT /api/v1/admin/users/:id/password`
+
 - 鉴权: 需管理员
 - 说明: 重置用户密码。
 - 路径参数: `id:int64`
@@ -1304,6 +1402,7 @@
 - 备注: 写日志 `user.password`。
 
 ### `GET /api/v1/admin/configs/:key`
+
 - 鉴权: 需管理员
 - 说明: 读取单条系统配置（`sys_config` 表）。
 - 路径参数: `key:string`（配置键，如 `auth_flags` `assistant_config` `pay_config`）
@@ -1312,6 +1411,7 @@
 - 备注: 值以 `{value:...}` 解包后返回其 `value` 字段；若整体为对象且无 `value` 则原样返回。
 
 ### `PUT /api/v1/admin/configs/:key`
+
 - 鉴权: 需管理员
 - 说明: 写入/新建系统配置（存为 `{"value": <body.value>}`）。
 - 路径参数: `key:string`
@@ -1324,6 +1424,7 @@
 - 备注: 写库失败**必须**返回错误（注释明确：不可静默吞错）；写日志 `config.set`。
 
 ### `GET /api/v1/admin/app-entries`
+
 - 鉴权: 需管理员
 - 说明: 小程序（H5 容器）列表。
 - 请求体: 无
@@ -1332,6 +1433,7 @@
 - 备注: 无分页，全量返回。
 
 ### `POST /api/v1/admin/app-entries`
+
 - 鉴权: 需管理员
 - 说明: 新建小程序入口。
 - 请求体:
@@ -1343,6 +1445,7 @@
 - 备注: 写日志 `app.create`。
 
 ### `PUT /api/v1/admin/app-entries/:id`
+
 - 鉴权: 需管理员
 - 说明: 更新小程序入口。
 - 路径参数: `id:int64`
@@ -1355,6 +1458,7 @@
 - 备注: 写日志 `app.update`。
 
 ### `DELETE /api/v1/admin/app-entries/:id`
+
 - 鉴权: 需管理员
 - 说明: 删除小程序入口。
 - 路径参数: `id:int64`
@@ -1363,6 +1467,7 @@
 - 备注: 写日志 `app.delete`。
 
 ### `GET /api/v1/admin/assistant/config`
+
 - 鉴权: 需管理员
 - 说明: 读取智能小助手配置。
 - 成功响应 data: `AssistantConfig`（`enabled:bool` `name:string` `avatar:string` `autoAdd:bool` `welcomeText:string`）；取不到返回默认配置
@@ -1370,6 +1475,7 @@
 - 备注: 默认 `enabled=false`、`name="小助手"`。
 
 ### `POST /api/v1/admin/assistant/config`
+
 - 鉴权: 需管理员
 - 说明: 保存智能小助手配置。
 - 请求体:
@@ -1381,6 +1487,7 @@
 - 备注: 写日志 `assistant.config`。
 
 ### `GET /api/v1/admin/assistant/conversations`
+
 - 鉴权: 需管理员
 - 说明: 小助手与用户会话列表（含最后一条消息）。
 - 成功响应 data: `AssistantConvItem[]`（`userId:string` `nickname:string` `account:string` `avatar:string` `lastMessage:Message|null`）
@@ -1388,6 +1495,7 @@
 - 备注: `userId` 为字符串（防止前端精度丢失）。
 
 ### `GET /api/v1/admin/assistant/messages`
+
 - 鉴权: 需管理员
 - 说明: 某用户与小助手的会话消息（按时间正序，支持游标翻页）。
 - 查询参数: `userId:int64`（目标用户）、`beforeMsgId:int64`（向前翻页游标，0=最新）、`limit:int64`（默认 50，范围 1~100）
@@ -1396,6 +1504,7 @@
 - 备注: `beforeMsgId>0` 时向前翻页。
 
 ### `POST /api/v1/admin/assistant/push`
+
 - 鉴权: 需管理员
 - 说明: 以助手身份向一个或多个用户推送消息（文字/图片）。
 - 请求体:
@@ -1407,6 +1516,7 @@
 - 备注: `userId` 与 `userIds` 二选一，均空返回 `1001`；写日志 `assistant.push`。
 
 ### `POST /api/v1/admin/wallet/adjust`
+
 - 鉴权: 需管理员
 - 说明: 手工调整用户余额（加款/扣款），写 `adjust` 流水并实时推送。
 - 请求体:
@@ -1418,6 +1528,7 @@
 - 备注: `delta=0` 或非数字 uid 返回 1001；调整后调 `PublishWalletUpdate` 实时推送给在线客户端；写日志 `wallet.adjust`。
 
 ### `GET /api/v1/admin/users/:id/wallet`
+
 - 鉴权: 需管理员
 - 说明: 查询指定用户的真实钱包（余额+冻结）。
 - 路径参数: `id:int64`
@@ -1426,6 +1537,7 @@
 - 备注: 与用户表 `balance/frozen` 字段一致，是后台权威数据源。
 
 ### `POST /api/v1/admin/users/:id/recharge`
+
 - 鉴权: 需管理员
 - 说明: 用户管理页充值/扣款（统一入口，原子入账+实时推送）。
 - 路径参数: `id:int64`
@@ -1438,15 +1550,17 @@
 - 备注: `amount>0` 记 `recharge` 流水、`<0` 记 `adjust` 流水；实时推送余额；写日志 `wallet.recharge`/`wallet.deduct`。
 
 ### `GET /api/v1/admin/finances`
+
 - 鉴权: 需管理员
 - 说明: 财务记录（读 `wallet_transaction`，仅含 `amount≠0` 的流水）。
 - 查询参数: `kw:string`（账号/昵称/靓号/备注）、`side:string`（`IN`/`OUT`）、`type:string`（财务大类：`RECHARGE/WITHDRAW/TRANSFER/REDPACKET/REFUND/FREEZE/OTHER`），`from:int64` `to:int64`（毫秒时间戳区间）、`page:int`（默认 1）、`size:int`（默认 15，最大 100）
-- 成功响应 data: `{"total":int64, "list":FinanceItem[]}`，每项为
+- 成功响应 data: `{"total":int64, "list":FinanceItem[]}`，每项为    
   `{"id":int64, "orderNo":string, "createdAt":string(RFC3339), "side":string, "type":string, "rawType":string, "status":int, "userId":int64, "userAccount":string, "userNickname":string, "userShortId":string, "amount":float64, "balanceAfter":float64, "frozenAfter":float64, "remark":string}`
 - 错误码: 500（查询失败）
 - 备注: 列表金额合计恒等于 Σ(user.balance)，与对账接口一致。
 
 ### `GET /api/v1/admin/wallet/transactions`
+
 - 鉴权: 需管理员
 - 说明: 钱包流水列表（按类型过滤，分页）。
 - 查询参数: `type:string`（流水类型过滤：`recharge/withdraw/adjust/freeze/...`，空=全部）、`page:int`（默认 1）、`size:int`（默认 20，最大 100）
@@ -1455,6 +1569,7 @@
 - 备注: 分页由 `page/size` 控制。
 
 ### `GET /api/v1/admin/wallet/reconcile`
+
 - 鉴权: 需管理员
 - 说明: 钱包三方对账（后台金额/用户余额/财务流水是否一致）。
 - 成功响应 data: `{"balanceSum":float64, "frozenSum":float64, "txAmountSum":float64, "txFrozenSum":float64, "pendingSum":float64, "balanceDiff":float64, "frozenDiff":float64, "frozenVsPacket":float64, "mismatchUsers":[{id,string,account,nickname,balance,frozen,txAmount,txFrozen,amountGap,frozenGap}], "ok":bool, "checkedAt":string}`
@@ -1462,6 +1577,7 @@
 - 备注: `balanceDiff/frozenDiff/frozenVsPacket` 应≈0；非0见 `mismatchUsers`；`ok=true` 表示三方一致。
 
 ### `POST /api/v1/admin/wallet/refund-expired`
+
 - 鉴权: 需管理员
 - 说明: 手动触发一次到期红包/转账退回（兜底开关，正常由后台任务每分钟自动跑）。
 - 请求体: 无
@@ -1470,6 +1586,7 @@
 - 备注: 固定退款上限 500 条；写日志 `wallet.refundExpired`。
 
 ### `GET /api/v1/admin/pay-config`
+
 - 鉴权: 需管理员
 - 说明: 读取支付配置（`sys_config.pay_config`）。
 - 成功响应 data: `PayConfig`（`enabled:bool` `receiveWechatQrcodeUrl:string` `receiveAlipayQrcodeUrl:string` `receiveBankQrcodeUrl:string` `receiveBankInfo:{bankName,cardNo,accountName}` `rechargeTips:string` `withdrawEnabled:bool` `withdrawMin:float64` `withdrawMax:float64` `withdrawFeeRate:float64(0~0.1)` `withdrawFeeMin:float64`）；取不到返回默认值
@@ -1477,6 +1594,7 @@
 - 备注: 默认 `enabled=true`、`withdrawEnabled=true`、`withdrawMin=10`。
 
 ### `PUT /api/v1/admin/pay-config`
+
 - 鉴权: 需管理员
 - 说明: 保存支付配置（后端做范围校验，如手续费率 0~0.1）。
 - 请求体:
@@ -1488,6 +1606,7 @@
 - 备注: 写日志 `pay.config.update`。
 
 ### `GET /api/v1/admin/recharge-orders`
+
 - 鉴权: 需管理员
 - 说明: 充值订单列表（分页）。
 - 查询参数: `kw:string`、`status:int`（订单状态，0=全部）、`page:int`（默认 1）、`size:int`（默认 20）
@@ -1496,6 +1615,7 @@
 - 备注: 分页由 `page/size` 控制。
 
 ### `PUT /api/v1/admin/recharge-orders/:id/approve`
+
 - 鉴权: 需管理员
 - 说明: 审核通过充值订单（加余额+改状态，幂等；通过后小助手系统提醒）。
 - 路径参数: `id:int64`
@@ -1505,6 +1625,7 @@
 - 备注: 已审核订单幂等返回；写日志 `rechargeOrder.approve`；实时推送余额。
 
 ### `PUT /api/v1/admin/recharge-orders/:id/reject`
+
 - 鉴权: 需管理员
 - 说明: 驳回充值订单（不扣钱，置状态+原因）。
 - 路径参数: `id:int64`
@@ -1518,12 +1639,13 @@
 
 ---
 
-> 通用约定：所有接口位于 `/api/v1/admin` 下，**鉴权均要求 `Authorization: Bearer <token>` 且用户角色为管理员**（中间件 `middleware.Auth` + `middleware.RequireAdmin`）。
+> 通用约定：所有接口位于 `/api/v1/admin` 下，**鉴权均要求 `Authorization: Bearer <token>` 且用户角色为管理员**（中间件 `middleware.Auth` + `middleware.RequireAdmin`）。>   
 > 响应统一信封：`{"code":0,"message":"ok","data":{...}}`，`code=0` 成功，非 0 失败。以下仅列出 handler 中实际出现的错误码：`0` 成功、`1001` 参数错误、`400` 参数错误、`500` 服务错误；业务错误另返回 `errCode(err)`（多数为 `1001`）。
 
 ---
 
 ### `GET /api/v1/admin/withdraw-orders`
+
 - 鉴权: 需管理员
 - 说明: 后台提现订单列表（联表用户账号/昵称/靓号 + 账户快照）
 - 路径参数: 无
@@ -1534,6 +1656,7 @@
 - 备注: `status` 取值 1 待审核 / 2 已通过 / 3 已驳回。`accountSnapshot` 为提现账户快照对象（按方式含微信/支付宝/银行卡字段，卡号 `bankCardNo` 已脱敏，`bankCardNoFull` 为原始卡号仅审核用）。
 
 ### `PUT /api/v1/admin/withdraw-orders/:id/approve`
+
 - 鉴权: 需管理员
 - 说明: 审核通过提现（释放冻结本金、扣手续费、小助手推送到账通知）
 - 路径参数: `id:int`（提现单 id；`<=0` 报 1001）
@@ -1544,6 +1667,7 @@
 - 备注: 幂等（已通过直接返回）；审核通过会触发小助手系统提醒。
 
 ### `PUT /api/v1/admin/withdraw-orders/:id/reject`
+
 - 鉴权: 需管理员
 - 说明: 驳回提现（解冻退回余额，记录驳回原因）
 - 路径参数: `id:int`（`<=0` 报 1001）
@@ -1557,6 +1681,7 @@
 - 备注: 仅 `Pending` 状态可驳回；写 `reject_reason` + `reviewer_id` 并记后台操作日志。
 
 ### `DELETE /api/v1/admin/withdraw-orders/:id`
+
 - 鉴权: 需管理员
 - 说明: **当前源码未实现该路由**（admin.go 中仅有 GET 列表与 approve/reject，无 DELETE 提现单）
 - 路径参数: —
@@ -1568,6 +1693,7 @@
 ---
 
 ### `GET /api/v1/admin/groups`
+
 - 鉴权: 需管理员
 - 说明: 群组列表（含成员数）
 - 路径参数: 无
@@ -1578,6 +1704,7 @@
 - 备注: 仅返回 `type=群聊` 且 `status=正常` 的会话。Conversation 字段含 `id(string),type,nameZh,nameEn,avatar,ownerId(string),maxMembers,status,createdAt,updatedAt` 等。
 
 ### `DELETE /api/v1/admin/groups/:id`
+
 - 鉴权: 需管理员
 - 说明: 解散群组（置群状态为已解散并删除群成员）
 - 路径参数: `id:int`（ParseInt 忽略错误）
@@ -1588,6 +1715,7 @@
 - 备注: 静默解散，记后台日志 `group.disband`。
 
 ### `GET /api/v1/admin/groups/:id/members`
+
 - 鉴权: 需管理员
 - 说明: 群成员列表（关联用户账号/昵称/头像/靓号）
 - 路径参数: `id:int`（`<=0` 报 1001）
@@ -1598,6 +1726,7 @@
 - 备注: `role` 1 群主/2 管理员/3 普通；按 `role asc, joinedAt desc` 排序。
 
 ### `GET /api/v1/admin/groups/:id/messages`
+
 - 鉴权: 需管理员
 - 说明: 指定群的消息记录（Mongo 消息集合）
 - 路径参数: `id:int`（`<=0` 报 1001）
@@ -1610,6 +1739,7 @@
 ---
 
 ### `GET /api/v1/admin/messages`
+
 - 鉴权: 需管理员
 - 说明: 全站消息审计查询（按会话/用户/关键词/时间/类型筛选）
 - 路径参数: 无
@@ -1620,6 +1750,7 @@
 - 备注: `AdminMessageOut` = Message + 冗余字段：`senderName,senderAvatar,senderShortId,receiverId,receiverName,receiverAvatar,receiverShortId,convType,convName,convAvatar`（单聊接收者为对方，群聊为群本身）。
 
 ### `POST /api/v1/admin/messages/:msgId/block`
+
 - 鉴权: 需管理员
 - 说明: 屏蔽/恢复屏蔽单条消息（屏蔽后用户端历史/同步不再下发）
 - 路径参数: `msgId:int`（`<=0` 或非整数报 400）
@@ -1633,6 +1764,7 @@
 - 备注: 仅置 `blocked` 字段；记后台日志 `message.block` / `message.unblock`。
 
 ### `DELETE /api/v1/admin/messages/:msgId`
+
 - 鉴权: 需管理员
 - 说明: **当前源码未实现该路由**（admin.go 中仅有 `GET /messages` 与 `POST /messages/:msgId/block`，无 DELETE 消息）
 - 路径参数: —
@@ -1644,6 +1776,7 @@
 ---
 
 ### `GET /api/v1/admin/moments`
+
 - 鉴权: 需管理员
 - 说明: 朋友圈列表（全部，含屏蔽状态，带发布者）
 - 路径参数: 无
@@ -1654,6 +1787,7 @@
 - 备注: 发布者 `userId=-1` 表示小助手（后台发布的朋友圈）。
 
 ### `POST /api/v1/admin/moments`
+
 - 鉴权: 需管理员
 - 说明: 以小助手身份发布朋友圈
 - 路径参数: 无
@@ -1667,6 +1801,7 @@
 - 备注: `content` 与 `images` 至少一项非空；`userId` 固定为 `-1`。
 
 ### `PUT /api/v1/admin/moments/:id/hidden`
+
 - 鉴权: 需管理员
 - 说明: 屏蔽/取消屏蔽某条朋友圈（屏蔽后仅发布者自己可见）
 - 路径参数: `id:int`（ParseInt 忽略错误，非法 id 静默无效果）
@@ -1680,6 +1815,7 @@
 - 备注: 记后台日志 `moment.hide`/`moment.unhide`。
 
 ### `DELETE /api/v1/admin/moments/:id`
+
 - 鉴权: 需管理员
 - 说明: 删除违规朋友圈
 - 路径参数: `id:int`（ParseInt 忽略错误）
@@ -1692,6 +1828,7 @@
 ---
 
 ### `GET /api/v1/admin/stats/overview`
+
 - 鉴权: 需管理员
 - 说明: 数据概览统计
 - 路径参数: 无
@@ -1702,6 +1839,7 @@
 - 备注: `online` 取自 Redis `online:*` 键数；`storageMB` 为消息数/1000 的粗略估值。
 
 ### `GET /api/v1/admin/stats/messages`
+
 - 鉴权: 需管理员
 - 说明: 按天统计消息量
 - 路径参数: 无
@@ -1714,6 +1852,7 @@
 ---
 
 ### `GET /api/v1/admin/logs`
+
 - 鉴权: 需管理员
 - 说明: 后台操作日志列表
 - 路径参数: 无
@@ -1724,6 +1863,7 @@
 - 备注: `AdminLog` 字段：`id(string),adminId(string),action,target,detail(JSON字符串),ip,createdAt`。
 
 ### `GET /api/v1/admin/logs/login`
+
 - 鉴权: 需管理员
 - 说明: 登录日志列表
 - 路径参数: 无
@@ -1736,6 +1876,7 @@
 ---
 
 ### `GET /api/v1/admin/reserved-short-ids`
+
 - 鉴权: 需管理员
 - 说明: 保留靓号列表（按状态/来源/关键词筛选）
 - 路径参数: 无
@@ -1746,6 +1887,7 @@
 - 备注: `source` 1 手动/2 范围/3 规则；`type` 1 普通/2 豹子号/3 顺子号/4 VIP；`status` 1 未分配/2 冻结/3 已用。已分配行附带占用者昵称/账号/靓号。
 
 ### `POST /api/v1/admin/reserved-short-ids/batch`
+
 - 鉴权: 需管理员
 - 说明: 批量生成保留靓号（范围/手动列表/规则三种模式）
 - 路径参数: 无
@@ -1759,6 +1901,7 @@
 - 备注: 三种模式互斥，取第一个满足条件的；已存在靓号自动跳过；`type<1||>4` 归一到 1。
 
 ### `PUT /api/v1/admin/reserved-short-ids/:id/remark`
+
 - 鉴权: 需管理员
 - 说明: 修改靓号备注/价格/类型
 - 路径参数: `id:int`（`<=0` 报 1001）
@@ -1772,6 +1915,7 @@
 - 备注: 空 remark / price<=0 / type 越界则对应字段不更新。
 
 ### `PUT /api/v1/admin/reserved-short-ids/:id/frozen`
+
 - 鉴权: 需管理员
 - 说明: 冻结/解冻靓号
 - 路径参数: `id:int`（`<=0` 报 1001）
@@ -1785,6 +1929,7 @@
 - 备注: 冻结置 status=2；已分配(status=3)拒绝操作。
 
 ### `DELETE /api/v1/admin/reserved-short-ids/:id`
+
 - 鉴权: 需管理员
 - 说明: 删除靓号（仅未分配/冻结）
 - 路径参数: `id:int`（`<=0` 报 1001）
@@ -1795,6 +1940,7 @@
 - 备注: 已分配(status=3)拒绝删除。
 
 ### `PUT /api/v1/admin/reserved-short-ids/:id/assign`
+
 - 鉴权: 需管理员
 - 说明: 将靓号分配给指定用户（事务+行锁，回收旧靓号）
 - 路径参数: `id:int`（`<=0` 报 1001）
@@ -1808,6 +1954,7 @@
 - 备注: 要求靓号 status=1(未分配) 或 3(已占用强行改分配)；分配成功置 status=3 + usedBy + usedAt；用户原预留靓号自动回收。
 
 ### `PUT /api/v1/admin/reserved-short-ids/:id/relieve`
+
 - 鉴权: 需管理员
 - 说明: 解除靓号分配（回收为未分配并清空用户 short_id）
 - 路径参数: `id:int`（`<=0` 报 1001）
@@ -1820,6 +1967,7 @@
 ---
 
 ### `GET /api/v1/admin/invite-friend-codes`
+
 - 鉴权: 需管理员
 - 说明: 自定义邀请码列表（一码关联多好友，附带好友昵称）
 - 路径参数: 无
@@ -1830,6 +1978,7 @@
 - 备注: `friendIds` 为原始 JSON 字符串如 `["123","456"]`；`friendNames` 为对应昵称（查不到显示 `#id`）。
 
 ### `POST /api/v1/admin/invite-friend-codes`
+
 - 鉴权: 需管理员
 - 说明: 创建自定义邀请码（注册后自动添加关联好友）
 - 路径参数: 无
@@ -1843,6 +1992,7 @@
 - 备注: 默认 `enabled=1`；记后台日志 `invite_code.create`。
 
 ### `PUT /api/v1/admin/invite-friend-codes/:id`
+
 - 鉴权: 需管理员
 - 说明: 更新邀请码（code/friendIds/remark/enabled，nil 不改）
 - 路径参数: `id:int`（ParseInt 忽略错误）
@@ -1853,9 +2003,12 @@
   ```
 - 成功响应 data: 无
 - 错误码: 1001 参数错误/邀请码不存在/至少1好友；`errCode(err)`
+
+
 - 备注: 指针字段 nil 表示不更新；记后台日志 `invite_code.update`。
 
 ### `DELETE /api/v1/admin/invite-friend-codes/:id`
+
 - 鉴权: 需管理员
 - 说明: 删除邀请码
 - 路径参数: `id:int`（ParseInt 忽略错误）
@@ -1868,6 +2021,7 @@
 ---
 
 ### `GET /api/v1/admin/health/:key`
+
 - 鉴权: 需管理员
 - 说明: 系统健康检测（真实连接探测）
 - 路径参数: `key:string`（检测项，或 `all`/`空` 返回全部）
@@ -1878,6 +2032,7 @@
 - 备注: 检测项 `mysql/redis/mongo/minio/api/wss/jpush/version`；未知 key 返回 err 项。
 
 ### `POST /api/v1/admin/system/restart`
+
 - 鉴权: 需管理员
 - 说明: 重启服务（需 systemd 托管；Windows 开发环境仅提示）
 - 路径参数: 无
@@ -1891,6 +2046,7 @@
 - 备注: `api`→unit `im-api`，`gateway/wss`→unit `im-gateway`；先返回响应再延迟 800ms 执行 `systemctl restart`；非 systemd 环境直接报 400。
 
 ### `POST /api/v1/admin/upload`
+
 - 鉴权: 需管理员
 - 说明: 管理员文件上传（multipart/form-data）
 - 路径参数: 无
@@ -1911,4 +2067,5 @@
 5. **自验**：改完跑 `go build ./...` 与后端启动冒烟；接口行为变化（尤其是错误码、分页字段）务必反映在文档。
 
 ---
+
 *本文件由 WorkBuddy 基于 `im-server` 源码自动提取生成，生成时间 2026-09-04。*

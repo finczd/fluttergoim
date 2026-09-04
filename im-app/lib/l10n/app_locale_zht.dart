@@ -243,6 +243,7 @@ const Map<String, String> zhTDict = {
   'groupPrivacyHint': '群主已開啟成員隱私',
   'groupPrivacyProfileBlocked': '目前已開啟群成員隱私，無法查看成員資料。',
   'chatListGroupBadge': '群聊',
+  'chatLoadingMsg': '正在載入訊息，請稍後',
   'groupRenameTitle': '修改群名',
   'groupRenameHint': '輸入新的群名稱',
   'groupRenameSaved': '群名已更新',

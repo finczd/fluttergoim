@@ -46,9 +46,19 @@ class _GroupMembersPageState extends State<GroupMembersPage> {
       try {
         settings = await _svc.groupSettings(widget.conv.id);
       } catch (_) {}
-      final myRole = _roleById(_myId);
-      final limited =
-          settings['privacyEnabled'] == true && myRole != 1 && myRole != 2;
+      // 关键：从刚拉到的 list 里取我的角色。
+      // 不能调 _roleById（它读 this._members，此刻还未赋值、恒为空 → 角色恒 0，
+      // 会导致群主/管理员也被当成普通成员拦在隐私提示页）。
+      int myRole = 0;
+      for (final m in list) {
+        if (_uidOf(m) == _myId) {
+          myRole = _roleOf(m);
+          break;
+        }
+      }
+      // 仅普通成员(role=3)受限；角色未知(0)时放行——
+      // 服务端本就会对普通成员把列表截断为前 15 条，这里只是 UX 层的整页提示。
+      final limited = settings['privacyEnabled'] == true && myRole == 3;
       if (mounted) {
         setState(() {
           _members = list;

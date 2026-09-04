@@ -243,6 +243,7 @@ const Map<String, String> jaDict = {
   'groupPrivacyHint': 'オーナーがメンバー非公開を有効にしています',
   'groupPrivacyProfileBlocked': 'グループのメンバー非公開が有効です。メンバーのプロフィールは見られません。',
   'chatListGroupBadge': 'グループ',
+  'chatLoadingMsg': 'メッセージを読み込み中です。少々お待ちください',
   'groupRenameTitle': 'グループ名を変更',
   'groupRenameHint': '新しいグループ名を入力',
   'groupRenameSaved': 'グループ名を更新しました',

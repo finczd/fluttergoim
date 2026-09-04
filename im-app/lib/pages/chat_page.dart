@@ -381,15 +381,24 @@ class _ChatPageState extends State<ChatPage> {
             break;
           }
         }
+        // 群隐私：服务端现行机制是"普通成员截断 15 条"而非报 4006，
+        // 因此用 群设置 privacyEnabled + 我的角色 判定：
+        // 开启且我是普通成员（列表截断后查不到自己时 role 保持默认 3，同样命中）→ 禁点成员头像看资料。
+        bool privacyEnabled = false;
+        try {
+          final s = await _svc.groupSettings(widget.conv.id);
+          privacyEnabled = s['privacyEnabled'] == true;
+        } catch (_) {}
         setState(() {
           _members = list;
           _myRole = myRole;
+          _privacyOn = privacyEnabled && myRole == 3;
           // 隐私限量模式下列表被截断，服务端照实下发总数
           if (_svc.lastMembersCount > 0) _memberCount = _svc.lastMembersCount;
         });
       }
     } on ApiException catch (e) {
-      // 群隐私开启：服务端只对普通成员（role=3）返回 4006 拦截成员列表
+      // 老服务端兜底：直接以 4006 拦截成员列表
       if (e.code == 4006 && mounted) setState(() => _privacyOn = true);
     } catch (_) {}
   }
@@ -408,19 +417,22 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  Future<void> _loadHistory({int retry = 0}) async {
+  Future<void> _loadHistory({int retry = 0, bool force = false}) async {
     // 缓存直出：内存有（本进程打开过）或磁盘有（Hive，上次运行留下的）
-    // → 先渲染，不再菊花等待；网络回来后覆盖刷新
-    if (_msgs.isEmpty) {
-      await ConversationService.hydrateFromDisk(widget.conv.id);
-    }
-    final cached = ConversationService.historyCached(widget.conv.id);
-    if (cached != null && cached.isNotEmpty && _msgs.isEmpty) {
-      setState(() {
-        _msgs = cached.map(ChatMsg.fromServer).toList();
-        _loading = false;
-      });
-      _startStick(); // 开启持续贴底（列表已直接显示，无白屏）
+    // → 先渲染，不再菊花等待；网络回来后覆盖刷新。
+    // force=true（下拉手动刷新）跳过缓存，直接全量拉服务端。
+    if (!force) {
+      if (_msgs.isEmpty) {
+        await ConversationService.hydrateFromDisk(widget.conv.id);
+      }
+      final cached = ConversationService.historyCached(widget.conv.id);
+      if (cached != null && cached.isNotEmpty && _msgs.isEmpty) {
+        setState(() {
+          _msgs = cached.map(ChatMsg.fromServer).toList();
+          _loading = false;
+        });
+        _startStick(); // 开启持续贴底（列表已直接显示，无白屏）
+      }
     }
     try {
       final list = await _svc.history(widget.conv.id);
@@ -472,6 +484,11 @@ class _ChatPageState extends State<ChatPage> {
       _loadFailed = false;
     });
     _loadHistory();
+  }
+
+  /// 下拉手动全量载入：跳过缓存直出，强制从服务端拉全量首屏并整体替换
+  Future<void> _fullReloadHistory() async {
+    return _loadHistory(force: true);
   }
 
   Future<void> _connectWs() async {
@@ -1265,6 +1282,8 @@ class _ChatPageState extends State<ChatPage> {
     final extraTop = _hasMoreOlder ? 1 : 0;
     final list = ListView.builder(
       controller: _scroll,
+      // AlwaysScrollable：消息不足一屏时也保留下拉刷新能力（配合 RefreshIndicator）
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
       itemCount: _msgs.length + extraTop,
       itemBuilder: (_, i) {
@@ -1285,6 +1304,29 @@ class _ChatPageState extends State<ChatPage> {
     );
     // 列表始终直接显示，不隐藏：进入会话/有缓存直出立即渲染，避免白屏。
     return wrapped;
+  }
+
+  /// 首次载入态：主色调线性进度条 + 文案（替代原来的灰色转圈）
+  Widget _buildLoadingView() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 140,
+            child: LinearProgressIndicator(
+              minHeight: 4,
+              color: AppTheme.primary,
+              backgroundColor: Color(0x1A007AFF),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(AppLocalizations.of(context).t('chatLoadingMsg'),
+              style: TextStyle(
+                  fontSize: 13, color: context.cs.onSurfaceVariant)),
+        ],
+      ),
+    );
   }
 
   /// 列表顶部的"加载更早"条：滚到顶部自动触发（见 _onScroll）。
@@ -1399,10 +1441,15 @@ class _ChatPageState extends State<ChatPage> {
                 child: Stack(
                   children: [
                     _loading
-                        ? const Center(child: CircularProgressIndicator())
+                        ? _buildLoadingView()
                         : _loadFailed
                             ? _buildLoadFailed()
-                            : _buildMessageList(),
+                            : RefreshIndicator(
+                                // 下拉手动全量载入：跳过缓存直出，强制拉服务端首屏
+                                color: AppTheme.primary,
+                                onRefresh: _fullReloadHistory,
+                                child: _buildMessageList(),
+                              ),
                     // ===== 浮动↓按钮 =====
                     if (_showJumpBtn)
                       Positioned(

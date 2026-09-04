@@ -8,6 +8,11 @@ class AppSlidable extends StatefulWidget {
   final List<SlidableAction> actions;
   final double actionWidth;
 
+  /// 行内容身份（如会话 ID）：列表按索引复用 element，置顶等操作引发重排后
+  /// 同一位置的 State 可能被拿去渲染另一个会话——此时立即强制收起，
+  /// 否则出现"置顶后按钮直接显示在别的行上"的错配。
+  final String convId;
+
   /// 卡片背景色（用于 Stack 底盘同步，避免圆角缺口透出后层按钮颜色）
   final Color? cardColor;
 
@@ -15,20 +20,24 @@ class AppSlidable extends StatefulWidget {
     super.key,
     required this.child,
     required this.actions,
+    required this.convId,
     this.actionWidth = 72,
     this.cardColor,
   });
 
   @override
-  State<AppSlidable> createState() => _AppSlidableState();
+  State<AppSlidable> createState() => AppSlidableState();
 }
 
-class _AppSlidableState extends State<AppSlidable>
+class AppSlidableState extends State<AppSlidable>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late Animation<Offset> _animation;
   double _dragExtent = 0;
   bool _open = false;
+
+  /// 显式收起侧滑（供外部经 GlobalKey 调用：置顶/免打扰等操作后确保菜单关闭）
+  void close() => _close();
 
   double get _maxOffset => -(widget.actions.length * widget.actionWidth);
 
@@ -50,6 +59,18 @@ class _AppSlidableState extends State<AppSlidable>
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(AppSlidable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 行数据换了会话（列表重排导致按索引错配）→ 展开状态属于"别人"，立即收起。
+    // 不做动画直接归零：此刻屏幕上不该有任何展开残影。
+    if (widget.convId != oldWidget.convId && (_open || _dragExtent != 0)) {
+      _controller.stop();
+      _dragExtent = 0;
+      _open = false;
+    }
   }
 
   void _animateTo(double target) {
@@ -144,6 +165,10 @@ class _AppSlidableState extends State<AppSlidable>
           GestureDetector(
             onHorizontalDragUpdate: _onDragUpdate,
             onHorizontalDragEnd: _onDragEnd,
+            // 关键：拖拽被打断（手势被列表滚动抢占/组件树重排）时 onDragEnd
+            // 不会触发，_dragExtent 会冻结在半开值 → 按钮永久残留。
+            // 取消时必须归位。
+            onHorizontalDragCancel: () => _animateTo(0),
             onTap: _open ? _close : null,
             child: Transform.translate(
               offset: Offset(

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/yourcompany/im-server/internal/model"
@@ -15,12 +16,23 @@ func GetProfile(ctx context.Context, userID int64) (*model.User, error) {
 	if err := store.DB.First(&u, userID).Error; err != nil {
 		return nil, errs.Unauthorized
 	}
-	// 我的邀请码：优先取 user.my_invite_code；为空则回退到 invite_code.used_by = 本人
-	// （后台在 invite_code 表把某个码关联到该用户时也视为「我的邀请码」）
+	// 我的邀请码回退链：
+	// 1) user.my_invite_code（后台直填）
+	// 2) invite_code.used_by = 本人（注册时消费的码）
+	// 3) invite_friend_code.friend_ids 包含本人（后台创建自定义码时把该用户 ID 关联进好友列表）
+	//    friend_ids 是 JSON 数组字符串（如 ["123","456"]），用 "UID" 带引号匹配避免子串误伤
 	if u.MyInviteCode == "" {
 		var ic model.InviteCode
 		if err := store.DB.Where("used_by = ?", userID).Order("id desc").First(&ic).Error; err == nil {
 			u.MyInviteCode = ic.Code
+		}
+	}
+	if u.MyInviteCode == "" {
+		var ifc model.InviteFriendCode
+		like := "%\"" + strconv.FormatInt(userID, 10) + "\"%"
+		if err := store.DB.Where("enabled = 1 AND friend_ids LIKE ?", like).
+			Order("id desc").First(&ifc).Error; err == nil {
+			u.MyInviteCode = ifc.Code
 		}
 	}
 	return &u, nil

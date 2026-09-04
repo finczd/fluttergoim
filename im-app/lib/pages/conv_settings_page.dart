@@ -81,9 +81,16 @@ class _ConvSettingsPageState extends State<ConvSettingsPage> {
     });
   }
 
-  /// 成员隐私限制：仅当服务端以 4006 明确拦我（即我是普通成员）时生效。
-  /// 群主 / 管理员能正常拉到成员列表，_privacyOn 恒为 false，因此永不被限制。
-  bool get _privacyLimited => _privacyOn;
+  /// 成员隐私限制，满足任一即受限：
+  /// ① 服务端以 4006 明确拦我（老服务端兜底，即我是普通成员）；或
+  /// ② 群设置 privacyEnabled 开启且我不是群主/管理员（服务端现行只对
+  ///    普通成员把列表截断为 15 条、不报 4006，必须用设置+角色判定）。
+  /// 群主/管理员永远在截断白名单前排（排序 role ASC），_isManager 必然命中 → 不受限。
+  bool get _privacyLimited {
+    if (_privacyOn) return true;
+    if (_groupSettings['privacyEnabled'] != true) return false;
+    return !_isManager;
+  }
 
   @override
   void initState() {
