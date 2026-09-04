@@ -70,7 +70,7 @@ import {
   IconDashboard, IconUserGroup, IconRelation, IconMessage, IconBarChart, IconSettings,
   IconApps, IconLocation, IconRobot, IconFile, IconGift,
   IconLanguage, IconExport, IconMenuFold, IconMenuUnfold, IconTrophy, IconExperiment,
-  IconQrcode, IconCloudDownload, IconWechatpay
+  IconQrcode, IconCloudDownload, IconWechatpay, IconDelete
 } from '@arco-design/web-vue/es/icon'
 import { setLocale } from '@/i18n'
 
@@ -117,7 +117,8 @@ const menuGroups = [
     items: [
       { path: '/admin/configs', label: '系统配置', icon: markRaw(IconSettings) },
       { path: '/admin/nodes', label: '节点管理', icon: markRaw(IconLocation) },
-      { path: '/admin/assistant', label: '智能助手', icon: markRaw(IconRobot) }
+      { path: '/admin/assistant', label: '智能助手', icon: markRaw(IconRobot) },
+      { path: '/admin/data-clear', label: '清空数据', icon: markRaw(IconDelete) }
     ]
   }
 ]

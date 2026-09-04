@@ -30,6 +30,7 @@ const router = createRouter({
         { path: 'stats', component: () => import('@/views/admin/StatsView.vue') },
         { path: 'health', component: () => import('@/views/admin/HealthCheckView.vue') },
         { path: 'configs', component: () => import('@/views/admin/ConfigView.vue') },
+        { path: 'data-clear', component: () => import('@/views/admin/DataClearView.vue') },
         { path: 'apps', component: () => import('@/views/admin/AppEntries.vue') },
         { path: 'nodes', component: () => import('@/views/admin/NodeManage.vue') },
         { path: 'assistant', component: () => import('@/views/admin/AssistantManage.vue') },

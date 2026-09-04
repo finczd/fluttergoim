@@ -16,6 +16,9 @@ export const adminApi = {
   userRecharge: (id: number, amount: number, remark?: string) =>
     http.post<ApiResp<{ balance: number }>>(`/admin/users/${id}/recharge`, { amount, remark }),
   userWallet: (id: number) => http.get<ApiResp<{ userId: number; balance: number; frozen: number }>>(`/admin/users/${id}/wallet`),
+  // 用户详情（查看详情弹窗）：资料 + 累计充值/提现 + 注册 IP/设备 + 统计
+  userDetail: (id: number | string) =>
+    http.get<ApiResp<Record<string, any>>>(`/admin/users/${id}/detail`),
 
   // 部门管理
   departments: () => http.get<ApiResp<Array<Record<string, any>>>>('/admin/departments'),
@@ -73,6 +76,10 @@ export const adminApi = {
   // 数据统计
   statsOverview: () => http.get<ApiResp<Record<string, any>>>('/admin/stats/overview'),
   statsMessages: (days = 7) => http.get<ApiResp<{ days: number; series: Array<{ day: string; count: number }> }>>('/admin/stats/messages', { params: { days } }),
+
+  // 清空数据（危险操作：scope = users/chats/groups/recharge/withdraw/all；前端必须二次确认后再调用）
+  dataClear: (scope: string) =>
+    http.post<ApiResp<Record<string, any>>>('/admin/data/clear', { scope }),
 
   // 日志
   logs: (params: { page?: number; size?: number }) =>

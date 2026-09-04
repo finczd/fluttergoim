@@ -24,25 +24,28 @@ const (
 
 // User 用户表
 type User struct {
-	ID           int64      `gorm:"primaryKey" json:"id,string"`
-	Account      string     `gorm:"size:64;uniqueIndex" json:"account"`
-	PasswordHash string     `gorm:"size:255" json:"-"`
-	Nickname     string     `gorm:"size:64" json:"nickname"`
-	Avatar       string     `gorm:"size:512" json:"avatar"`
-	Signature    string     `gorm:"size:200" json:"signature"` // 个人签名（AutoMigrate 自动加列）
-	Phone        string     `gorm:"size:32" json:"phone"`
-	Email        string     `gorm:"size:128" json:"email"`
-	CountryCode  string     `gorm:"size:8" json:"countryCode"`
-	ShortID      *string    `gorm:"size:32;uniqueIndex" json:"shortId"`          // 靓号/用户ID（可通过 ID 加好友，后台可预留）；nil 表示未分配，数据库写 NULL 不会触发 UNIQUE 冲突
-	Balance      float64    `gorm:"type:decimal(12,2);default:0" json:"balance"` // 零钱余额（可自由使用）
-	Frozen       float64    `gorm:"type:decimal(12,2);default:0" json:"frozen"`  // 冻结金额（发出的红包/转账尚未被领取的部分）
-	DepartmentID int64      `gorm:"index" json:"departmentId,string"`
-	Status       int        `gorm:"default:1" json:"status"`
-	Role         int        `gorm:"default:1" json:"role"`
-	MyInviteCode string     `gorm:"size:32" json:"myInviteCode"` // 我的邀请码（后台关联：用户中心展示 + 点击复制）
-	LastLoginAt  *time.Time `json:"lastLoginAt"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+	ID             int64      `gorm:"primaryKey" json:"id,string"`
+	Account        string     `gorm:"size:64;uniqueIndex" json:"account"`
+	PasswordHash   string     `gorm:"size:255" json:"-"`
+	Nickname       string     `gorm:"size:64" json:"nickname"`
+	Avatar         string     `gorm:"size:512" json:"avatar"`
+	Signature      string     `gorm:"size:200" json:"signature"` // 个人签名（AutoMigrate 自动加列）
+	Phone          string     `gorm:"size:32" json:"phone"`
+	Email          string     `gorm:"size:128" json:"email"`
+	CountryCode    string     `gorm:"size:8" json:"countryCode"`
+	ShortID        *string    `gorm:"size:32;uniqueIndex" json:"shortId"`          // 靓号/用户ID（可通过 ID 加好友，后台可预留）；nil 表示未分配，数据库写 NULL 不会触发 UNIQUE 冲突
+	Balance        float64    `gorm:"type:decimal(12,2);default:0" json:"balance"` // 零钱余额（可自由使用）
+	Frozen         float64    `gorm:"type:decimal(12,2);default:0" json:"frozen"`  // 冻结金额（发出的红包/转账尚未被领取的部分）
+	DepartmentID   int64      `gorm:"index" json:"departmentId,string"`
+	Status         int        `gorm:"default:1" json:"status"`
+	Role           int        `gorm:"default:1" json:"role"`
+	MyInviteCode   string     `gorm:"size:32" json:"myInviteCode"`    // 我的邀请码（后台关联：用户中心展示 + 点击复制）
+	RegisterIP     string     `gorm:"size:64" json:"registerIP"`      // 注册 IP（注册时捕获，AutoMigrate 自动加列）
+	RegisterDevice string     `gorm:"size:255" json:"registerDevice"` // 注册设备（Android/iOS/Web/... + 设备号）
+	LastLoginIP    string     `gorm:"size:64" json:"lastLoginIP"`     // 最后登录 IP（登录成功时更新）
+	LastLoginAt    *time.Time `json:"lastLoginAt"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
 func (User) TableName() string { return "user" }

@@ -154,6 +154,7 @@
 - `GET /api/v1/admin/messages`
 - `POST /api/v1/admin/messages/:msgId/block`
 - `DELETE /api/v1/admin/messages/:msgId`
+- `POST /api/v1/admin/data/clear`
 - `GET /api/v1/admin/moments`
 - `POST /api/v1/admin/moments`
 - `PUT /api/v1/admin/moments/:id/hidden`
@@ -1734,7 +1735,7 @@
 - 请求体: 无
 - 成功响应 data: `{"list":[Message...],"total":int}`（分页）
 - 错误码: 1001 参数错误；`errCode(err)`
-- 备注: Message 项含 `conversationId(string),msgId(string),clientMsgId,senderId(string),type,content,file,seq,status,createdAt,encrypted` 等。
+- 备注: Message 项含 `conversationId(string),msgId(string),clientMsgId,senderId(string),type,content,file,seq,status,createdAt,encrypted` 等。**已过滤 `sender_id=0` 的系统消息**，只返回用户/小助手消息；kw 搜索做了正则转义。
 
 ---
 
@@ -1747,7 +1748,32 @@
 - 请求体: 无
 - 成功响应 data: `{"list":[AdminMessageOut...],"total":int}`（分页）
 - 错误码: 500 查询失败
-- 备注: `AdminMessageOut` = Message + 冗余字段：`senderName,senderAvatar,senderShortId,receiverId,receiverName,receiverAvatar,receiverShortId,convType,convName,convAvatar`（单聊接收者为对方，群聊为群本身）。
+- 备注: `AdminMessageOut` = Message + 冗余字段：`senderName,senderAvatar,senderShortId,receiverId,receiverName,receiverAvatar,receiverShortId,convType,convName,convAvatar`（单聊接收者为对方，群聊为群本身）。**已过滤 `sender_id=0` 的系统消息**（未显式传 userId 时），只返回用户/小助手消息。
+
+### `GET /api/v1/admin/users/:id/detail`
+
+- 鉴权: 需管理员
+- 说明: 用户详情聚合（后台「查看详情」弹窗）：基础资料 + 钱包汇总 + 注册/登录审计 + 统计
+- 路径参数: `id:int`（`<=0` 或非法报 1001）
+- 查询参数: 无
+- 请求体: 无
+- 成功响应 data: `{"user":User, "totalRecharge":float, "totalWithdraw":float, "friendCount":int, "msgCount":int, "online":bool}`
+- 错误码: 1001 参数错误/用户不存在；`errCode(err)`
+- 备注: `totalRecharge/totalWithdraw` 为 `wallet_transaction` 中 `type=recharge/withdraw` 的金额汇总（服务端为准，提现取绝对值）；User 新增审计字段 `registerIP`（注册 IP，注册时捕获）、`registerDevice`（注册设备名+设备号）、`lastLoginIP`（登录成功时更新）。
+
+### `POST /api/v1/admin/data/clear`
+
+- 鉴权: 需管理员
+- 说明: 清空后台数据（危险操作；前端有两次确认，后端校验 scope 合法性并记日志）
+- 路径参数: 无
+- 查询参数: 无
+- 请求体:
+  ```json
+  {"scope":"string // users=用户数据 / chats=聊天数据 / groups=群组数据 / recharge=充值记录 / withdraw=提现记录 / all=以上全部"}
+  ```
+- 成功响应 data: 各表删除条数 map，如 `{"messages":123,"conversations":10}`（scope=users 时 `{"users":n}`）
+- 错误码: 1001 参数错误/未知清空范围
+- 备注: `users` 删除普通用户与客服（**管理员 role=2 永远保留**）及其好友关系/好友申请/黑名单/设备/E2E 密钥，并解除靓号池占用；`chats` 清空 Mongo 全部消息 + 会话 + 已读回执 + 收藏；`groups` 删除群会话与群成员；`recharge/withdraw` 清空对应订单（不动钱包流水与余额）。**`all`（所有数据）**= 以上全部 + 钱包流水(`wallet_transaction`)、冻结红包(`money_packet`)、靓号池(`reserved_short_id`)、提现绑定(`withdraw_account`)、朋友圈(`moments_post`)、登录日志(`login_log`)，即软件数据清空，仅保留后台配置(sys_config)与管理员账号。记后台日志 `data.clear`。
 
 ### `POST /api/v1/admin/messages/:msgId/block`
 

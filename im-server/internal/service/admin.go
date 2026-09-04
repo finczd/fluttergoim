@@ -196,10 +196,11 @@ func AdminUserCreate(ctx context.Context, account, password, nickname string, de
 
 // AdminUserSetStatus 启用/禁用用户。
 // 禁用（status=StatusDisabled）时额外做两件事，保证"禁用立即生效"，而不是等 access token 自然过期：
-//  1) 清掉该用户的 refresh 白名单（Redis key refresh:{uid}），
+//  1. 清掉该用户的 refresh 白名单（Redis key refresh:{uid}），
 //     使其 access token 过期后无法用 refresh 续命；refresh 直接失败 → 客户端 401 清登录态；
-//  2) 通过 Redis 事件总线推送 forceLogout 给该用户所有在线设备，
+//  2. 通过 Redis 事件总线推送 forceLogout 给该用户所有在线设备，
 //     网关收到后立刻下发 WS 事件，客户端收到即清登录态并跳登录页（见各端 forceLogout 处理）。
+//
 // 此外鉴权中间件 Auth 会对每次请求复核 u.Status，禁用账号的 access token 在下次任意请求即被 401 拦截。
 func AdminUserSetStatus(ctx context.Context, id int64, status int) error {
 	if err := store.DB.Model(&model.User{}).Where("id = ?", id).Update("status", status).Error; err != nil {
@@ -281,6 +282,131 @@ func AdminUserUpdate(ctx context.Context, id int64, nickname, avatar string, rol
 	return store.DB.Model(&model.User{}).Where("id = ?", id).Updates(updates).Error
 }
 
+// AdminUserDetail 用户详情聚合（后台「查看详情」）：
+// 基础资料 + 钱包（余额/冻结）+ 累计充值/提现（wallet_transaction 汇总，服务端为准）
+// + 注册/登录审计信息（注册 IP/设备、最后登录 IP）+ 统计（好友数/消息数/在线状态）
+func AdminUserDetail(ctx context.Context, id int64) (map[string]interface{}, error) {
+	if id <= 0 {
+		return nil, errs.ParamError
+	}
+	var u model.User
+	if err := store.DB.First(&u, id).Error; err != nil {
+		return nil, &errs.Err{Code: 1001, Msg: "用户不存在"}
+	}
+
+	// 累计充值 / 累计提现（wallet_transaction：recharge 入账为正，withdraw 支出为负）
+	var totalRecharge, totalWithdraw float64
+	store.DB.Model(&model.WalletTransaction{}).
+		Where("user_id = ? AND type = ?", id, model.WalletTxRecharge).
+		Select("COALESCE(SUM(amount),0)").Scan(&totalRecharge)
+	store.DB.Model(&model.WalletTransaction{}).
+		Where("user_id = ? AND type = ?", id, model.WalletTxWithdraw).
+		Select("COALESCE(SUM(amount),0)").Scan(&totalWithdraw)
+	if totalWithdraw < 0 {
+		totalWithdraw = -totalWithdraw
+	}
+
+	// 好友数（双向关系：user_id 或 friend_id 命中即算）
+	var friendCount int64
+	store.DB.Model(&model.FriendRelation{}).
+		Where("user_id = ? OR friend_id = ?", id, id).Count(&friendCount)
+
+	// 累计发送消息数（Mongo）
+	msgCount, _ := msgColl().CountDocuments(ctx, bson.M{"sender_id": id})
+
+	// 在线状态（Redis online:{uid}）
+	online := false
+	if store.RDB != nil {
+		if n, err := store.RDB.Exists(ctx, "online:"+strconv.FormatInt(id, 10)).Result(); err == nil {
+			online = n > 0
+		}
+	}
+
+	return map[string]interface{}{
+		"user":          u,
+		"totalRecharge": totalRecharge,
+		"totalWithdraw": totalWithdraw,
+		"friendCount":   friendCount,
+		"msgCount":      msgCount,
+		"online":        online,
+	}, nil
+}
+
+// AdminDataClear 清空后台数据（危险操作，配合前端二次确认使用）。
+// scope：users=用户数据 / chats=聊天数据 / groups=群组数据 / recharge=充值记录 / withdraw=提现记录 / all=以上全部。
+// 返回各表删除条数，便于前端展示清理结果；管理员账号（role=2）永远保留，避免把自己锁在门外。
+func AdminDataClear(ctx context.Context, scope string) (map[string]interface{}, error) {
+	res := map[string]interface{}{}
+	run := func(scopes ...string) {
+		for _, s := range scopes {
+			switch s {
+			case "users":
+				// 保留管理员；删除普通用户/客服及其关联数据
+				var ids []int64
+				store.DB.Model(&model.User{}).Where("role <> ?", model.RoleAdmin).Pluck("id", &ids)
+				userCnt := int64(0)
+				if len(ids) > 0 {
+					store.DB.Where("id IN ?", ids).Delete(&model.User{}).Count(&userCnt)
+					store.DB.Where("user_id IN ?", ids).Delete(&model.Device{})
+					// 好友关系 / 好友申请 / 黑名单 / E2E 密钥：任一侧命中即删
+					store.DB.Where("user_id IN ? OR friend_id IN ?", ids, ids).Delete(&model.FriendRelation{})
+					store.DB.Where("from_user IN ? OR to_user IN ?", ids, ids).Delete(&model.FriendRequest{})
+					store.DB.Where("user_id IN ? OR block_user_id IN ?", ids, ids).Delete(&model.Blacklist{})
+					store.DB.Where("user_id IN ?", ids).Delete(&model.UserKey{})
+					// 靓号池（reserved_short_id）本身保留，仅解除被删用户的占用引用
+					store.DB.Model(&model.ReservedShortID{}).
+						Where("used_by IN ? AND status = ?", ids, model.ReservedShortIDUsed).
+						Updates(map[string]interface{}{"status": model.ReservedShortIDOpen, "used_by": 0, "used_at": nil})
+				}
+				res["users"] = userCnt
+			case "chats":
+				del, _ := msgColl().DeleteMany(ctx, bson.M{})
+				res["messages"] = del.DeletedCount
+				rc := store.DB.Where("1 = 1").Delete(&model.MessageReceipt{}).RowsAffected
+				res["messageReceipts"] = rc
+				fc := store.DB.Where("1 = 1").Delete(&model.MessageFavorite{}).RowsAffected
+				res["messageFavorites"] = fc
+				cc := store.DB.Where("1 = 1").Delete(&model.Conversation{}).RowsAffected
+				res["conversations"] = cc
+			case "groups":
+				gc := store.DB.Where("type = ?", model.ConvGroup).Delete(&model.Conversation{}).RowsAffected
+				res["groupConversations"] = gc
+				mc := store.DB.Where("1 = 1").Delete(&model.ConversationMember{}).RowsAffected
+				res["conversationMembers"] = mc
+			case "recharge":
+				rc := store.DB.Where("1 = 1").Delete(&model.RechargeOrder{}).RowsAffected
+				res["rechargeOrders"] = rc
+			case "withdraw":
+				wc := store.DB.Where("1 = 1").Delete(&model.WithdrawOrder{}).RowsAffected
+				res["withdrawOrders"] = wc
+			}
+		}
+	}
+	switch scope {
+	case "all":
+		run("chats", "groups", "users", "recharge", "withdraw")
+		// 「所有数据」= 把软件数据清空：仅保留后台配置(sys_config)与管理员账号(role=2)。
+		// 在上述范围之外，额外清空：钱包流水/冻结红包、靓号池、提现绑定、朋友圈、登录日志。
+		wt := store.DB.Where("1 = 1").Delete(&model.WalletTransaction{}).RowsAffected
+		res["walletTransactions"] = wt
+		mp := store.DB.Where("1 = 1").Delete(&model.MoneyPacket{}).RowsAffected
+		res["moneyPackets"] = mp
+		rs := store.DB.Where("1 = 1").Delete(&model.ReservedShortID{}).RowsAffected
+		res["reservedShortIds"] = rs
+		wa := store.DB.Where("1 = 1").Delete(&model.WithdrawAccount{}).RowsAffected
+		res["withdrawAccounts"] = wa
+		mo := store.DB.Where("1 = 1").Delete(&model.MomentsPost{}).RowsAffected
+		res["momentsPosts"] = mo
+		ll := store.DB.Where("1 = 1").Delete(&model.LoginLog{}).RowsAffected
+		res["loginLogs"] = ll
+	case "users", "chats", "groups", "recharge", "withdraw":
+		run(scope)
+	default:
+		return nil, &errs.Err{Code: 1001, Msg: "未知清空范围: " + scope}
+	}
+	return res, nil
+}
+
 // ============ 部门管理 ============
 
 func AdminDeptList(ctx context.Context) ([]model.Department, error) {
@@ -353,10 +479,13 @@ func AdminAppDelete(ctx context.Context, id int64) error {
 
 // ============ 群组管理 ============
 
-// AdminGroupOut 群组管理列表项：群信息 + 成员数（后台显示人数）
+// AdminGroupOut 群组管理列表项：群信息 + 成员数（后台显示人数）+ 群主资料（头像/昵称/短ID）
 type AdminGroupOut struct {
 	model.Conversation
-	MemberCount int64 `json:"memberCount"`
+	MemberCount   int64  `json:"memberCount"`
+	OwnerNickname string `json:"ownerNickname"`
+	OwnerAvatar   string `json:"ownerAvatar"`
+	OwnerShortID  string `json:"ownerShortId"`
 }
 
 func AdminGroupList(ctx context.Context) ([]AdminGroupOut, error) {
@@ -366,11 +495,34 @@ func AdminGroupList(ctx context.Context) ([]AdminGroupOut, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 批量取群主用户资料（ownerId 去重）
+	ownerIDs := make([]int64, 0, len(groups))
+	seen := map[int64]bool{}
+	for _, g := range groups {
+		if g.OwnerID > 0 && !seen[g.OwnerID] {
+			seen[g.OwnerID] = true
+			ownerIDs = append(ownerIDs, g.OwnerID)
+		}
+	}
+	ownerMap := map[int64]model.User{}
+	if len(ownerIDs) > 0 {
+		var owners []model.User
+		store.DB.Where("id IN ?", ownerIDs).Find(&owners)
+		for _, u := range owners {
+			ownerMap[u.ID] = u
+		}
+	}
 	out := make([]AdminGroupOut, 0, len(groups))
 	for _, g := range groups {
 		var cnt int64
 		store.DB.Model(&model.ConversationMember{}).Where("conversation_id = ?", g.ID).Count(&cnt)
-		out = append(out, AdminGroupOut{Conversation: g, MemberCount: cnt})
+		o := AdminGroupOut{Conversation: g, MemberCount: cnt}
+		if ou, ok := ownerMap[g.OwnerID]; ok {
+			o.OwnerNickname = ou.Nickname
+			o.OwnerAvatar = ou.Avatar
+			o.OwnerShortID = model.StrVal(ou.ShortID)
+		}
+		out = append(out, o)
 	}
 	return out, nil
 }
@@ -416,6 +568,9 @@ func AdminMessageQuery(ctx context.Context, q *AdminMsgQuery, page, size int) ([
 	}
 	if q.UserID > 0 {
 		filter["sender_id"] = q.UserID
+	} else {
+		// 只显示用户/小助手发送的消息，过滤 sender_id=0 的系统通知（后台审计无意义）
+		filter["sender_id"] = bson.M{"$ne": 0}
 	}
 	if q.Type > 0 {
 		filter["type"] = q.Type
@@ -729,9 +884,13 @@ func AdminGroupMessages(ctx context.Context, groupID int64, kw string, page, siz
 	if size <= 0 || size > 200 {
 		size = 50
 	}
-	filter := bson.M{"conversation_id": groupID}
+	filter := bson.M{
+		"conversation_id": groupID,
+		// 与消息记录保持一致：不显示 sender_id=0 的系统消息，只显示用户/小助手消息
+		"sender_id": bson.M{"$ne": 0},
+	}
 	if kw != "" {
-		filter["content"] = bson.M{"$regex": kw, "$options": "i"}
+		filter["content"] = bson.M{"$regex": regexp.QuoteMeta(kw), "$options": "i"}
 	}
 	total, err := msgColl().CountDocuments(ctx, filter)
 	if err != nil {

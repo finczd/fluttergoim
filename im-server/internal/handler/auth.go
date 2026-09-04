@@ -48,7 +48,7 @@ func RegisterHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
 			return
 		}
-		u, access, refresh, err := service.Register(c.Request.Context(), cfg, &req)
+		u, access, refresh, err := service.Register(c.Request.Context(), cfg, &req, c.ClientIP())
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
 			return

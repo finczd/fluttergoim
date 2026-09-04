@@ -80,6 +80,39 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
 		})
 
+		// 用户详情（查看详情弹窗）：资料 + 钱包汇总 + 注册/登录审计 + 统计
+		admin.GET("/users/:id/detail", func(c *gin.Context) {
+			id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+			if err != nil || id <= 0 {
+				c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+				return
+			}
+			data, err := service.AdminUserDetail(c.Request.Context(), id)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+		})
+
+		// 清空数据（危险操作；前端已有二次确认，这里再校验 scope 合法性）
+		admin.POST("/data/clear", func(c *gin.Context) {
+			var body struct {
+				Scope string `json:"scope" binding:"required"` // users/chats/groups/recharge/withdraw/all
+			}
+			if err := c.ShouldBindJSON(&body); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+				return
+			}
+			data, err := service.AdminDataClear(c.Request.Context(), body.Scope)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+				return
+			}
+			service.AdminLog(c.Request.Context(), middleware.CurrentUserID(c), "data.clear", body.Scope, c.ClientIP(), data)
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": data})
+		})
+
 		// 系统配置
 		admin.GET("/configs/:key", func(c *gin.Context) {
 			key := c.Param("key")

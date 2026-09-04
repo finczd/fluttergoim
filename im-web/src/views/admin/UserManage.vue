@@ -52,9 +52,9 @@
           </a-table-column>
           <a-table-column title="最后登录IP" :width="140">
             <template #cell="{ record }">
-              <span v-if="record.lastLoginIp" class="ip-chip">
+              <span v-if="record.lastLoginIP || record.lastLoginIp" class="ip-chip">
                 <IconLocation />
-                {{ record.lastLoginIp }}
+                {{ record.lastLoginIP || record.lastLoginIp }}
               </span>
               <span v-else class="muted">—</span>
             </template>
@@ -72,6 +72,7 @@
             <template #cell="{ record }">
               <a-space size="mini" style="flex-wrap:wrap">
                 <a-switch :model-value="record.status === 1" size="small" @change="(v: any) => toggleStatus(record, !!v)" />
+                <a-button size="mini" @click="openDetail(record)">详情</a-button>
                 <a-button size="mini" @click="openEdit(record)">编辑</a-button>
                 <a-button size="mini" status="warning" @click="resetPwd(record)">重置密码</a-button>
                 <a-button size="mini" type="primary" :icon="IconGift" @click="openRecharge(record)">充值</a-button>
@@ -149,6 +150,53 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- 用户详情弹窗 -->
+    <a-modal v-model:visible="showDetail" title="用户详情" :footer="false" width="680" unmount-on-close>
+      <a-spin v-if="detailLoading" style="display:block;text-align:center;padding:40px 0" />
+      <template v-else-if="detail">
+        <div class="detail-head">
+          <span class="avatar detail-avatar" :style="{ background: avatarColor(Number(detail.user?.id) || 0) }">
+            <img v-if="detail.user?.avatar" :src="detail.user.avatar" alt="" />
+            <template v-else>{{ (detail.user?.nickname || detail.user?.account || '?').slice(0, 1).toUpperCase() }}</template>
+          </span>
+          <div class="detail-head-info">
+            <span class="detail-name">{{ detail.user?.nickname || '-' }}</span>
+            <span class="detail-sub">{{ detail.user?.account }} · ID {{ detail.user?.id }}</span>
+            <div class="detail-tags">
+              <a-tag :color="detail.user?.status === 1 ? 'green' : 'red'">{{ detail.user?.status === 1 ? '正常' : '禁用' }}</a-tag>
+              <a-tag color="gray">{{ ['未知', '用户', '管理员', '客服'][Number(detail.user?.role) || 0] || '用户' }}</a-tag>
+              <a-tag v-if="detail.online" color="green">在线</a-tag>
+              <a-tag v-else color="gray">离线</a-tag>
+            </div>
+          </div>
+        </div>
+        <a-descriptions :column="2" size="medium" bordered title="基础资料" style="margin-top:14px">
+          <a-descriptions-item label="短ID">{{ detail.user?.shortId ? '#' + detail.user.shortId : '—' }}</a-descriptions-item>
+          <a-descriptions-item label="个性签名">{{ detail.user?.signature || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="手机号">{{ detail.user?.phone || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="邮箱">{{ detail.user?.email || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="我的邀请码">{{ detail.user?.myInviteCode || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="注册时间">{{ fmt(detail.user?.createdAt) || '—' }}</a-descriptions-item>
+        </a-descriptions>
+        <a-descriptions :column="2" size="medium" bordered title="钱包（服务端为准）" style="margin-top:12px">
+          <a-descriptions-item label="可用余额">¥ {{ fmtMoney(detail.user?.balance) }}</a-descriptions-item>
+          <a-descriptions-item label="冻结金额">¥ {{ fmtMoney(detail.user?.frozen) }}</a-descriptions-item>
+          <a-descriptions-item label="累计充值">¥ {{ fmtMoney(detail.totalRecharge) }}</a-descriptions-item>
+          <a-descriptions-item label="累计提现">¥ {{ fmtMoney(detail.totalWithdraw) }}</a-descriptions-item>
+        </a-descriptions>
+        <a-descriptions :column="2" size="medium" bordered title="登录与注册" style="margin-top:12px">
+          <a-descriptions-item label="最后登录 IP">{{ detail.user?.lastLoginIP || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="最后登录时间">{{ detail.user?.lastLoginAt ? fmt(detail.user.lastLoginAt) : '从未登录' }}</a-descriptions-item>
+          <a-descriptions-item label="注册 IP">{{ detail.user?.registerIP || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="注册设备">{{ detail.user?.registerDevice || '—' }}</a-descriptions-item>
+        </a-descriptions>
+        <a-descriptions :column="2" size="medium" bordered title="统计" style="margin-top:12px">
+          <a-descriptions-item label="好友数">{{ detail.friendCount ?? 0 }}</a-descriptions-item>
+          <a-descriptions-item label="累计发送消息">{{ detail.msgCount ?? 0 }}</a-descriptions-item>
+        </a-descriptions>
+      </template>
+    </a-modal>
   </div>
 </template>
 
@@ -221,6 +269,28 @@ function handleRechargeSubmit() {
 }
 
 onMounted(() => load(1))
+
+// ===== 用户详情（查看详情） =====
+const showDetail = ref(false)
+const detailLoading = ref(false)
+const detail = ref<Record<string, any> | null>(null)
+async function openDetail(r: Record<string, any>) {
+  showDetail.value = true
+  detailLoading.value = true
+  detail.value = null
+  try {
+    const { data } = await adminApi.userDetail(r.id)
+    if (data.code === 0) {
+      detail.value = data.data
+    } else {
+      Message.error(data.message || '读取详情失败')
+    }
+  } catch (e: any) {
+    Message.error(e?.message || '读取详情失败（网络错误）')
+  } finally {
+    detailLoading.value = false
+  }
+}
 
 async function load(page = pagination.current) {
   loading.value = true
@@ -464,4 +534,12 @@ async function doRecharge() {
 }
 .balance :deep(svg) { width: 14px; height: 14px; color: #d48806; }
 .hint { margin-top: 6px; font-size: 12px; }
+
+/* 用户详情弹窗 */
+.detail-head { display: flex; align-items: center; gap: 14px; }
+.detail-avatar { width: 56px; height: 56px; font-size: 20px; }
+.detail-head-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.detail-name { font-size: 16px; font-weight: var(--app-font-weight-medium); color: var(--app-text-1); }
+.detail-sub { font-size: 12px; color: var(--app-text-3); }
+.detail-tags { display: flex; gap: 6px; }
 </style>

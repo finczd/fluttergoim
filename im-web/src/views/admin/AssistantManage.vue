@@ -538,7 +538,6 @@ async function doPush() {
   position: sticky; top: 0;
 }
 .nav-btn {
-  position: relative;
   display: flex; align-items: center; gap: 10px;
   width: 100%; padding: 10px 12px;
   background: transparent; border: none;
@@ -546,39 +545,14 @@ async function doPush() {
   color: var(--app-text-2);
   font-size: var(--app-font-size-base);
   cursor: pointer; text-align: left;
-  overflow: hidden;
-  transition: color .18s ease, transform .18s ease;
-  z-index: 0;
+  transition: background var(--app-transition-base), color var(--app-transition-base);
 }
-.nav-btn::before {
-  content: '';
-  position: absolute;
-  inset: auto -10% -100% auto;
-  width: 130%; height: 120%;
-  background: linear-gradient(135deg, rgba(22,93,255,.12) 0%, rgba(120,67,255,.10) 100%);
-  transform: translateY(100%);
-  transition: transform .32s cubic-bezier(.22,.61,.36,1);
-  z-index: -1;
-  border-radius: 14px;
-}
-.nav-btn:hover { color: var(--app-text-1); }
-.nav-btn:hover::before { transform: translateY(0); }
+.nav-btn:hover { background: var(--app-border-2); color: var(--app-text-1); }
 .nav-btn.active {
+  background: var(--app-primary-bg);
   color: var(--app-primary);
   font-weight: var(--app-font-weight-medium);
 }
-.nav-btn.active::before { transform: translateY(0); opacity: 1; }
-.nav-btn::after {
-  content: '';
-  position: absolute;
-  left: 0; top: 18%; bottom: 18%;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, var(--app-primary), #7843ff);
-  transform: scaleY(0);
-  transition: transform .25s ease;
-}
-.nav-btn.active::after { transform: scaleY(1); }
 .nav-btn :deep(svg) { width: 18px; height: 18px; flex-shrink: 0; }
 
 /* 右侧内容 */

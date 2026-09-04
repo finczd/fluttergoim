@@ -71,13 +71,14 @@ type RegisterReq struct {
 	InviteCode   string `json:"inviteCode"` // 邀请码（开关开启时必填）
 	CaptchaID    string `json:"captchaId"`  // 图形验证码 ID（防刷）
 	CaptchaCode  string `json:"captchaCode"`
-	Channel      string `json:"channel"`    // sms / email / ""（为空时按 AUTH_MODE 决定）
+	Channel      string `json:"channel"` // sms / email / ""（为空时按 AUTH_MODE 决定）
 	DeviceID     string `json:"deviceId"`
 	DeviceType   int    `json:"deviceType"`
 }
 
 // Register 注册（按认证模式校验验证码 / 邀请码 / 注册开关）
-func Register(ctx context.Context, cfg *config.Config, req *RegisterReq) (*model.User, string, string, error) {
+// clientIP：注册请求来源 IP（handler 传 c.ClientIP()），落 user.register_ip 供后台审计
+func Register(ctx context.Context, cfg *config.Config, req *RegisterReq, clientIP string) (*model.User, string, string, error) {
 	// 1. 注册开关
 	if !cfg.RegisterOn {
 		return nil, "", "", errs.RegisterOff
@@ -166,7 +167,14 @@ func Register(ctx context.Context, cfg *config.Config, req *RegisterReq) (*model
 		Status:       model.StatusNormal,
 		Role:         model.RoleUser,
 		ShortID:      model.StrPtr(genShortID(ctx)),
+		RegisterIP:   clientIP,
 	}
+	// 注册设备：设备类型名 + 设备号（后台用户详情展示）
+	regDev := deviceName(req.DeviceType)
+	if req.DeviceID != "" {
+		regDev += " / " + req.DeviceID
+	}
+	u.RegisterDevice = regDev
 	// 需求9：默认头像（后台可配置 default_avatar，新注册用户使用）
 	if av, ok := SysConfigGet(ctx, "default_avatar", "").(string); ok && av != "" {
 		u.Avatar = av
@@ -228,10 +236,14 @@ func Login(ctx context.Context, cfg *config.Config, req *LoginReq, ip string) (*
 		return nil, "", "", errs.LoginFailed
 	}
 
-	// 更新最后登录时间
+	// 更新最后登录时间 + 最后登录 IP（后台用户详情/列表展示）
 	now := time.Now()
-	store.DB.Model(&u).Update("last_login_at", now)
+	store.DB.Model(&u).Updates(map[string]interface{}{
+		"last_login_at": now,
+		"last_login_ip": ip,
+	})
 	u.LastLoginAt = &now
+	u.LastLoginIP = ip
 
 	access, refresh, err := issueTokens(ctx, cfg, &u, req.DeviceID, req.DeviceType)
 	writeLoginLog(req.Account, ip, deviceName(req.DeviceType), 1)
