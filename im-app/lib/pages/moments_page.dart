@@ -38,8 +38,12 @@ class _MomentsPageState extends State<MomentsPage> {
   /// 个性签名：我的朋友圈取 UserCache 缓存资料；他人朋友圈走 GET /user/:id 兜底
   String _signature = '';
 
-  /// 签名只拉一次（下拉刷新不重复请求）
-  bool _signatureLoaded = false;
+  /// 他人朋友圈的头像：优先用户详情接口（好友没发过动态也能拿到），
+  /// 接口失败再回退其动态列表首条的头像
+  String _friendAvatar = '';
+
+  /// 资料（签名/头像）只拉一次（下拉刷新不重复请求）
+  bool _profileLoaded = false;
 
   @override
   void initState() {
@@ -63,13 +67,14 @@ class _MomentsPageState extends State<MomentsPage> {
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
-    _loadSignature();
+    _loadOwnerProfile();
   }
 
-  /// 拉个性签名（只拉一次）：我的直接读本地缓存资料；他人的调用户详情接口，失败静默不显示
-  Future<void> _loadSignature() async {
-    if (_signatureLoaded) return;
-    _signatureLoaded = true;
+  /// 拉头部资料（只拉一次）：我的直接读本地缓存签名；
+  /// 他人的调用户详情接口，同时取签名 + 头像（好友没发过动态也有头像），失败静默降级
+  Future<void> _loadOwnerProfile() async {
+    if (_profileLoaded) return;
+    _profileLoaded = true;
     if (widget.userId == null) {
       final s = (UserCache.myProfileData?['signature'] ?? '').toString();
       if (mounted && s.isNotEmpty) setState(() => _signature = s);
@@ -81,10 +86,16 @@ class _MomentsPageState extends State<MomentsPage> {
       if (body is Map && body['code'] == 0) {
         final d = (body['data'] as Map?)?.cast<String, dynamic>();
         final s = (d?['signature'] ?? '').toString();
-        if (mounted && s.isNotEmpty) setState(() => _signature = s);
+        final a = (d?['avatar'] ?? '').toString();
+        if (mounted && (s.isNotEmpty || a.isNotEmpty)) {
+          setState(() {
+            if (s.isNotEmpty) _signature = s;
+            if (a.isNotEmpty) _friendAvatar = a;
+          });
+        }
       }
     } catch (_) {
-      // 签名拉取失败不影响朋友圈主流程
+      // 资料拉取失败不影响朋友圈主流程（头像回退动态首条 → 再回退首字占位）
     }
   }
 
@@ -288,11 +299,13 @@ class _MomentsPageState extends State<MomentsPage> {
   Widget _coverHeader() {
     final t = AppLocalizations.of(context).t;
     final name = widget.userName ?? t('momentsMe');
-    // 我的头像走 UserCache；他人朋友圈用其动态里的头像（列表首条即本人发帖），
-    // 都拿不到则回退首字占位（与帖子头像同款双保险写法）
+    // 我的头像走 UserCache；他人朋友圈优先用户详情接口的头像（没发过动态也有），
+    // 接口失败回退其动态首条头像，都拿不到则回退首字占位（与帖子头像同款双保险写法）
     var avatarUrl = '';
     if (widget.userId == null) {
       avatarUrl = (UserCache.myAvatar ?? '').toString();
+    } else if (_friendAvatar.isNotEmpty) {
+      avatarUrl = _friendAvatar;
     } else if (_posts.isNotEmpty) {
       avatarUrl = (_posts.first['senderAvatar'] ?? '').toString();
     }
