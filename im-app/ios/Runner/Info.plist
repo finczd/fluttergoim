@@ -34,6 +34,9 @@
 	<!-- 相册选图发送（image_picker） -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>发送图片时需要访问相册</string>
+	<!-- 朋友圈图片保存到相册（image_gallery_saver 只写入不读取） -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>保存图片到相册时需要添加照片权限</string>
 	<!-- 发现页内置 WebView：允许加载 http 内网页面（小程序） -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

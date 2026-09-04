@@ -66,6 +66,18 @@ export const adminApi = {
   groupMessages: (groupId: string, params?: { kw?: string; page?: number; size?: number }) =>
     http.get<ApiResp<{ list: Array<Record<string, any>>; total: number }>>(`/admin/groups/${groupId}/messages`, { params }),
 
+  // 朋友圈管理（点赞/评论明细在 list 项的 likes/comments 字段）
+  moments: (params?: { page?: number; size?: number }) =>
+    http.get<ApiResp<{ list: Array<Record<string, any>>; total: number }>>('/admin/moments', { params }),
+  momentCreate: (payload: { content: string; images?: string[] }) =>
+    http.post<ApiResp<Record<string, any>>>('/admin/moments', payload),
+  momentHidden: (id: string | number, hidden: boolean) =>
+    http.put<ApiResp>(`/admin/moments/${id}/hidden`, { hidden }),
+  momentDelete: (id: string | number) =>
+    http.delete<ApiResp>(`/admin/moments/${id}`),
+  momentCommentDelete: (commentId: string | number) =>
+    http.delete<ApiResp>(`/admin/moments/comments/${commentId}`),
+
   // 消息记录（审计）
   messages: (params: { kw?: string; convId?: string; userId?: string; type?: number; from?: number; to?: number; page?: number; size?: number }) =>
     http.get<ApiResp<{ list: Array<Record<string, any>>; total: number }>>('/admin/messages', { params }),

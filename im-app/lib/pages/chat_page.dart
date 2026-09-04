@@ -408,8 +408,8 @@ class _ChatPageState extends State<ChatPage> {
   void _openMemberProfile(String uid) {
     if (uid.isEmpty || uid == '-1') return; // 空或虚拟小助手不处理
     if (isGroup && _privacyOn) {
-      AppDialogs.toast(
-          context, AppLocalizations.of(context).t('groupPrivacyProfileBlocked'));
+      AppDialogs.toast(context,
+          AppLocalizations.of(context).t('groupPrivacyProfileBlocked'));
       return;
     }
     Navigator.of(context).push(
@@ -484,11 +484,6 @@ class _ChatPageState extends State<ChatPage> {
       _loadFailed = false;
     });
     _loadHistory();
-  }
-
-  /// 下拉手动全量载入：跳过缓存直出，强制从服务端拉全量首屏并整体替换
-  Future<void> _fullReloadHistory() async {
-    return _loadHistory(force: true);
   }
 
   Future<void> _connectWs() async {
@@ -677,8 +672,7 @@ class _ChatPageState extends State<ChatPage> {
         final list = ((d['list'] as List<dynamic>?) ?? []);
         final claimedCnt = (d['claimedCnt'] as num?)?.toInt() ?? 0;
         final count = (d['count'] as num?)?.toInt() ?? 1;
-        final claimedByMe =
-            list.any((c) => c['userId']?.toString() == _myUid);
+        final claimedByMe = list.any((c) => c['userId']?.toString() == _myUid);
         if (claimedByMe || claimedCnt >= count) {
           _claimedMoneyIds.add(id);
           if (mounted) {
@@ -1322,8 +1316,8 @@ class _ChatPageState extends State<ChatPage> {
           ),
           const SizedBox(height: 12),
           Text(AppLocalizations.of(context).t('chatLoadingMsg'),
-              style: TextStyle(
-                  fontSize: 13, color: context.cs.onSurfaceVariant)),
+              style:
+                  TextStyle(fontSize: 13, color: context.cs.onSurfaceVariant)),
         ],
       ),
     );
@@ -1445,9 +1439,11 @@ class _ChatPageState extends State<ChatPage> {
                         : _loadFailed
                             ? _buildLoadFailed()
                             : RefreshIndicator(
-                                // 下拉手动全量载入：跳过缓存直出，强制拉服务端首屏
+                                // 下拉 = 加载更早的消息（不再全量刷新）：
+                                // 头部插入 + 滚动位置补偿见 _loadOlder；
+                                // 没有更早历史时立即完成，指示器直接收回
                                 color: AppTheme.primary,
-                                onRefresh: _fullReloadHistory,
+                                onRefresh: _loadOlder,
                                 child: _buildMessageList(),
                               ),
                     // ===== 浮动↓按钮 =====

@@ -70,7 +70,7 @@ import {
   IconDashboard, IconUserGroup, IconRelation, IconMessage, IconBarChart, IconSettings,
   IconApps, IconLocation, IconRobot, IconFile, IconGift,
   IconLanguage, IconExport, IconMenuFold, IconMenuUnfold, IconTrophy, IconExperiment,
-  IconQrcode, IconCloudDownload, IconWechatpay, IconDelete
+  IconQrcode, IconCloudDownload, IconWechatpay, IconDelete, IconFire
 } from '@arco-design/web-vue/es/icon'
 import { setLocale } from '@/i18n'
 
@@ -101,7 +101,8 @@ const menuGroups = [
       { path: '/admin/invite-codes', label: '邀请码管理', icon: markRaw(IconGift) },
       { path: '/admin/finance', label: '财务管理', icon: markRaw(IconGift) },
       { path: '/admin/recharge-orders', label: '充值订单', icon: markRaw(IconWechatpay) },
-      { path: '/admin/withdraw-orders', label: '提现订单', icon: markRaw(IconExport) }
+      { path: '/admin/withdraw-orders', label: '提现订单', icon: markRaw(IconExport) },
+      { path: '/admin/moments', label: '朋友圈', icon: markRaw(IconFire) }
     ]
   },
   {

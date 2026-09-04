@@ -349,6 +349,29 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 				}
 				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"liked": liked}})
 			})
+			user.POST("/moments/:id/comment", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+				var body struct {
+					Content string `json:"content"`
+				}
+				c.ShouldBindJSON(&body)
+				cm, err := service.MomentCommentAdd(c.Request.Context(), uid, id, body.Content)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": cm})
+			})
+			user.DELETE("/moments/comment/:cid", func(c *gin.Context) {
+				uid := middleware.CurrentUserID(c)
+				cid, _ := strconv.ParseInt(c.Param("cid"), 10, 64)
+				if err := service.MomentCommentDelete(c.Request.Context(), uid, cid); err != nil {
+					c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+			})
 			user.GET("/user/search", SearchUsersHandler())
 			user.GET("/user/:id", GetUserDetailHandler())
 			user.GET("/app/list", AppListHandler())

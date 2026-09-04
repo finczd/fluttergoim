@@ -36,6 +36,7 @@ func InitMySQL(cfg *config.Config) error {
 	if err := DB.AutoMigrate(
 		&model.WalletTransaction{},
 		&model.MomentsPost{},
+		&model.MomentsComment{},
 		&model.RedPacketClaim{},
 		&model.TransferClaim{},
 		&model.MoneyPacket{},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/yourcompany/im-server/internal/model"
 	"github.com/yourcompany/im-server/internal/pkg/errs"
@@ -74,7 +75,7 @@ func MomentsList(ctx context.Context, viewerID int64, page, size int) (map[strin
 	if err := q.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&posts).Error; err != nil {
 		return nil, err
 	}
-		return map[string]interface{}{
+	return map[string]interface{}{
 		"total": total,
 		"list":  momentOut(ctx, posts, viewerID),
 	}, nil
@@ -143,6 +144,44 @@ func momentOut(ctx context.Context, posts []model.MomentsPost, viewerID int64) [
 	}
 	ac := GetAssistantConfig(ctx, nil)
 
+	// 批量取评论（后台/客户端展示评论列表用）
+	postIDs := make([]int64, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
+	}
+	comments := make(map[int64][]model.MomentsComment, len(posts))
+	commentUIDs := make([]int64, 0)
+	seenCU := map[int64]bool{}
+	if len(postIDs) > 0 {
+		var cs []model.MomentsComment
+		if err := store.DB.Where("post_id IN ?", postIDs).Order("id ASC").Find(&cs).Error; err == nil {
+			for _, cm := range cs {
+				comments[cm.PostID] = append(comments[cm.PostID], cm)
+				if !seenCU[cm.UserID] {
+					seenCU[cm.UserID] = true
+					commentUIDs = append(commentUIDs, cm.UserID)
+				}
+			}
+		}
+	}
+	// 评论者资料并入批量查询
+	for _, u := range commentUIDs {
+		if !uidSet[u] {
+			uidSet[u] = true
+			ids = append(ids, u)
+		}
+	}
+	if len(ids) > 0 {
+		var us []model.User
+		store.DB.Where("id IN (?)", ids).Find(&us)
+		for _, u := range us {
+			avatarMap[u.ID] = u.Avatar
+			if nameMap[u.ID] == "" {
+				nameMap[u.ID] = u.Nickname
+			}
+		}
+	}
+
 	out := make([]map[string]interface{}, 0, len(posts))
 	for _, p := range posts {
 		uids := likes[p.ID]
@@ -163,6 +202,34 @@ func momentOut(ctx context.Context, posts []model.MomentsPost, viewerID int64) [
 			name = ac.Name
 			avatar = ac.Avatar
 		}
+		// 点赞明细：谁点的赞（昵称+头像）
+		likeUsers := make([]map[string]interface{}, 0, len(uids))
+		for _, u := range uids {
+			ln, la := nameMap[u], avatarMap[u]
+			if u == AssistantUID {
+				ln, la = ac.Name, ac.Avatar
+			}
+			likeUsers = append(likeUsers, map[string]interface{}{
+				"userId": strconv.FormatInt(u, 10), "name": ln, "avatar": la,
+			})
+		}
+		// 评论列表
+		cms := comments[p.ID]
+		commentOut := make([]map[string]interface{}, 0, len(cms))
+		for _, cm := range cms {
+			cn, ca := nameMap[cm.UserID], avatarMap[cm.UserID]
+			if cm.UserID == AssistantUID {
+				cn, ca = ac.Name, ac.Avatar
+			}
+			commentOut = append(commentOut, map[string]interface{}{
+				"id":         strconv.FormatInt(cm.ID, 10),
+				"postId":     strconv.FormatInt(cm.PostID, 10),
+				"userId":     strconv.FormatInt(cm.UserID, 10),
+				"senderName": cn, "senderAvatar": ca,
+				"content":   cm.Content,
+				"createdAt": cm.CreatedAt.Format("2006-01-02 15:04"),
+			})
+		}
 		out = append(out, map[string]interface{}{
 			"id":           strconv.FormatInt(p.ID, 10),
 			"userId":       strconv.FormatInt(p.UserID, 10),
@@ -172,6 +239,9 @@ func momentOut(ctx context.Context, posts []model.MomentsPost, viewerID int64) [
 			"content":      p.Content,
 			"images":       images,
 			"likeCount":    len(uids),
+			"likes":        likeUsers,
+			"commentCount": len(commentOut),
+			"comments":     commentOut,
 			"liked":        liked,
 			"hidden":       p.Hidden,
 			"mine":         p.UserID == viewerID,
@@ -260,7 +330,52 @@ func AdminMomentDelete(ctx context.Context, postID int64, operator int64) error 
 	if err := store.DB.Delete(&model.MomentsPost{}, postID).Error; err != nil {
 		return err
 	}
+	// 级联删除该动态的评论
+	store.DB.Where("post_id = ?", postID).Delete(&model.MomentsComment{})
 	serviceAdminLog(ctx, operator, "moment.delete", strconv.FormatInt(postID, 10))
+	return nil
+}
+
+// AdminMomentCommentDelete 后台删除单条评论
+func AdminMomentCommentDelete(ctx context.Context, commentID int64, operator int64) error {
+	if err := store.DB.Delete(&model.MomentsComment{}, commentID).Error; err != nil {
+		return err
+	}
+	serviceAdminLog(ctx, operator, "moment.commentDelete", strconv.FormatInt(commentID, 10))
+	return nil
+}
+
+// ============ 朋友圈评论（用户端） ============
+
+// MomentCommentAdd 发表朋友圈评论
+func MomentCommentAdd(ctx context.Context, userID, postID int64, content string) (*model.MomentsComment, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, &errs.Err{Code: 1001, Msg: "评论内容不能为空"}
+	}
+	if len([]rune(content)) > 500 {
+		return nil, &errs.Err{Code: 1001, Msg: "评论最长 500 字"}
+	}
+	var post model.MomentsPost
+	if err := store.DB.First(&post, postID).Error; err != nil {
+		return nil, &errs.Err{Code: 1001, Msg: "朋友圈不存在或已删除"}
+	}
+	cm := &model.MomentsComment{PostID: postID, UserID: userID, Content: content}
+	if err := store.DB.Create(cm).Error; err != nil {
+		return nil, err
+	}
+	return cm, nil
+}
+
+// MomentCommentDelete 删除自己的评论
+func MomentCommentDelete(ctx context.Context, userID, commentID int64) error {
+	res := store.DB.Where("id = ? AND user_id = ?", commentID, userID).Delete(&model.MomentsComment{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return &errs.Err{Code: 1001, Msg: "评论不存在或无权删除"}
+	}
 	return nil
 }
 

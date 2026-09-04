@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- ===== 基础网络（HTTP / WebSocket 必需）===== -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
@@ -33,6 +34,11 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+    <!-- 朋友圈图片保存到相册：Android ≤12 写 MediaStore 需要；13+ 不需要（maxSdkVersion=32）
+         tools:replace：覆盖 image_gallery_saver_plus 清单里的同名权限（其 maxSdkVersion=28） -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"
+        tools:replace="android:maxSdkVersion"/>
 
     <!-- 摄像头非必需（语音通话也要能装），声明为可选 -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>

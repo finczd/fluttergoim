@@ -83,7 +83,9 @@
             <a-form-item label="图片（可选）">
               <div style="display: flex; align-items: center; gap: 12px">
                 <a-upload :show-file-list="false" :custom-request="(opt: any) => uploadImage(opt.file)">
-                  <a-button type="outline" :loading="uploadingImage">上传图片</a-button>
+                  <a-button type="outline" :loading="uploadingImage" shape="circle" size="small" title="上传图片">
+                    <template #icon><component :is="iconImage" /></template>
+                  </a-button>
                 </a-upload>
                 <img v-if="push.fileUrl" :src="push.fileUrl" alt="推送图片"
                      style="width: 56px; height: 56px; border-radius: 8px; object-fit: cover" />
@@ -210,15 +212,23 @@
               <footer class="reply-bar">
                 <div class="reply-tools">
                   <a-upload :show-file-list="false" :custom-request="(opt: any) => uploadReplyImage(opt.file)">
-                    <a-button type="outline" :loading="replyUploading" shape="circle" size="small" title="上传图片">🖼️</a-button>
+                    <a-button type="outline" :loading="replyUploading" shape="circle" size="small" title="上传图片">
+                      <template #icon><component :is="iconImage" /></template>
+                    </a-button>
                   </a-upload>
-                  <button type="button" class="tool-btn" title="表情包" disabled>😀</button>
+                  <button type="button" class="tool-btn" :class="{ active: emojiOpen }" title="表情" @click="toggleEmoji">
+                    <component :is="iconFaceSmile" />
+                  </button>
                   <div class="reply-tools-divider"></div>
                   <span v-if="replyFileUrl" class="reply-img-chip">
                     <img :src="replyFileUrl" alt="回复图片" class="reply-img" />
                     <a-button type="text" status="danger" size="mini" @click="replyFileUrl = ''">×</a-button>
                   </span>
                   <span v-else class="reply-tools-hint">支持文本 + 图片；以「助手」身份推送到用户</span>
+                </div>
+                <!-- emoji 面板（与 App 端表情一致） -->
+                <div v-if="emojiOpen" class="emoji-panel">
+                  <button v-for="e in emojis" :key="e" type="button" class="emoji-cell" @click="insertEmoji(e)">{{ e }}</button>
                 </div>
                 <div class="reply-input-row">
                   <a-textarea
@@ -249,7 +259,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, computed, watch, markRaw } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { IconSettings, IconSend, IconMessage, IconRefresh } from '@arco-design/web-vue/es/icon'
+import { IconSettings, IconSend, IconMessage, IconRefresh, IconImage, IconFaceSmileFill } from '@arco-design/web-vue/es/icon'
 import { adminApi } from '@/api/admin'
 import ImageUpload from './ImageUpload.vue'
 
@@ -286,6 +296,23 @@ const replyUploading = ref(false)
 const msgScroll = ref<HTMLElement | null>(null)
 const iconRefresh = markRaw(IconRefresh)
 const iconSend = markRaw(IconSend)
+const iconImage = markRaw(IconImage)
+const iconFaceSmile = markRaw(IconFaceSmileFill)
+
+// ===== 表情选择（与 App 端 chat_page.dart _emojis 完全一致） =====
+const emojiOpen = ref(false)
+const emojis = [
+  '😀', '😄', '😁', '😂', '😊', '😍', '🥰', '😘',
+  '😎', '🤔', '😅', '😭', '😡', '👍', '👏', '🙏',
+  '💪', '🎉', '❤️', '💙', '🔥', '✨', '✅', '👀',
+  '🙌', '🤝', '🌹', '🎁', '🍵', '☕', '📌', '💡'
+]
+function toggleEmoji() {
+  emojiOpen.value = !emojiOpen.value
+}
+function insertEmoji(e: string) {
+  replyText.value += e
+}
 
 /** 首字母取色渐变，做头像背景 */
 function avatarBg(name: any): Record<string, string> {
@@ -583,7 +610,7 @@ async function doPush() {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, var(--app-bg-card) 0%, rgba(99,102,241,.04) 100%);
+  background: var(--app-bg-card);
   border: 1px solid var(--app-border-2);
   border-radius: 14px;
   box-shadow: var(--app-shadow-card);
@@ -602,7 +629,7 @@ async function doPush() {
   padding: 0 8px;
   height: 20px;
   border-radius: 10px;
-  background: linear-gradient(135deg, #165dff 0%, #7843ff 100%);
+  background: #165dff;
   color: #fff;
   font-size: 11px;
   font-weight: 600;
@@ -616,7 +643,7 @@ async function doPush() {
 }
 .conv-list-body::-webkit-scrollbar { width: 6px; }
 .conv-list-body::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(22,93,255,.3), rgba(120,67,255,.3));
+  background: rgba(22,93,255,.3);
   border-radius: 3px;
 }
 .conv-item {
@@ -635,7 +662,7 @@ async function doPush() {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, rgba(22,93,255,.06), rgba(120,67,255,.08));
+  background: rgba(22,93,255,.06);
   opacity: 0;
   transition: opacity .25s ease;
   pointer-events: none;
@@ -643,7 +670,7 @@ async function doPush() {
 .conv-item:hover { transform: translateX(2px); }
 .conv-item:hover::before { opacity: 1; }
 .conv-item.active {
-  background: linear-gradient(135deg, rgba(22,93,255,.10) 0%, rgba(120,67,255,.08) 100%);
+  background: rgba(22,93,255,.10);
   box-shadow: inset 0 0 0 1px rgba(22,93,255,.18);
 }
 .conv-item.active::after {
@@ -652,7 +679,7 @@ async function doPush() {
   left: 0; top: 20%; bottom: 20%;
   width: 3px;
   border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, #165dff, #7843ff);
+  background: #165dff;
   box-shadow: 0 0 8px rgba(22,93,255,.6);
 }
 /* 会话头像 */
@@ -733,10 +760,7 @@ async function doPush() {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(1200px 600px at 0% 0%, rgba(22,93,255,.05), transparent 60%),
-    radial-gradient(1000px 500px at 100% 100%, rgba(120,67,255,.05), transparent 60%),
-    var(--app-bg-card);
+  background: var(--app-bg-card);
   border: 1px solid var(--app-border-2);
   border-radius: 14px;
   box-shadow: var(--app-shadow-card);
@@ -751,15 +775,14 @@ async function doPush() {
   align-items: center;
   padding: 12px 18px;
   border-bottom: 1px solid var(--app-border-2);
-  background: linear-gradient(120deg, rgba(22,93,255,.06) 0%, rgba(120,67,255,.06) 100%);
-  backdrop-filter: blur(8px);
+  background: var(--app-bg-card);
 }
 .conv-title::after {
   content: '';
   position: absolute;
   left: 18px; right: 18px; bottom: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(22,93,255,.35), rgba(120,67,255,.35), transparent);
+  background: rgba(22,93,255,.2);
 }
 .conv-title-left {
   display: flex; align-items: center; gap: 12px;
@@ -805,7 +828,7 @@ async function doPush() {
 }
 .msg-scroll::-webkit-scrollbar { width: 7px; }
 .msg-scroll::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(22,93,255,.35), rgba(120,67,255,.35));
+  background: rgba(22,93,255,.35);
   border-radius: 4px;
 }
 
@@ -822,7 +845,7 @@ async function doPush() {
 .empty-msg-mark {
   width: 64px; height: 64px;
   border-radius: 22px;
-  background: linear-gradient(135deg, rgba(22,93,255,.12), rgba(120,67,255,.14));
+  background: rgba(22,93,255,.08);
   display: flex; align-items: center; justify-content: center;
   font-size: 30px;
   box-shadow: inset 0 0 0 1px rgba(22,93,255,.2);
@@ -864,7 +887,7 @@ async function doPush() {
   max-width: min(72%, 560px);
   padding: 10px 14px;
   border-radius: 6px 14px 14px 14px;
-  background: linear-gradient(180deg, #ffffff 0%, #fafbff 100%);
+  background: #ffffff;
   border: 1px solid #e5e6eb;
   box-shadow:
     0 1px 2px rgba(31,35,41,.04),
@@ -895,33 +918,22 @@ async function doPush() {
   filter: drop-shadow(-1px 1px 0 #e5e6eb);
 }
 
-/* 助手消息（我发送的）右侧蓝紫渐变 */
+/* 助手消息（我发送的）右侧蓝色气泡 */
 .msg-row.mine .msg-bubble {
   color: #fff;
-  background: linear-gradient(135deg, #2b6dff 0%, #3a5bff 45%, #7843ff 100%);
+  background: #165dff;
   border: none;
   border-radius: 14px 6px 14px 14px;
   box-shadow:
     0 2px 5px rgba(22,93,255,.22),
-    0 10px 28px rgba(120,67,255,.30);
+    0 6px 16px rgba(22,93,255,.18);
 }
 .msg-row.mine .msg-bubble::before {
   left: auto;
   right: -7px;
   border-width: 8px 8px 0 0;
-  border-color: #7843ff transparent transparent transparent;
+  border-color: #165dff transparent transparent transparent;
   filter: none;
-}
-/* 助手气泡外发光 */
-.msg-row.mine .msg-bubble::after {
-  content: '';
-  position: absolute;
-  inset: -14px -22px -18px -22px;
-  background: radial-gradient(120% 80% at 80% 20%, rgba(22,93,255,.18), transparent 55%),
-              radial-gradient(100% 70% at 20% 80%, rgba(120,67,255,.18), transparent 55%);
-  z-index: -1;
-  pointer-events: none;
-  border-radius: 26px;
 }
 .msg-bubble.recalled {
   opacity: .6;
@@ -972,8 +984,8 @@ async function doPush() {
   padding: 10px 14px;
   min-width: 200px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
-  border: 1px solid rgba(99,102,241,.2);
+  background: #f0f5ff;
+  border: 1px solid rgba(22,93,255,.18);
 }
 .msg-type-card.call {
   background: linear-gradient(135deg, #e6fffb 0%, #e0f2fe 100%);
@@ -997,7 +1009,7 @@ async function doPush() {
   gap: 10px;
   padding: 12px 18px 16px;
   border-top: 1px solid var(--app-border-2);
-  background: linear-gradient(0deg, rgba(22,93,255,.03), transparent 60%);
+  background: var(--app-bg-card);
 }
 .reply-tools {
   display: flex; align-items: center; gap: 8px;
@@ -1014,10 +1026,12 @@ async function doPush() {
   transition: all .18s ease;
   display: inline-flex; align-items: center; justify-content: center;
 }
-.tool-btn:not(:disabled):hover {
-  background: linear-gradient(135deg, rgba(22,93,255,.08), rgba(120,67,255,.08));
+.tool-btn:not(:disabled):hover,
+.tool-btn.active {
+  background: rgba(22,93,255,.08);
   border-color: rgba(22,93,255,.25);
   transform: translateY(-1px);
+  color: #165dff;
 }
 .tool-btn:disabled { opacity: .4; cursor: not-allowed; }
 .reply-tools :deep(.arco-btn) { width: 32px; height: 32px; padding: 0; }
@@ -1066,14 +1080,14 @@ async function doPush() {
   padding: 0 20px;
   border-radius: 12px;
   font-weight: 600;
-  background: linear-gradient(135deg, #165dff 0%, #7843ff 100%);
+  background: #165dff;
   border: none;
   box-shadow: 0 4px 14px rgba(22,93,255,.3);
   transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
 }
 .send-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 24px rgba(120,67,255,.4);
+  box-shadow: 0 8px 24px rgba(22,93,255,.4);
   filter: brightness(1.05);
 }
 .send-btn:active { transform: translateY(0); }
@@ -1087,7 +1101,37 @@ async function doPush() {
   font-size: 13px;
   padding: 24px 0;
   height: 100%;
-  background:
-    radial-gradient(400px 200px at 50% 30%, rgba(22,93,255,.05), transparent 60%);
+}
+
+/* ========== emoji 面板 ========== */
+.emoji-panel {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--app-border-2);
+  border-radius: 12px;
+  background: var(--app-bg-card);
+  max-height: 148px;
+  overflow-y: auto;
+}
+.emoji-cell {
+  width: 34px; height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background .15s ease, transform .15s ease;
+}
+.emoji-cell:hover {
+  background: rgba(22,93,255,.08);
+  transform: scale(1.15);
+}
+.tool-btn :deep(svg),
+.tool-btn svg {
+  width: 18px; height: 18px;
 }
 </style>

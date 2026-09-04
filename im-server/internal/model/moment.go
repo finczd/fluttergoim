@@ -17,3 +17,14 @@ type MomentsPost struct {
 }
 
 func (MomentsPost) TableName() string { return "moments_post" }
+
+// MomentsComment 朋友圈评论
+type MomentsComment struct {
+	ID        int64     `gorm:"primaryKey" json:"id,string"`
+	PostID    int64     `gorm:"index" json:"postId,string"`
+	UserID    int64     `gorm:"index" json:"userId,string"`
+	Content   string    `gorm:"size:500" json:"content"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func (MomentsComment) TableName() string { return "moments_comment" }

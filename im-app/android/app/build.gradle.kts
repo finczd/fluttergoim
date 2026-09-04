@@ -31,6 +31,10 @@ android {
         manifestPlaceholders["JPUSH_PKGNAME"] = applicationId.toString()
         manifestPlaceholders["JPUSH_APPKEY"] = "b1ba48f444fae6c40da73549"
         manifestPlaceholders["JPUSH_CHANNEL"] = "default"
+        // 瘦身说明：不要在这里写 ndk.abiFilters —— Flutter Gradle 插件会设置 splits abi，
+        // 两者并存会报 "Conflicting configuration"。用打包命令控制架构：
+        //   flutter build apk --release --split-per-abi  （arm64 单包约 45M，上架推荐）
+        //   flutter build apk --release --target-platform android-arm64,android-arm （通用包瘦身）
     }
 
     buildTypes {

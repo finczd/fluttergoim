@@ -34,6 +34,30 @@ class MomentService {
     return (((r.data['data'] as Map<String, dynamic>?) ?? {})['liked'] == true);
   }
 
+  /// 发表评论：POST /api/v1/moments/:id/comment，body {content}
+  /// 成功返回服务端评论数据 {ID, PostID, UserID, Content, CreatedAt}
+  Future<Map<String, dynamic>> comment(String postId, String content) async {
+    final r = await _api
+        .post('/api/v1/moments/$postId/comment', data: {'content': content});
+    final body = r.data as Map<String, dynamic>? ?? {};
+    final code = (body['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) {
+      throw Exception((body['message'] ?? 'comment failed').toString());
+    }
+    return ((body['data'] as Map<String, dynamic>?) ?? {});
+  }
+
+  /// 删除自己的评论：DELETE /api/v1/moments/comment/:cid
+  /// （服务端仅允许删除自己的评论，他人评论会返回业务错误）
+  Future<void> deleteComment(String commentId) async {
+    final r = await _api.delete('/api/v1/moments/comment/$commentId');
+    final body = r.data as Map<String, dynamic>? ?? {};
+    final code = (body['code'] as num?)?.toInt() ?? 0;
+    if (code != 0) {
+      throw Exception((body['message'] ?? 'delete comment failed').toString());
+    }
+  }
+
   /// 我的钱包：{balance, records:[{id,type,typeName,amount,balance,title,createdAt}]}
   Future<Map<String, dynamic>> wallet() async {
     final r = await _api.get('/api/v1/wallet/me');

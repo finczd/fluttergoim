@@ -531,6 +531,18 @@ func RegisterAdminRoutes(r *gin.Engine, cfg *config.Config) {
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
 		})
+		admin.DELETE("/moments/comments/:cid", func(c *gin.Context) {
+			cid, _ := strconv.ParseInt(c.Param("cid"), 10, 64)
+			if cid <= 0 {
+				c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+				return
+			}
+			if err := service.AdminMomentCommentDelete(c.Request.Context(), cid, middleware.CurrentUserID(c)); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": 500, "message": "删除失败"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+		})
 
 		// 群组管理
 		admin.GET("/groups", func(c *gin.Context) {

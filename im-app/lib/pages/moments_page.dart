@@ -6,8 +6,11 @@ import 'package:image_picker/image_picker.dart';
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/moment_service.dart';
+import '../services/user_cache.dart';
 import '../theme/app_theme.dart';
+import '../utils/image_saver.dart';
 import '../widgets/app_dialogs.dart';
+import 'image_viewer_page.dart';
 
 /// 朋友圈（微信风格：封面 + 发布 + 时间线 + 点赞）
 /// 数据走后端 /api/v1/moments（含小助手动态、好友动态；被屏蔽的仅自己可见）
@@ -25,6 +28,18 @@ class _MomentsPageState extends State<MomentsPage> {
   final _svc = MomentService.instance;
   bool _loading = true;
   List<Map<String, dynamic>> _posts = [];
+
+  /// 封面总高度（含状态栏，build 时按机型刷新），供工具栏变色阈值判断
+  double _coverH = 190 + 48;
+
+  /// 滚过封面后工具栏从「透明底 + 白图标」切换为「surface 底 + 深图标」
+  bool _toolbarSolid = false;
+
+  /// 个性签名：我的朋友圈取 UserCache 缓存资料；他人朋友圈走 GET /user/:id 兜底
+  String _signature = '';
+
+  /// 签名只拉一次（下拉刷新不重复请求）
+  bool _signatureLoaded = false;
 
   @override
   void initState() {
@@ -47,6 +62,29 @@ class _MomentsPageState extends State<MomentsPage> {
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
+    }
+    _loadSignature();
+  }
+
+  /// 拉个性签名（只拉一次）：我的直接读本地缓存资料；他人的调用户详情接口，失败静默不显示
+  Future<void> _loadSignature() async {
+    if (_signatureLoaded) return;
+    _signatureLoaded = true;
+    if (widget.userId == null) {
+      final s = (UserCache.myProfileData?['signature'] ?? '').toString();
+      if (mounted && s.isNotEmpty) setState(() => _signature = s);
+      return;
+    }
+    try {
+      final r = await ApiClient.instance.get('/api/v1/user/${widget.userId}');
+      final body = r.data;
+      if (body is Map && body['code'] == 0) {
+        final d = (body['data'] as Map?)?.cast<String, dynamic>();
+        final s = (d?['signature'] ?? '').toString();
+        if (mounted && s.isNotEmpty) setState(() => _signature = s);
+      }
+    } catch (_) {
+      // 签名拉取失败不影响朋友圈主流程
     }
   }
 
@@ -170,100 +208,174 @@ class _MomentsPageState extends State<MomentsPage> {
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context).t;
+    // 封面总高 = 原本 expandedHeight 190 + 状态栏（cover 现在从屏幕 y=0 开始铺）
+    _coverH = 190 + MediaQuery.of(context).padding.top;
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: CustomScrollView(
-          slivers: [
-            SliverAppBar(
-              pinned: true,
-              expandedHeight: 190,
-              backgroundColor: context.cs.surface,
-              leading: IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.arrow_back_ios_new,
-                    size: 20, color: Colors.white),
-              ),
-              flexibleSpace: FlexibleSpaceBar(
-                background: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Image.asset('assets/images/beijing.jpg',
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) =>
-                            Container(color: const Color(0xFF2E4A6B))),
-                    Positioned(
-                      right: 16,
-                      bottom: 14,
-                      child: Row(
-                        children: [
-                          Text(widget.userName ?? t('momentsMe'),
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  shadows: [
-                                    Shadow(blurRadius: 6, color: Colors.black54)
-                                  ])),
-                          const SizedBox(width: 10),
-                          Container(
-                            width: 56,
-                            height: 56,
-                            decoration: BoxDecoration(
-                              color: AppTheme.primary,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 2),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(widget.userName ?? t('momentsMe'),
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w600)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                // 仅「我的朋友圈」显示发布相机，查看他人时不显示
-                if (widget.userId == null)
-                  IconButton(
-                    onPressed: _publish,
-                    icon: const Icon(Icons.camera_alt_outlined,
-                        color: Colors.white),
-                    tooltip: t('momentsPublishTitle'),
-                  ),
-              ],
-            ),
-            if (_loading)
-              const SliverFillRemaining(
-                child: Center(
-                    child: CircularProgressIndicator(color: AppTheme.primary)),
-              )
-            else if (_posts.isEmpty)
-              SliverFillRemaining(
-                child: Center(
-                  child: Text(
-                      widget.userId != null
-                          ? t('momentsFriendEmpty')
-                          : t('momentsMyEmpty'),
-                      style: TextStyle(
-                          fontSize: 13, color: context.cs.onSurfaceVariant)),
-                ),
-              )
-            else
-              SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (ctx, i) => _postItem(_posts[i]),
-                  childCount: _posts.length,
-                ),
-              ),
-          ],
+      // 内容延伸到透明 AppBar 背后：封面铺到屏幕顶，返回/相机按钮悬浮其上
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor:
+            _toolbarSolid ? context.cs.surface : Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: IconButton(
+          onPressed: () => Navigator.pop(context),
+          icon: Icon(Icons.arrow_back_ios_new,
+              size: 20,
+              color: _toolbarSolid ? context.cs.onSurface : Colors.white),
         ),
+        actions: [
+          // 仅「我的朋友圈」显示发布相机，查看他人时不显示
+          if (widget.userId == null)
+            IconButton(
+              onPressed: _publish,
+              icon: Icon(Icons.camera_alt_outlined,
+                  color: _toolbarSolid ? context.cs.onSurface : Colors.white),
+              tooltip: t('momentsPublishTitle'),
+            ),
+        ],
+      ),
+      body: NotificationListener<ScrollNotification>(
+        onNotification: (n) {
+          // 封面滚过工具栏高度后切换底色（微信同款交互）
+          final solid = n.metrics.pixels > _coverH - 56;
+          if (solid != _toolbarSolid) setState(() => _toolbarSolid = solid);
+          return false;
+        },
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: CustomScrollView(
+            slivers: [
+              // 封面 + 微信式悬浮头像（一半叠封面、一半悬列表区，随封面一起滚走）
+              SliverToBoxAdapter(child: _coverHeader()),
+              // 白色签名区：既承接头像下半截（不留灰色缝），又在头像正下方展示个性签名
+              SliverToBoxAdapter(child: _signatureBlock()),
+              if (_loading)
+                const SliverFillRemaining(
+                  child: Center(
+                      child:
+                          CircularProgressIndicator(color: AppTheme.primary)),
+                )
+              else if (_posts.isEmpty)
+                SliverFillRemaining(
+                  child: Center(
+                    child: Text(
+                        widget.userId != null
+                            ? t('momentsFriendEmpty')
+                            : t('momentsMyEmpty'),
+                        style: TextStyle(
+                            fontSize: 13, color: context.cs.onSurfaceVariant)),
+                  ),
+                )
+              else
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (ctx, i) => _postItem(_posts[i]),
+                    childCount: _posts.length,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 封面 + 右下角悬浮头像/昵称（微信朋友圈样式：头像一半在封面内、一半悬在下方）。
+  /// 注意：不用 FlexibleSpaceBar —— 其源码内含 ClipRect 会裁掉溢出的头像。
+  Widget _coverHeader() {
+    final t = AppLocalizations.of(context).t;
+    final name = widget.userName ?? t('momentsMe');
+    // 我的头像走 UserCache；他人朋友圈用其动态里的头像（列表首条即本人发帖），
+    // 都拿不到则回退首字占位（与帖子头像同款双保险写法）
+    var avatarUrl = '';
+    if (widget.userId == null) {
+      avatarUrl = (UserCache.myAvatar ?? '').toString();
+    } else if (_posts.isNotEmpty) {
+      avatarUrl = (_posts.first['senderAvatar'] ?? '').toString();
+    }
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          height: _coverH,
+          child: Image.asset('assets/images/beijing.jpg',
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) =>
+                  Container(color: const Color(0xFF2E4A6B))),
+        ),
+        Positioned(
+          right: 16,
+          bottom: -30, // 60 高头像正好一半叠封面、一半悬列表区
+          child: Row(
+            children: [
+              Text(name,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      shadows: [Shadow(blurRadius: 6, color: Colors.black54)])),
+              const SizedBox(width: 10),
+              // 白色 2px 描边 = 外层白底容器 + 内层 2px padding 的方形圆角头像
+              Container(
+                width: 60,
+                height: 60,
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: avatarUrl.isNotEmpty
+                      ? Image.network(avatarUrl,
+                          width: 56,
+                          height: 56,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => _avatarFallback(name))
+                      : _avatarFallback(name),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 白色签名区（头像悬浮下半截落在这一块上，与封面之间无灰缝）。
+  /// 微信式：签名在头像正下方、右对齐；无签名时仅保留白色留白承接头像。
+  Widget _signatureBlock() {
+    return Container(
+      width: double.infinity,
+      color: context.cs.surface,
+      padding: const EdgeInsets.fromLTRB(16, 36, 16, 6),
+      child: _signature.isEmpty
+          ? const SizedBox.shrink()
+          : Align(
+              alignment: Alignment.centerRight,
+              child: Text(_signature,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 12, color: context.cs.onSurfaceVariant)),
+            ),
+    );
+  }
+
+  /// 头像首字占位（56x56，与帖子头像同风格）
+  Widget _avatarFallback(String name) {
+    return ColoredBox(
+      color: AppTheme.primary.withValues(alpha: 0.85),
+      child: Center(
+        child: Text(name.isEmpty ? '?' : name.characters.first,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w600)),
       ),
     );
   }
@@ -280,6 +392,9 @@ class _MomentsPageState extends State<MomentsPage> {
     final hidden = p['hidden'] == true;
     final time = (p['createdAt'] ?? '').toString();
     final id = (p['id'] ?? '').toString();
+    final comments = ((p['comments'] as List<dynamic>?) ?? [])
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .toList();
     return Container(
       color: context.cs.surface,
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
@@ -368,17 +483,25 @@ class _MomentsPageState extends State<MomentsPage> {
                       runSpacing: 6,
                       children: [
                         for (final img in images)
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: Image.network(img,
-                                width: 108,
-                                height: 108,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => Container(
-                                    width: 108,
-                                    height: 108,
-                                    color: Theme.of(context)
-                                        .scaffoldBackgroundColor)),
+                          GestureDetector(
+                            // 点开全屏大图；长按保存到相册（微信式）
+                            onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => ImageViewerPage(url: img))),
+                            onLongPress: () => _saveImg(img),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: Image.network(img,
+                                  width: 108,
+                                  height: 108,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                      width: 108,
+                                      height: 108,
+                                      color: Theme.of(context)
+                                          .scaffoldBackgroundColor)),
+                            ),
                           ),
                       ],
                     ),
@@ -434,9 +557,52 @@ class _MomentsPageState extends State<MomentsPage> {
                           ),
                         ),
                       ),
+                      const SizedBox(width: 14),
+                      // 评论按钮（样式与点赞一致，右侧带评论数）
+                      InkWell(
+                        onTap: () => _showCommentSheet(p, id),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.mode_comment_outlined,
+                                  size: 16, color: context.cs.onSurfaceVariant),
+                              if (comments.isNotEmpty) ...[
+                                const SizedBox(width: 4),
+                                Text('${comments.length}',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: context.cs.onSurfaceVariant)),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
+                // 微信式灰底评论块（点赞/评论图标行下、Divider 上）
+                if (comments.isNotEmpty)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).scaffoldBackgroundColor,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (var i = 0; i < comments.length; i++) ...[
+                          if (i > 0) const SizedBox(height: 6),
+                          _commentRow(p, comments[i]),
+                        ],
+                      ],
+                    ),
+                  ),
                 Divider(height: 14, color: context.cs.outlineVariant),
               ],
             ),
@@ -444,5 +610,153 @@ class _MomentsPageState extends State<MomentsPage> {
         ],
       ),
     );
+  }
+
+  /// 保存九宫格图片到相册（结果轻提示）
+  Future<void> _saveImg(String url) async {
+    final t = AppLocalizations.of(context).t;
+    try {
+      final ok = await ImageSaver.saveNetworkImage(url);
+      if (!mounted) return;
+      AppDialogs.toast(
+          context, ok ? t('momentsSaved') : t('momentsSaveFailed'));
+    } catch (_) {
+      if (mounted) AppDialogs.toast(context, t('momentsSaveFailed'));
+    }
+  }
+
+  /// 评论单行：`昵称：内容`；自己的评论长按弹确认删除（服务端仅允许删自己的）
+  Widget _commentRow(Map<String, dynamic> p, Map<String, dynamic> c) {
+    final t = AppLocalizations.of(context).t;
+    final cname = (c['senderName'] ?? '').toString();
+    final ctext = (c['content'] ?? '').toString();
+    final cid = (c['id'] ?? '').toString();
+    final mine = c['userId']?.toString() == UserCache.myId;
+    return GestureDetector(
+      onLongPress: mine ? () => _deleteComment(p, cid) : null,
+      child: Text.rich(
+        TextSpan(children: [
+          TextSpan(
+              text: '$cname：',
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF3D6BA8))),
+          TextSpan(
+              text: ctext,
+              style: TextStyle(fontSize: 13, color: context.cs.onSurface)),
+        ]),
+      ),
+    );
+  }
+
+  /// 删除自己的评论（服务端确认 + 本地移除）
+  Future<void> _deleteComment(Map<String, dynamic> p, String cid) async {
+    final t = AppLocalizations.of(context).t;
+    final ok = await AppDialogs.confirm(context,
+        title: t('momentsDeleteComment'),
+        message: t('momentsDeleteCommentConfirm'),
+        danger: true);
+    if (ok != true) return;
+    try {
+      await _svc.deleteComment(cid);
+      if (!mounted) return;
+      setState(() {
+        p['comments'] = ((p['comments'] as List<dynamic>?) ?? [])
+            .where((e) => ((e as Map)['id'] ?? '').toString() != cid)
+            .toList();
+      });
+    } catch (_) {
+      if (mounted) AppDialogs.toast(context, t('momentsActionFailed'));
+    }
+  }
+
+  /// 底部评论输入条（微信式）：圆角顶 + 自动聚焦输入框 + 发送按钮
+  Future<void> _showCommentSheet(Map<String, dynamic> p, String postId) async {
+    final t = AppLocalizations.of(context).t;
+    final ctrl = TextEditingController();
+    final sent = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.cs.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            12, 12, 12, MediaQuery.of(ctx).viewInsets.bottom + 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: ctrl,
+                autofocus: true,
+                minLines: 1,
+                maxLines: 4,
+                style: const TextStyle(fontSize: 15),
+                decoration: InputDecoration(
+                  hintText: t('momentsCommentHint'),
+                  hintStyle: TextStyle(color: context.cs.onSurfaceVariant),
+                  filled: true,
+                  fillColor: Theme.of(context).scaffoldBackgroundColor,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: () {
+                // 空内容拦截，不关面板
+                if (ctrl.text.trim().isEmpty) {
+                  AppDialogs.toast(ctx, t('momentsCommentEmpty'));
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              style: TextButton.styleFrom(foregroundColor: AppTheme.primary),
+              child: Text(t('momentsCommentSend')),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (sent != true || !mounted) return;
+    final text = ctrl.text.trim();
+    if (text.isEmpty) {
+      AppDialogs.toast(context, t('momentsCommentEmpty'));
+      return;
+    }
+    try {
+      final data = await _svc.comment(postId, text);
+      if (!mounted) return;
+      setState(() {
+        final list = ((p['comments'] as List<dynamic>?) ?? []).toList();
+        // 服务端返回 {ID, PostID, UserID, Content, CreatedAt}（大写驼峰），
+        // 组装成与列表一致的本地 comment map 追加展示
+        list.add({
+          'id': (data['ID'] ?? data['id'] ?? '').toString(),
+          'senderName': _myName(),
+          'senderAvatar': (UserCache.myAvatar ?? '').toString(),
+          'content': text,
+          'createdAt':
+              (data['CreatedAt'] ?? data['createdAt'] ?? '').toString(),
+          'userId': data['UserID']?.toString() ?? UserCache.myId ?? '',
+        });
+        p['comments'] = list;
+      });
+    } catch (_) {
+      if (mounted) AppDialogs.toast(context, t('momentsCommentFailed'));
+    }
+  }
+
+  /// 当前登录用户昵称（UserCache 资料 nickname 字段，me_page 同款取法）
+  String _myName() {
+    final prof = UserCache.myProfileData;
+    final n = (prof?['nickname'] ?? prof?['name'] ?? '').toString();
+    if (n.isNotEmpty) return n;
+    return UserCache.myId ?? '';
   }
 }

@@ -282,6 +282,14 @@ class ApiClient {
         options: Options(headers: {'Authorization': 'Bearer $token'}));
   }
 
+  /// DELETE 请求（带 token）。朋友圈删自己的评论等场景使用。
+  Future<Response> delete(String path, {Object? data}) async {
+    final token = await readToken();
+    return _dio.delete(path,
+        data: data,
+        options: Options(headers: {'Authorization': 'Bearer $token'}));
+  }
+
   /// 上传文件到 MinIO，返回 URL（需求3：图片发送）
   Future<Map<String, dynamic>> uploadFile(String filePath, String fileName,
       {String dir = 'chat/'}) async {

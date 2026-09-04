@@ -108,6 +108,8 @@
 - `GET /api/v1/moments/:ownerId`
 - `POST /api/v1/moments`
 - `POST /api/v1/moments/:id/like`
+- `POST /api/v1/moments/:id/comment`
+- `DELETE /api/v1/moments/comment/:cid`
 
 
 ### 管理后台（一）：用户/配置/应用/助手/财务
@@ -159,6 +161,7 @@
 - `POST /api/v1/admin/moments`
 - `PUT /api/v1/admin/moments/:id/hidden`
 - `DELETE /api/v1/admin/moments/:id`
+- `DELETE /api/v1/admin/moments/comments/:cid`
 - `GET /api/v1/admin/stats/overview`
 - `GET /api/v1/admin/stats/messages`
 - `GET /api/v1/admin/logs`
@@ -1334,6 +1337,27 @@
 - 错误码: 1001(动态不存在)
 - 备注: 重复调用在已赞/未赞间切换；`id` 非数字或动态不存在返回 1001。
 
+### `POST /api/v1/moments/:id/comment`
+
+- 鉴权: 需要Token
+- 说明: 发表朋友圈评论（最长 500 字，自动去首尾空白）
+- 路径参数: `id:string`（动态 ID）
+- 请求体:
+  ```json
+  {"content":"string // 必填，非空白"}
+  ```
+- 成功响应 data: MomentsComment `{id:string,postId:string,userId:string,content,createdAt}`
+- 错误码: 1001 评论内容为空 / 超长 / 动态不存在或已删除
+- 备注: 评论随动态输出在 `GET /moments`、`GET /moments/:ownerId`、`GET /admin/moments` 的 `comments` 字段。
+
+### `DELETE /api/v1/moments/comment/:cid`
+
+- 鉴权: 需要Token
+- 说明: 删除自己的评论
+- 路径参数: `cid:string`（评论 ID）
+- 成功响应 data: 无
+- 错误码: 1001 评论不存在或无权删除（只能删自己的）
+
 ---
 
 > 通用说明：所有接口前缀 `/api/v1/admin`，均经 `middleware.Auth` + `middleware.RequireAdmin`，即**需 Bearer Token 且当前用户具备管理员角色**。>   
@@ -1808,7 +1832,7 @@
 - 路径参数: 无
 - 查询参数: `page:int`(默认1), `size:int`(默认20)
 - 请求体: 无
-- 成功响应 data: `{"total":int,"list":[{id:string,userId:string,senderName,senderAvatar,assistant:bool,content,images:[]string,likeCount:int,liked:bool,hidden:bool,mine:bool,createdAt:string}]}`（分页：total + list）
+- 成功响应 data: `{"total":int,"list":[{id:string,userId:string,senderName,senderAvatar,assistant:bool,content,images:[]string,likeCount:int,likes:[{userId,name,avatar}],commentCount:int,comments:[{id,postId,userId,senderName,senderAvatar,content,createdAt}],liked:bool,hidden:bool,mine:bool,createdAt:string}]}`（分页：total + list）
 - 错误码: 500 查询失败
 - 备注: 发布者 `userId=-1` 表示小助手（后台发布的朋友圈）。
 
@@ -1840,10 +1864,19 @@
 - 错误码: 500 操作失败
 - 备注: 记后台日志 `moment.hide`/`moment.unhide`。
 
+### `DELETE /api/v1/admin/moments/comments/:cid`
+
+- 鉴权: 需管理员
+- 说明: 后台删除单条朋友圈评论
+- 路径参数: `cid:int`（`<=0` 报 1001）
+- 成功响应 data: 无
+- 错误码: 1001 参数错误；500 删除失败
+- 备注: 记后台日志 `moment.commentDelete`。
+
 ### `DELETE /api/v1/admin/moments/:id`
 
 - 鉴权: 需管理员
-- 说明: 删除违规朋友圈
+- 说明: 删除违规朋友圈（级联删除该动态全部评论）
 - 路径参数: `id:int`（ParseInt 忽略错误）
 - 查询参数: 无
 - 请求体: 无

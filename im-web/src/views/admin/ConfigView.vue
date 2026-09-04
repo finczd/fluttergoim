@@ -221,6 +221,30 @@
         </a-card>
       </div>
 
+      <!-- 邮件 SMTP -->
+      <div v-show="activeSection === 'smtp'" class="section">
+        <h2 class="section-title">邮件 SMTP</h2>
+        <p class="section-desc">邮箱验证码（auth_mode=email）发信使用；保存后即时生效，无需重启。未配置时回退到环境变量 SMTP_*</p>
+
+        <a-card class="form-card">
+          <a-form layout="vertical" :model="smtp">
+            <a-form-item label="SMTP 服务器（smtp_host）">
+              <a-input v-model="smtp.host" placeholder="smtp.qq.com" />
+            </a-form-item>
+            <a-form-item label="发信账号（smtp_user）">
+              <a-input v-model="smtp.user" placeholder="noreply@example.com" />
+            </a-form-item>
+            <a-form-item label="授权码 / 密码（smtp_password）">
+              <a-input-password v-model="smtp.password" placeholder="••••••" />
+            </a-form-item>
+            <a-form-item label="发件人地址（smtp_from）">
+              <a-input v-model="smtp.from" placeholder="noreply@example.com" />
+            </a-form-item>
+            <a-button type="primary" @click="saveSmtp">保存邮件配置</a-button>
+          </a-form>
+        </a-card>
+      </div>
+
       <!-- 音视频 -->
       <div v-show="activeSection === 'trtc'" class="section">
         <h2 class="section-title">腾讯云 TRTC</h2>
@@ -595,7 +619,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, markRaw } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { IconImage, IconUserGroup, IconInfoCircle, IconNotification, IconStorage, IconMessage, IconCamera, IconSettings, IconSend, IconQrcode, IconWechatpay, IconExport, IconEye, IconDelete, IconCheckCircle, IconExperiment } from '@arco-design/web-vue/es/icon'
+import { IconImage, IconUserGroup, IconInfoCircle, IconNotification, IconStorage, IconMessage, IconCamera, IconSettings, IconSend, IconQrcode, IconWechatpay, IconExport, IconEye, IconDelete, IconCheckCircle, IconExperiment, IconEmail } from '@arco-design/web-vue/es/icon'
 import { adminApi } from '@/api/admin'
 import ImageUpload from './ImageUpload.vue'
 
@@ -611,6 +635,7 @@ const sections = [
   { key: 'storage', title: '对象存储', icon: markRaw(IconStorage) },
   { key: 'pay', title: '支付配置', icon: markRaw(IconQrcode) },
   { key: 'sms', title: '短信', icon: markRaw(IconMessage) },
+  { key: 'smtp', title: '邮件', icon: markRaw(IconEmail) },
   { key: 'trtc', title: '音视频', icon: markRaw(IconCamera) },
   { key: 'jpush', title: '推送', icon: markRaw(IconSend) },
   { key: 'infra', title: '节点', icon: markRaw(IconSettings) }
@@ -625,6 +650,7 @@ const savingKefu = ref(false)
 const brand = ref({ appName: '', brandName: '', appLogo: '', brandLogo: '' })
 const version = ref({ appVersion: '', updateLog: '', androidUrl: '', iosUrl: '', hotUpdateUrl: '' })
 const sms = ref({ accessKey: '', secret: '', signName: '', templateCode: '' })
+const smtp = ref({ host: '', user: '', password: '', from: '' })
 const trtc = ref({ appId: '', secretKey: '' })
 const jpush = ref({ enabled: false, appKey: '', masterSecret: '', apnsProduction: false })
 const minio = ref({ endpoint: '', publicUrl: '', accessKey: '', secretKey: '', bucket: '' })
@@ -746,6 +772,14 @@ onMounted(async () => {
   const trtcKeys = ['trtc_app_id', 'trtc_secret_key']
   const [ta, tk] = await Promise.all(trtcKeys.map((k) => adminApi.configGet(k)))
   trtc.value = { appId: String(ta.data.data || ''), secretKey: String(tk.data.data || '') }
+  const smtpKeys = ['smtp_host', 'smtp_user', 'smtp_password', 'smtp_from']
+  const [sh, su, sp, sf] = await Promise.all(smtpKeys.map((k) => adminApi.configGet(k)))
+  smtp.value = {
+    host: String(sh.data.data || ''),
+    user: String(su.data.data || ''),
+    password: String(sp.data.data || ''),
+    from: String(sf.data.data || '')
+  }
   const jpKeys = ['jpush_enabled', 'jpush_app_key', 'jpush_master_secret', 'jpush_apns_production']
   const [je, ja, jm, jp] = await Promise.all(jpKeys.map((k) => adminApi.configGet(k)))
   jpush.value = {
@@ -822,6 +856,16 @@ async function saveSms() {
     adminApi.configSet('sms_template_code', sms.value.templateCode)
   ])
   Message.success('短信配置已保存')
+}
+
+async function saveSmtp() {
+  await Promise.all([
+    adminApi.configSet('smtp_host', smtp.value.host),
+    adminApi.configSet('smtp_user', smtp.value.user),
+    adminApi.configSet('smtp_password', smtp.value.password),
+    adminApi.configSet('smtp_from', smtp.value.from)
+  ])
+  Message.success('邮件配置已保存（即时生效）')
 }
 
 async function saveTrtc() {

@@ -37,7 +37,8 @@ const router = createRouter({
         { path: 'logs', component: () => import('@/views/admin/LogView.vue') },
         { path: 'finance', component: () => import('@/views/admin/FinanceView.vue') },
         { path: 'recharge-orders', component: () => import('@/views/admin/RechargeOrdersView.vue') },
-        { path: 'withdraw-orders', component: () => import('@/views/admin/WithdrawOrdersView.vue') }
+        { path: 'withdraw-orders', component: () => import('@/views/admin/WithdrawOrdersView.vue') },
+        { path: 'moments', component: () => import('@/views/admin/MomentsView.vue') }
       ]
     }
   ]

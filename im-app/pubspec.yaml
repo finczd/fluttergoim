@@ -23,6 +23,7 @@ dependencies:
   qr_flutter: ^4.1.0         # 扫码登录页生成二维码
   mobile_scanner: ^6.0.0     # 移动端扫一扫（升级 6.x 修复 Android 摄像头 NPE）
   image_picker: ^1.1.2       # 相册选图发送（需求3：图片发送）
+  image_gallery_saver_plus: ^5.1.1 # 图片保存到系统相册（原 image_gallery_saver 2.0.3 未适配新 AGP namespace 致构建失败，换维护版分支，API 兼容）
   permission_handler: ^11.3.1 # 运行时权限申请（音视频通话的麦克风/摄像头）
   jpush_flutter: 3.5.6       # 极光推送（离线消息系统通知，Android 厂商通道 + iOS APNs）
   flutter_local_notifications: ^17.2.4  # 本地通知（App 在线/后台时 WS 收到新消息 → 通知栏提示；
