@@ -1,14 +1,15 @@
 # Codemagic CI 配置（放仓库根目录）
 # 仓库是 monorepo，Flutter 工程在 im-app/ 子目录 —— 所有脚本都必须 working_directory: im-app
 #
-# 签名说明（二选一）：
-#   A. 自动签名（推荐）：Codemagic 网页 → Teams → Developer accounts 绑定
-#      Apple 开发者账号（App Store Connect API Key），本 yaml 的 ios_signing 会自动取证书/描述文件
-#   B. 手动签名：删掉 environment 里的 ios_signing，改为在应用设置 → Code signing
-#      上传 .p12 证书 + .mobileprovision 描述文件
-#
-# distribution_type 取值：
-#   development / ad_hoc = 测试设备直装；app_store = TestFlight / 商店上架
+# 签名方式：手动上传证书（App Store Connect API Key 自动签名的写法见文末注释）
+#   1. Codemagic 网页 → 应用设置 → Code signing → 上传：
+#      - .p12 证书（含私钥）
+#      - .mobileprovision 描述文件（Bundle ID 必须是 com.ioslgm.44108）
+#   2. 描述文件类型决定导出方式：
+#      - 企业证书(In-House) → method: enterprise
+#      - 正式发布证书(ad-hoc) → method: ad-hoc（当前配置）
+#      - 开发证书(development) → method: development
+#   3. use-profiles 脚本会自动把上传的证书/描述文件挂到工程上
 
 workflows:
   ios-ipa:
@@ -18,12 +19,14 @@ workflows:
       flutter: stable
       xcode: latest
       ios_signing:
-        distribution_type: ad_hoc          # 测试装真机用 ad_hoc；上 TestFlight 改 app_store
-        bundle_identifier: com.qingniao.im  # iOS Bundle ID（已从工程里确认）
+        distribution_type: ad_hoc          # 企业证书改 enterprise；上 TestFlight 改 app_store
+        bundle_identifier: com.ioslgm.44108 # 与苹果描述文件一致
     scripts:
       - name: 拉取 Flutter 依赖
         working_directory: im-app
         script: flutter packages pub get
+      - name: 挂载证书与描述文件
+        script: xcode-project use-profiles
       - name: 生成导出配置并打包 IPA
         working_directory: im-app
         script: |
@@ -35,14 +38,13 @@ workflows:
             <key>method</key>
             <string>ad-hoc</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
             <key>stripSwiftSymbols</key>
             <true/>
           </dict>
           </plist>
           EOF
           flutter build ipa --release --export-options-plist=/tmp/exportOptions.plist
-      # 上 TestFlight / 商店时把上面 method 改成 app-store（distribution_type 也同步改）
     artifacts:
       - im-app/build/ios/ipa/*.ipa
     publishing:
@@ -52,3 +54,11 @@ workflows:
         notify:
           success: true
           failure: true
+
+# —— 自动签名备选（App Store Connect API Key 方式，上 TestFlight/商店推荐）——
+# environment 里改为：
+#   ios_signing:
+#     distribution_type: app_store
+#     bundle_identifier: com.ioslgm.44108
+# 并在 Codemagic → Teams → Developer accounts 绑定 API Key，删掉 use-profiles 手动挂载步骤
+# 的依赖也可（Codemagic 会自动取证书）；导出配置 method 改 app-store
