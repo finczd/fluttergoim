@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../config/app_config.dart';
@@ -97,9 +98,17 @@ class ApiClient {
 
   /// 持久化设备号：首次生成 UUID(v4) 存入安全存储，之后复用。
   /// 游客注册以设备号为幂等键，保证同一设备只对应一个游客账号。
+  /// Web 平台 FlutterSecureStorage 在部分 origin（隐私模式 / 跨域 iframe / 存储被禁）
+  /// 偶发抛错；用 try/catch 兜底，写失败仍返回本次 UUID（仅当前会话持久），
+  /// 不让设备号获取失败阻断游客登录主流程。
   static const _deviceIdKey = 'device_id';
   Future<String> getDeviceId() async {
-    final existing = await readPref(_deviceIdKey);
+    String? existing;
+    try {
+      existing = await readPref(_deviceIdKey);
+    } catch (_) {
+      // 读失败（如 Web 上 FSS 异常）→ 当作未持久化，继续生成新 UUID
+    }
     if (existing != null && existing.isNotEmpty) return existing;
     final rnd = Random.secure();
     final b = List<int>.generate(16, (_) => rnd.nextInt(256));
@@ -109,7 +118,11 @@ class ApiClient {
     final uuid =
         '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-'
         '${hex.substring(16, 20)}-${hex.substring(20, 32)}';
-    await writePref(_deviceIdKey, uuid);
+    try {
+      await writePref(_deviceIdKey, uuid);
+    } catch (_) {
+      // 写失败也不阻断：本次登录可用；关页面后设备号丢失（下次会当新游客）
+    }
     return uuid;
   }
 

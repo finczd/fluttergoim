@@ -1,5 +1,4 @@
-import 'dart:io';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -74,7 +73,11 @@ class _GuestPageState extends State<GuestPage>
   }
 
   int get _deviceType {
-    if (Platform.isIOS) return 2;
+    // 设备类型与 im-server GuestRegister 对齐：1=Android 2=iOS 3=Web 4=Windows 5=macOS
+    // 用 defaultTargetPlatform 替代 dart:io Platform（Web 上 dart:io Platform 抛
+    // Unsupported operation: Platform._operatingSystem 直接崩页）。
+    if (kIsWeb) return 3;
+    if (defaultTargetPlatform == TargetPlatform.iOS) return 2;
     return 1; // Android 等默认
   }
 

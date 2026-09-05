@@ -1,7 +1,7 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -17,8 +17,10 @@ class ImageSaver {
   /// Dio 下载 bytes（图片是 MinIO 完整地址，不经带 token 的 ApiClient）→
   /// ImageGallerySaverPlus.saveImage 写入相册。
   static Future<bool> saveNetworkImage(String url) async {
+    // Web 无系统相册可写，直接跳过（dart:io Platform 在 Web 抛 Unsupported 报错崩页）
+    if (kIsWeb) return false;
     // Android ≤12 写相册需要存储权限；13+ request() 直接返回 denied，不影响保存
-    if (Platform.isAndroid) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
       try {
         await Permission.storage.request();
       } catch (_) {
