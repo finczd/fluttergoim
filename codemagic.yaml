@@ -28,11 +28,15 @@ workflows:
     scripts:
       - name: 拉取 Flutter 依赖
         script: flutter packages pub get
-      - name: 挂载证书与描述文件
-        script: xcode-project use-profiles
-      - name: 打包 IPA（导出配置用 use-profiles 生成的 $CM_EXPORT_OPTIONS，含 ad-hoc/teamID/描述文件映射）
+      - name: 挂载证书并打包 IPA
         script: |
-          flutter build ipa --release --export-options-plist=$CM_EXPORT_OPTIONS
+          xcode-project use-profiles
+          if [ -n "$CM_EXPORT_OPTIONS" ]; then
+            flutter build ipa --release --export-options-plist="$CM_EXPORT_OPTIONS"
+          else
+            echo "CM_EXPORT_OPTIONS 为空，改用 Flutter 自动导出配置（工程已由 use-profiles 挂好签名）"
+            flutter build ipa --release
+          fi
     artifacts:
       - build/ios/ipa/*.ipa               # 相对 working_directory(im-app)，即 im-app/build/ios/ipa/*.ipa
     publishing:
