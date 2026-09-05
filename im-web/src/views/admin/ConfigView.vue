@@ -65,6 +65,12 @@
             <a-form-item label="邀请码注册">
               <a-switch v-model="cfg.inviteCodeOn" @change="save('invite_code_enabled', $event)" />
             </a-form-item>
+            <a-form-item label="游客注册">
+              <a-switch v-model="cfg.guestOn" @change="save('guest_register_enabled', $event)" />
+              <template #extra>
+                开启后：App 未登录用户首屏进入「游客模式」引导页，可一键按设备号自动注册并登录；若同时开启「邀请码注册」，游客登录后会引导填写邀请码并自动加好友
+              </template>
+            </a-form-item>
             <a-form-item label="图形验证码">
               <a-switch v-model="cfg.captchaOn" @change="save('captcha_enabled', $event)" />
             </a-form-item>

@@ -34,6 +34,7 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 		api.POST("/auth/send-code", SendCodeHandler(cfg))
 		api.POST("/auth/register", RegisterHandler(cfg))
 		api.POST("/auth/login", LoginHandler(cfg))
+		api.POST("/auth/guest", GuestRegisterHandler(cfg))
 		api.POST("/auth/refresh", RefreshHandler(cfg))
 		api.GET("/auth/config", func(c *gin.Context) { AuthConfig(c, cfg) })
 
@@ -58,8 +59,10 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config) {
 		// 用户（需登录）
 		user := api.Group("", middleware.Auth(cfg))
 		{
-			user.POST("/auth/logout", LogoutHandler())
-			// 文件上传（MinIO）：multipart form，字段 file + 可选 dir(chat/avatar)
+		user.POST("/auth/logout", LogoutHandler())
+		// 登录后补填邀请码（游客/普通用户通用）：复用现有邀请码逻辑自动加好友
+		user.POST("/invite/bind", InviteBindHandler())
+		// 文件上传（MinIO）：multipart form，字段 file + 可选 dir(chat/avatar)
 			user.POST("/upload", func(c *gin.Context) {
 				file, header, err := c.Request.FormFile("file")
 				if err != nil {

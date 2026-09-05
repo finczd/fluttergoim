@@ -5,7 +5,7 @@ export default defineEventHandler(async () => {
     contact_wechat, contact_qq, contact_phone, contact_email,
     price_standard_usdt, price_professional_usdt, price_enterprise_text, price_period,
     price_standard_note, price_professional_note, price_enterprise_note,
-    android_download_url, admin_panel_url, pc_client_url
+    android_download_url, ios_download_url, ios_self_sign_guide, admin_panel_url, pc_client_url
     FROM site_config WHERE id = 1`).get() as any
   return {
     code: 0,
@@ -21,6 +21,8 @@ export default defineEventHandler(async () => {
       contactEmail: r.contact_email || '',
       h5DemoUrl: r.h5_demo_url,
       androidDownloadUrl: r.android_download_url || '',
+      iosDownloadUrl: r.ios_download_url || '',
+      iosSelfSignGuide: r.ios_self_sign_guide || '请自行签名安装测试',
       adminPanelUrl: r.admin_panel_url || '',
       pcClientUrl: r.pc_client_url || '',
       pricing: {

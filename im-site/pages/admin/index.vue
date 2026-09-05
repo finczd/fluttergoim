@@ -102,6 +102,12 @@
               <FormField label="Android APK 下载地址">
                 <input v-model="siteCfg.androidDownloadUrl" class="form-input" placeholder="https://xxx.com/app.apk" />
               </FormField>
+              <FormField label="iOS 下载地址（可选，留空则显示自签名提示）">
+                <input v-model="siteCfg.iosDownloadUrl" class="form-input" placeholder="https://xxx.com/app.ipa 或 App Store 链接" />
+              </FormField>
+              <FormField label="iOS 安装提示文案">
+                <input v-model="siteCfg.iosSelfSignGuide" class="form-input" placeholder="请自行签名安装测试" />
+              </FormField>
               <FormField label="后台管理地址">
                 <input v-model="siteCfg.adminPanelUrl" class="form-input" placeholder="https://xxx.com/admin" />
               </FormField>
@@ -212,19 +218,15 @@
       <!-- CALLOUT 编辑说明 -->
       <div class="card docs-callout">
         <div class="docs-callout-head">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#165dff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <strong>文档编辑说明</strong>
-          <button class="btn-primary-sm" @click="syncDocs()" :disabled="docsSyncing" style="margin-left:auto">
-            {{ docsSyncing ? '同步中...' : '手动同步（从仓库 docs 目录）' }}
-          </button>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#165dff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <strong>文档管理</strong>
+          <button class="btn-primary-sm" @click="newDoc()" style="margin-left:auto">+ 新建文档</button>
         </div>
         <ul class="docs-callout-list">
-          <li><strong>方式一（推荐）：</strong>在此页面直接在线编辑 Markdown 源文件，点击保存即时生效。保存后文件位于 <code>im-site/content/docs/</code> 目录下，可直接用 Git 提交。</li>
-          <li><strong>方式二：</strong>直接修改仓库根目录 <code>d:\im-project\docs</code> 下的 md 文件，Nitro 服务每次（重新）启动都会自动把最新内容同步覆盖到 <code>content/docs/</code> 目录；修改后如不重启可点击右上角「手动同步」按钮。</li>
-          <li><strong>新增文档：</strong>在 <code>content/docs/</code> 目录新增 <code>*.md</code> 文件，或在仓库 <code>docs/</code> 加好后重启服务，列表会自动出现。</li>
-          <li><strong>删除文档：</strong>在服务器删除对应的 md 文件，刷新列表即可。</li>
+          <li>文档保存在 SQLite 数据库中，不再依赖服务器文件系统。</li>
+          <li>直接在此页面新建、编辑、删除文档；保存后官网 <code>/api-docs</code> 页面即时生效。</li>
+          <li>支持完整 Markdown（GFM），包括表格、代码块、列表、锚点链接。</li>
         </ul>
-        <div v-if="docsSyncMsg" :class="['docs-toast', docsSyncMsg.ok ? 'ok' : 'err']">{{ docsSyncMsg.text }}</div>
       </div>
 
       <!-- 主工作区 -->
@@ -235,52 +237,141 @@
             <button class="btn-grey" @click="loadDocsList()" :disabled="docsListLoading">刷新</button>
           </div>
           <div v-if="docsListLoading" class="empty-row">加载中...</div>
-          <div v-else-if="!docsList.length" class="empty-row">暂无文档</div>
+          <div v-else-if="!docsList.length" class="empty-row">暂无文档，点击上方「+ 新建文档」开始</div>
           <ul v-else class="docs-list">
             <li
               v-for="d in docsList"
               :key="d.slug"
-              :class="['docs-item', { active: currentDocSlug === d.slug, excluded: d.excluded }]"
+              :class="['docs-item', { active: currentDocSlug === d.slug }]"
               @click="loadDocContent(d.slug)"
             >
               <div class="item-title">{{ d.title }}</div>
               <div class="item-meta">
                 <span class="item-cat">{{ d.categoryLabel }}</span>
-                <span v-if="d.excluded" class="tag tag-grey">未展示</span>
+                <span class="item-size">{{ fmtSize(d.size) }}</span>
               </div>
               <div class="item-bottom">
-                <span class="item-file">{{ d.fileName }}</span>
-                <span class="item-size">{{ fmtSize(d.size) }}</span>
+                <span class="item-file">/{{ d.slug }}</span>
+                <span class="item-size">{{ d.mtime ? new Date(d.mtime).toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit' }).replace(/\//g,'-') : '' }}</span>
               </div>
             </li>
           </ul>
         </div>
 
         <div class="docs-edit-panel">
+          <!-- 元数据条 -->
+          <div v-if="currentDocSlug" class="doc-meta-bar">
+            <div class="meta-row">
+              <label>标题</label>
+              <input v-model="docTitle" class="doc-input" placeholder="文档标题" @input="onTitleInput" />
+            </div>
+            <div class="meta-row">
+              <label>Slug</label>
+              <input v-model="docSlugInput" class="doc-input" placeholder="自动根据标题生成" @input="titleSlugUserEdited = true" />
+            </div>
+            <div class="meta-row">
+              <label>分类</label>
+              <select v-model="docCategory" class="doc-input">
+                <option value="arch">架构与设计</option>
+                <option value="api">APP API 文档</option>
+                <option value="recharge">充值提现</option>
+                <option value="deploy">部署运维</option>
+                <option value="custom">定制开发</option>
+                <option value="other">其他</option>
+              </select>
+            </div>
+            <div class="meta-row">
+              <label>排序</label>
+              <input v-model.number="docOrder" type="number" class="doc-input" placeholder="数字越小越靠前" />
+            </div>
+          </div>
+
+          <!-- 编辑器工具栏 -->
+          <div v-if="currentDocSlug" class="doc-toolbar">
+            <div class="doc-toolbar-left">
+              <button class="tb-btn" title="粗体 Ctrl+B" @click="wrapSel('**','**')"><b>B</b></button>
+              <button class="tb-btn" title="斜体 Ctrl+I" @click="wrapSel('*','*')"><i>I</i></button>
+              <button class="tb-btn" title="删除线" @click="wrapSel('~~','~~')"><s>S</s></button>
+              <span class="tb-sep"></span>
+              <button class="tb-btn" title="H1" @click="prefixLine('# ')">H1</button>
+              <button class="tb-btn" title="H2" @click="prefixLine('## ')">H2</button>
+              <button class="tb-btn" title="H3" @click="prefixLine('### ')">H3</button>
+              <span class="tb-sep"></span>
+              <button class="tb-btn" title="无序列表" @click="prefixLine('- ')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg></button>
+              <button class="tb-btn" title="有序列表" @click="prefixLine('1. ')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="2" y="9" font-size="7" fill="currentColor" stroke="none">1</text><text x="2" y="15" font-size="7" fill="currentColor" stroke="none">2</text><text x="2" y="21" font-size="7" fill="currentColor" stroke="none">3</text></svg></button>
+              <button class="tb-btn" title="引用" @click="prefixLine('> ')">"</button>
+              <span class="tb-sep"></span>
+              <button class="tb-btn" title="链接" @click="insertMarkdown('[链接文字](url)')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+              <button class="tb-btn" title="图片" @click="insertMarkdown('![图片](url)')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></button>
+              <button class="tb-btn" title="行内代码" @click="wrapSel('`','`')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></button>
+              <button class="tb-btn" title="代码块" @click="wrapSel('\n```\n','\n```\n')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 8l-3 4 3 4M15 8l3 4-3 4"/></svg></button>
+              <button class="tb-btn" title="表格" @click="insertMarkdown('\n| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| A   | B   | C   |\n')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg></button>
+              <span class="tb-sep"></span>
+              <button class="tb-btn" title="分隔线" @click="insertAtCursor('\n\n---\n\n')">—</button>
+            </div>
+            <div class="doc-toolbar-right">
+              <span class="tb-status">{{ docContent.length }} 字</span>
+              <button class="tb-btn" :class="{ active: showPreview }" @click="showPreview = !showPreview" title="预览">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                {{ showPreview ? '隐藏预览' : '预览' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- 顶栏（标题 + 保存/删除） -->
           <div class="panel-head">
             <div class="edit-info">
-              <span v-if="currentDocFileName" class="current-filename">{{ currentDocFileName }}</span>
-              <span v-else class="current-filename placeholder">请在左侧选择一个文档</span>
+              <span v-if="currentDocSlug" class="current-filename">
+                编辑中：<strong>{{ docTitle || currentDocSlug }}</strong>
+              </span>
+              <span v-else class="current-filename placeholder">请在左侧选择一个文档，或点击「+ 新建文档」</span>
             </div>
-            <button
-              class="btn-primary-sm"
-              :disabled="!currentDocSlug || docSaving || !docDirty"
-              @click="saveDoc()"
-            >
-              {{ docSaving ? '保存中...' : '保存修改' }}
-            </button>
+            <div class="edit-actions">
+              <button
+                v-if="currentDocSlug"
+                class="btn-danger-sm"
+                @click="deleteDoc"
+                :disabled="docSaving"
+              >删除</button>
+              <button
+                class="btn-primary-sm"
+                :disabled="!currentDocSlug || docSaving || !docDirty"
+                @click="saveDoc()"
+              >
+                {{ docSaving ? '保存中...' : '保存' }}
+              </button>
+            </div>
           </div>
+
           <div v-if="saveDocToast" :class="['docs-toast', saveDocToast.ok ? 'ok' : 'err']" style="margin: 12px 0">
-            <div><strong>{{ saveDocToast.title }}</strong></div>
-            <div style="font-size:13px;margin-top:6px;line-height:1.7">{{ saveDocToast.detail }}</div>
+            {{ saveDocToast.text }}
           </div>
-          <textarea
-            class="doc-textarea"
-            v-model="docContent"
-            :disabled="!currentDocSlug"
-            :placeholder="currentDocSlug ? '' : '请在左侧选择文档后在此编辑 Markdown 源码...'"
-            spellcheck="false"
-          />
+
+          <!-- 编辑区（分屏：左编辑 + 右预览） -->
+          <div v-if="currentDocSlug" class="doc-edit-body" :class="{ 'doc-split': showPreview }">
+            <div class="doc-editor-pane">
+              <textarea
+                ref="docTextareaEl"
+                class="doc-textarea"
+                v-model="docContent"
+                :disabled="!currentDocSlug"
+                placeholder="在此编辑 Markdown 源码..."
+                spellcheck="false"
+                @scroll="syncPreviewScroll"
+              />
+            </div>
+            <div v-if="showPreview" class="doc-preview-pane">
+              <div class="doc-preview-head">预览</div>
+              <div class="doc-preview-body markdown-body" v-html="renderedPreview"></div>
+            </div>
+          </div>
+          <div v-else class="doc-empty-hint">
+            <div class="doc-empty-icon">
+              <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#c9cdd4" stroke-width="1.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            </div>
+            <p>请在左侧选择一个文档开始编辑</p>
+            <p class="hint-sub">或点击右上角「+ 新建文档」创建新文档</p>
+          </div>
         </div>
       </div>
     </div>
@@ -602,6 +693,8 @@
 </template>
 
 <script setup lang="ts">
+import { pinyin } from 'pinyin-pro'
+import { marked } from 'marked'
 import AdminLayout from '../../layouts/admin.vue'
 import Pagination from '../../components/admin/Pagination.vue'
 import Modal from '../../components/admin/Modal.vue'
@@ -869,10 +962,14 @@ const originalDocContent = ref<string>('')
 const docContent = ref<string>('')
 const docSaving = ref(false)
 const docDirty = computed(() => currentDocSlug.value != null && docContent.value !== originalDocContent.value)
-const saveDocToast = ref<null | { ok: boolean; title: string; detail: string }>(null)
+const saveDocToast = ref<null | { ok: boolean; text: string }>(null)
 
-const docsSyncing = ref(false)
-const docsSyncMsg = ref<null | { ok: boolean; text: string }>(null)
+// 文档元数据（SQLite 模式）
+const docId = ref(0)
+const docTitle = ref('')
+const docSlugInput = ref('')
+const docCategory = ref('arch')
+const docOrder = ref(99)
 
 function fmtSize(bytes: number) {
   if (!bytes) return '0 B'
@@ -896,7 +993,11 @@ async function loadDocContent(slug: string) {
     const r = await $fetch<any>('/api/admin/docs/content', { params: { slug } })
     if (r.code === 0) {
       currentDocSlug.value = slug
-      currentDocFileName.value = r.data.fileName
+      docId.value = r.data.id || 0
+      docTitle.value = r.data.title || slug
+      docSlugInput.value = r.data.slug || slug
+      docCategory.value = r.data.category || 'arch'
+      docOrder.value = Number(r.data.order ?? 99)
       originalDocContent.value = r.data.content
       docContent.value = r.data.content
     } else {
@@ -914,43 +1015,179 @@ async function saveDoc() {
   try {
     const r = await $fetch<any>('/api/admin/docs/content', {
       method: 'PUT',
-      body: { slug: currentDocSlug.value, content: docContent.value },
+      body: {
+        id: docId.value,
+        slug: docSlugInput.value.trim(),
+        title: docTitle.value.trim(),
+        category: docCategory.value,
+        order: docOrder.value,
+        content: docContent.value,
+      },
     })
     if (r.code === 0) {
       originalDocContent.value = docContent.value
-      saveDocToast.value = {
-        ok: true,
-        title: '保存成功',
-        detail: '内容将同步到仓库 docs 目录供 git 版本管理使用。\n如需发布到官方 /api-docs 页面，保存后无需其他操作，网站即时生效。',
+      // 如果 slug 被规范化改过，同步 UI
+      if (r.data?.slug && r.data.slug !== currentDocSlug.value) {
+        currentDocSlug.value = r.data.slug
+        docSlugInput.value = r.data.slug
       }
-      // 3 秒后自动清除成功 toast
-      setTimeout(() => { if (saveDocToast.value?.ok) saveDocToast.value = null }, 8000)
+      saveDocToast.value = { ok: true, text: r.message || '保存成功，官网即时生效' }
+      setTimeout(() => { if (saveDocToast.value?.ok) saveDocToast.value = null }, 4000)
+      await loadDocsList()
     } else {
-      saveDocToast.value = { ok: false, title: '保存失败', detail: r.message || '' }
+      saveDocToast.value = { ok: false, text: r.message || '保存失败' }
     }
   } catch (e: any) {
-    saveDocToast.value = { ok: false, title: '保存失败', detail: e.data?.message || e.message || '' }
+    saveDocToast.value = { ok: false, text: e.data?.message || e.message || '保存失败' }
   } finally {
     docSaving.value = false
   }
 }
 
-async function syncDocs() {
-  docsSyncing.value = true
-  docsSyncMsg.value = null
+// 文档编辑器 — 预览 / 工具栏 / 拼音 slug 自动生成
+const showPreview = ref(false)
+const docTextareaEl = ref<HTMLTextAreaElement | null>(null)
+
+marked.setOptions({ breaks: true, gfm: true })
+const renderedPreview = computed(() => marked.parse(docContent.value || '') as string)
+
+// 中文标题 → 拼音 slug
+function titleToSlug(title: string): string {
+  if (!title) return ''
+  const py = pinyin(title.trim(), { pattern: 'first', toneType: 'none', nonZh: 'consecutive' })
+  return py
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function onTitleInput() {
+  // 新建时（slug 和 title 一起初始化）才自动同步 slug
+  // 如果用户手动改过 slug，就不再覆盖
+  if (!titleSlugUserEdited.value) {
+    docSlugInput.value = titleToSlug(docTitle.value)
+  }
+}
+
+// 工具栏：操作 textarea
+function insertAtCursor(text: string) {
+  const el = docTextareaEl.value
+  if (!el) { docContent.value += text; return }
+  const s = el.selectionStart, e = el.selectionEnd
+  const before = docContent.value.slice(0, s)
+  const after = docContent.value.slice(e)
+  docContent.value = before + text + after
+  requestAnimationFrame(() => {
+    el.focus()
+    el.selectionStart = el.selectionEnd = s + text.length
+  })
+}
+function wrapSel(left: string, right: string) {
+  const el = docTextareaEl.value
+  if (!el) return
+  const s = el.selectionStart, e = el.selectionEnd
+  const sel = docContent.value.slice(s, e) || '文本'
+  const before = docContent.value.slice(0, s)
+  const after = docContent.value.slice(e)
+  docContent.value = before + left + sel + right + after
+  requestAnimationFrame(() => {
+    el.focus()
+    el.selectionStart = s + left.length
+    el.selectionEnd = s + left.length + sel.length
+  })
+}
+function prefixLine(prefix: string) {
+  const el = docTextareaEl.value
+  if (!el) return
+  const s = el.selectionStart, e = el.selectionEnd
+  // 找到当前行的开始
+  const before = docContent.value.slice(0, s)
+  const after = docContent.value.slice(e)
+  const lineStart = before.lastIndexOf('\n') + 1
+  const newBefore = docContent.value.slice(0, lineStart) + prefix
+  const newSelStart = s + prefix.length
+  const newSelEnd = e + prefix.length
+  docContent.value = newBefore + docContent.value.slice(lineStart, e) + after
+  requestAnimationFrame(() => {
+    el.focus()
+    el.selectionStart = newSelStart
+    el.selectionEnd = newSelEnd
+  })
+}
+function insertMarkdown(template: string) {
+  const el = docTextareaEl.value
+  if (!el) return
+  // 把模板中的 (url) 当成选中位置
+  const marker = 'url'
+  const idx = template.indexOf(marker)
+  if (idx >= 0) {
+    const s = el.selectionStart
+    const before = docContent.value.slice(0, s)
+    const after = docContent.value.slice(el.selectionEnd)
+    docContent.value = before + template + after
+    requestAnimationFrame(() => {
+      el.focus()
+      const cursor = s + idx
+      el.selectionStart = el.selectionEnd = cursor
+    })
+  } else {
+    insertAtCursor(template)
+  }
+}
+function syncPreviewScroll() { /* 暂不做同步 */ }
+
+// 标题被用户手动改 slug 标记
+const titleSlugUserEdited = ref(false)
+
+async function newDoc() {
+  // 不弹窗，直接新建一条空文档（标题"未命名文档" + slug auto），选中后进入编辑
   try {
-    const r = await $fetch<any>('/api/admin/docs/sync', { method: 'POST' })
+    const defaultTitle = '未命名文档'
+    const slug = titleToSlug(defaultTitle) || `doc-${Date.now().toString().slice(-6)}`
+    const r = await $fetch<any>('/api/admin/docs/content', {
+      method: 'PUT',
+      body: { slug, title: defaultTitle, category: 'arch', order: 99, content: '' },
+    })
     if (r.code === 0) {
-      docsSyncMsg.value = { ok: true, text: '同步成功：仓库 docs 目录的 md 文件已覆盖到 im-site/content/docs/，正在刷新列表...' }
+      titleSlugUserEdited.value = false
       await loadDocsList()
+      await loadDocContent(r.data.slug)
+      saveDocToast.value = { ok: true, text: '已创建新文档，编辑标题后自动生成 slug' }
+      setTimeout(() => { if (saveDocToast.value?.ok) saveDocToast.value = null }, 3000)
+      // 聚焦标题输入框
+      await nextTick()
+      // 让 slug 输入框监听后续手动改动
     } else {
-      docsSyncMsg.value = { ok: false, text: r.message || '同步失败' }
+      alert('创建失败：' + (r.message || ''))
     }
   } catch (e: any) {
-    docsSyncMsg.value = { ok: false, text: e.data?.message || e.message || '同步失败' }
-  } finally {
-    docsSyncing.value = false
-    setTimeout(() => { docsSyncMsg.value = null }, 8000)
+    alert('创建失败：' + (e.data?.message || e.message || ''))
+  }
+}
+
+async function deleteDoc() {
+  if (!currentDocSlug.value) return
+  if (!confirm(`确认删除文档「${docTitle.value || currentDocSlug.value}」？\n此操作不可恢复，官网 /api-docs 页面将同步移除。`)) return
+  try {
+    const r = await $fetch<any>('/api/admin/docs/content', {
+      method: 'DELETE',
+      params: { slug: currentDocSlug.value },
+    })
+    if (r.code === 0) {
+      saveDocToast.value = { ok: true, text: '删除成功' }
+      currentDocSlug.value = null
+      docId.value = 0
+      docTitle.value = ''
+      docSlugInput.value = ''
+      docContent.value = ''
+      originalDocContent.value = ''
+      await loadDocsList()
+      setTimeout(() => { saveDocToast.value = null }, 3000)
+    } else {
+      alert('删除失败：' + (r.message || ''))
+    }
+  } catch (e: any) {
+    alert('删除失败：' + (e.data?.message || e.message || ''))
   }
 }
 
@@ -1257,6 +1494,9 @@ onMounted(async () => {
 .btn-primary-sm { padding: 8px 18px; background:#165dff; color:#fff; border:none; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; }
 .btn-primary-sm:hover { background:#4080ff; }
 .btn-primary-sm:disabled { opacity:.6; cursor:not-allowed; }
+.btn-danger-sm { padding: 8px 18px; background:#fff; color:#e03131; border:1px solid #ffc9c9; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; }
+.btn-danger-sm:hover { background:#fff5f5; border-color:#ff8787; }
+.btn-danger-sm:disabled { opacity:.5; cursor:not-allowed; }
 .btn-grey { padding: 8px 18px; background:#f2f3f5; color:#4e5969; border:none; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; }
 .btn-grey:hover { background:#e5e6eb; }
 .btn-grey:disabled { opacity:.6; cursor:not-allowed; }
@@ -1468,8 +1708,50 @@ select.form-input { appearance: auto; }
   background: #e8f3ff;
   border-color: #b9cdff;
 }
-.docs-item.excluded {
-  opacity: .65;
+
+/* 文档元数据编辑栏（标题/slug/分类/排序） */
+.doc-meta-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr 140px 100px;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #f7f8fa;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  border: 1px solid #eef0f3;
+}
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.meta-row label {
+  font-size: 12px;
+  color: #86909c;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.doc-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid #d9dde4;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: #1d2129;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.doc-input:focus {
+  border-color: #165dff;
+  box-shadow: 0 0 0 3px rgba(22,93,255,.12);
+}
+.doc-input::placeholder { color: #c9cdd4; }
+@media (max-width: 900px) {
+  .doc-meta-bar { grid-template-columns: 1fr 1fr; }
 }
 .item-title {
   font-size: 14px;
@@ -1508,19 +1790,19 @@ select.form-input { appearance: auto; }
 
 .doc-textarea {
   width: 100%;
-  height: 60vh;
-  min-height: 480px;
-  padding: 20px;
+  height: 100%;
+  min-height: 520px;
+  padding: 20px 22px;
   border: none;
-  border-top: 1px solid #eef0f3;
-  resize: vertical;
+  resize: none;
   outline: none;
   background: #fff;
-  font-family: Consolas, 'Courier New', Monaco, monospace;
-  font-size: 16px;
-  line-height: 1.6;
+  font-family: -apple-system, BlinkMacSystemFont, Consolas, 'JetBrains Mono', monospace;
+  font-size: 15px;
+  line-height: 1.7;
   color: #1d2129;
   box-sizing: border-box;
+  tab-size: 2;
 }
 .doc-textarea:disabled {
   background: #fafbfc;
@@ -1528,8 +1810,212 @@ select.form-input { appearance: auto; }
   cursor: not-allowed;
 }
 .doc-textarea::placeholder {
-  color: #86909c;
+  color: #c9cdd4;
 }
+
+/* ============ 编辑器工具栏 ============ */
+.doc-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #fafbfc;
+  border-top: 1px solid #eef0f3;
+  border-bottom: 1px solid #eef0f3;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.doc-toolbar-left,
+.doc-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #4e5969;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s, color .15s, transform .1s;
+  line-height: 1;
+}
+.tb-btn:hover {
+  background: #e8f3ff;
+  color: #165dff;
+}
+.tb-btn:active { transform: scale(.94); }
+.tb-btn.active {
+  background: #165dff;
+  color: #fff;
+}
+.tb-sep {
+  width: 1px;
+  height: 18px;
+  background: #e5e6eb;
+  margin: 0 4px;
+}
+.tb-status {
+  font-size: 12px;
+  color: #86909c;
+  margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============ 分屏编辑区 ============ */
+.doc-edit-body {
+  display: flex;
+  min-height: 560px;
+  border: 1px solid #eef0f3;
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.doc-editor-pane {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  background: #fff;
+}
+.doc-split .doc-editor-pane {
+  border-right: 1px solid #eef0f3;
+}
+.doc-preview-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fafbfc;
+}
+.doc-preview-head {
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #86909c;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  background: #f2f3f5;
+  border-bottom: 1px solid #eef0f3;
+}
+.doc-preview-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  font-size: 15px;
+  line-height: 1.75;
+  color: #1d2129;
+}
+
+/* ============ Markdown 预览样式 ============ */
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  color: #1d2129;
+  font-weight: 600;
+  margin: 24px 0 12px;
+  line-height: 1.35;
+}
+.markdown-body h1 { font-size: 26px; padding-bottom: 8px; border-bottom: 1px solid #eef0f3; }
+.markdown-body h2 { font-size: 22px; padding-bottom: 6px; border-bottom: 1px solid #eef0f3; }
+.markdown-body h3 { font-size: 18px; }
+.markdown-body p { margin: 0 0 14px; }
+.markdown-body ul,
+.markdown-body ol { margin: 0 0 14px; padding-left: 24px; }
+.markdown-body li { margin-bottom: 4px; }
+.markdown-body blockquote {
+  margin: 14px 0;
+  padding: 10px 16px;
+  background: #f0f5ff;
+  border-left: 3px solid #165dff;
+  color: #4e5969;
+  border-radius: 0 6px 6px 0;
+}
+.markdown-body code {
+  background: #f2f3f5;
+  color: #e03131;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13.5px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+}
+.markdown-body pre {
+  background: #1d2129;
+  color: #fff;
+  padding: 16px 18px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 14px 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.markdown-body pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0;
+  font-size: 14px;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid #e5e6eb;
+  padding: 8px 12px;
+  text-align: left;
+}
+.markdown-body th {
+  background: #f7f8fa;
+  font-weight: 600;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid #e5e6eb;
+  margin: 24px 0;
+}
+.markdown-body a {
+  color: #165dff;
+  text-decoration: none;
+}
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+/* ============ 空态（未选文档时） ============ */
+.doc-empty-hint {
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #e5e6eb;
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  background: #fafbfc;
+  color: #86909c;
+  gap: 6px;
+}
+.doc-empty-icon {
+  margin-bottom: 4px;
+  opacity: .8;
+}
+.doc-empty-hint p { margin: 0; font-size: 14px; color: #4e5969; }
+.doc-empty-hint .hint-sub { font-size: 12px; color: #c9cdd4; }
 
 .docs-toast {
   padding: 10px 14px;

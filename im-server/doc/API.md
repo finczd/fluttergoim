@@ -24,6 +24,7 @@
 - `POST /api/v1/auth/send-code`
 - `POST /api/v1/auth/register`
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/guest`
 - `POST /api/v1/auth/refresh`
 - `GET /api/v1/auth/config`
 - `POST /api/v1/auth/qr/ticket`
@@ -41,6 +42,7 @@
 - `PUT /api/v1/user/profile`
 - `PUT /api/v1/user/password`
 - `DELETE /api/v1/user`
+- `POST /api/v1/invite/bind`
 - `GET /api/v1/user/search`
 - `GET /api/v1/user/:id`
 - `GET /api/v1/friend/list`
@@ -286,6 +288,19 @@
 - 错误码: 1001（参数错误）/ 1004（账号已被封禁，提示「您当前已经被封禁」）/ 2005（账号或密码错误）/ 7001（操作过于频繁，每账号 5 次/分钟）
 - 备注: 记录登录 IP（入参 `c.ClientIP()`）；`user` 同上含 `id`/`departmentId` 字符串化字段。被封禁账号返回 1004（专用错误，不复用通用的「无权限」1003），客户端应明确提示封禁。
 
+### `POST /api/v1/auth/guest`
+
+- 鉴权: 公开
+- 说明: 游客注册 / 登录。后台未开启 `guest_register_enabled` 返回 2007。按设备号幂等：同一 `deviceId` 已存在游客（`is_guest=1` 且 `guest_device_id` 匹配）则直接复用并签发令牌；否则新建游客账号（随机短账号 `g`+8hex=9 位、服务端随机密码、随机中文昵称）。
+- 请求体:
+  ```json
+  {"deviceId":"string(必填) // 客户端持久化设备号，幂等键",
+   "deviceType":"int(可选)"}
+  ```
+- 成功响应 data: `{"user":"object(User)","accessToken":"string","refreshToken":"string","isNewGuest":"bool // true=本次新建游客(新设备首次)，false=复用已有游客(同一设备号再次登录)"}`
+- 错误码: 1001（参数错误，含 deviceId 为空）/ 2007（游客注册未开启）
+- 备注: 邀请码不在此处理——是否弹邀请码由客户端依据 `GET /api/v1/auth/config` 的 `inviteCodeOn` 决定；仅 `isNewGuest=true` 时客户端弹窗，复用老账号（同一设备号）不再重复打扰。填写走 `POST /api/v1/invite/bind`。
+
 ### `POST /api/v1/auth/refresh`
 
 - 鉴权: 公开
@@ -303,7 +318,7 @@
 - 鉴权: 公开
 - 说明: 返回注册/登录页所需配置（数据库优先，回退环境变量）。
 - 请求体: 无
-- 成功响应 data: `{"authMode":"string","inviteCodeOn":"bool","registerOn":"bool","e2eOn":"bool","appName":"string","appLogo":"string","brandName":"string","brandLogo":"string","announcement":"string","appVersion":"string","updateLog":"string","androidUrl":"string","iosUrl":"string","hotUpdateUrl":"string"}`
+- 成功响应 data: `{"authMode":"string","inviteCodeOn":"bool","registerOn":"bool","e2eOn":"bool","guestOn":"bool // 是否开启游客注册","guestInviteCodeOn":"bool // 游客登录是否需要邀请码","appName":"string","appLogo":"string","brandName":"string","brandLogo":"string","announcement":"string","appVersion":"string","updateLog":"string","androidUrl":"string","iosUrl":"string","hotUpdateUrl":"string"}`
 - 错误码: 无（恒成功）
 - 备注: 客户端据此渲染注册/登录页、品牌与公告跑马灯、版本更新检查。
 

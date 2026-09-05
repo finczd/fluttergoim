@@ -302,7 +302,23 @@ db.exec(`CREATE TABLE IF NOT EXISTS ai_job_runs (
   trigger_type TEXT NOT NULL DEFAULT 'cron'
 );
 CREATE INDEX IF NOT EXISTS idx_ai_job_runs_started ON ai_job_runs(started_at);
-CREATE INDEX IF NOT EXISTS idx_ai_job_runs_status ON ai_job_runs(status);`)
+`);
+
+// ======= 新增：docs 表（文档管理不再读磁盘 md，统一存 SQLite） =======
+db.exec(`CREATE TABLE IF NOT EXISTS docs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'arch',
+  category_label TEXT NOT NULL DEFAULT '架构与设计',
+  content TEXT NOT NULL DEFAULT '',
+  order_num INTEGER NOT NULL DEFAULT 99,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_docs_slug ON docs(slug);
+CREATE INDEX IF NOT EXISTS idx_docs_cat ON docs(category);
+`);
 
 // ========================================================
 //  完成验证

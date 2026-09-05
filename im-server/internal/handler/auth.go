@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/yourcompany/im-server/internal/config"
 	"github.com/yourcompany/im-server/internal/middleware"
@@ -75,6 +76,45 @@ func LoginHandler(cfg *config.Config) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{
 			"user": u, "accessToken": access, "refreshToken": refresh,
 		}})
+	}
+}
+
+// GuestRegisterHandler 游客注册/登录（按设备号幂等：已存在游客则直接登录，否则新建）
+func GuestRegisterHandler(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req service.GuestRegisterReq
+		if err := c.ShouldBindJSON(&req); err != nil || req.DeviceID == "" {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		u, access, refresh, isNew, err := service.GuestRegister(c.Request.Context(), cfg, &req, c.ClientIP())
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{
+			"user": u, "accessToken": access, "refreshToken": refresh, "isNewGuest": isNew,
+		}})
+	}
+}
+
+// InviteBindHandler 登录后补填邀请码（游客/普通用户通用）。
+// 复用现有邀请码逻辑：一次性码 consume + 自定义好友码自动加好友，无需客户端关心细节。
+func InviteBindHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Code) == "" {
+			c.JSON(http.StatusOK, gin.H{"code": 1001, "message": "参数错误"})
+			return
+		}
+		uid := middleware.CurrentUserID(c)
+		if err := service.BindInviteCode(c.Request.Context(), body.Code, uid); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": errCode(err), "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
 	}
 }
 

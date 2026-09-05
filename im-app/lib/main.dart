@@ -10,6 +10,7 @@ import 'l10n/app_locale.dart';
 import 'pages/home_shell.dart';
 import 'pages/incoming_call_page.dart';
 import 'pages/login_page.dart';
+import 'pages/guest_page.dart';
 import 'services/api_client.dart';
 import 'services/conversation_service.dart';
 import 'services/keep_alive_service.dart';
@@ -208,10 +209,11 @@ class _AuthGateState extends State<AuthGate> {
         _startAutoRetry();
         return;
       }
-    } else {
-      target = const LoginPage();
-    }
-    if (!mounted) return;
+  } else {
+    // 后台开启游客注册 → 进入引导页（游客登录 / 登录注册）；否则直接登录页
+    target = GuestPage();
+  }
+  if (!mounted) return;
     setState(() => _body = target);
     // 已登录进入主界面：延迟几秒自动检查一次版本更新（本次启动只查一次）
     if (target is HomeShell && !_updateChecked) {

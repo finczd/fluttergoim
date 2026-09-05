@@ -250,6 +250,118 @@ func Login(ctx context.Context, cfg *config.Config, req *LoginReq, ip string) (*
 	return &u, access, refresh, err
 }
 
+// ============ 游客注册/登录 ============
+
+// GuestRegisterReq 游客注册/登录请求（按设备号幂等）
+type GuestRegisterReq struct {
+	DeviceID   string `json:"deviceId" binding:"required"`
+	DeviceType int    `json:"deviceType"` // 1=Android 2=iOS 3=Web 4=Windows 5=macOS
+}
+
+// GuestRegister 游客注册或登录：
+//   - 后台未开启 guest_register_enabled → 返回 errs.GuestOff
+//   - 已存在该设备号的游客(is_guest=1 且 guest_device_id=该设备) → 直接复用并签发 token
+//   - 否则新建游客账号：随机短账号(≤10 位) + 服务端随机密码 + 随机中文昵称
+//   - 邀请码不在此处理：登录后由客户端依据 auth/config 的 inviteCodeOn 决定是否弹窗，
+//     调 POST /user/invite/bind 复用现有「邀请码自动加好友」逻辑
+func GuestRegister(ctx context.Context, cfg *config.Config, req *GuestRegisterReq, clientIP string) (*model.User, string, string, bool, error) {
+	if !boolVal(SysConfigGet(ctx, "guest_register_enabled", false)) {
+		return nil, "", "", false, errs.GuestOff
+	}
+
+	// 1. 幂等复用：同一设备号只对应一个游客账号
+	var exist model.User
+	if err := store.DB.Where("guest_device_id = ? AND is_guest = 1", req.DeviceID).First(&exist).Error; err == nil {
+		now := time.Now()
+		store.DB.Model(&exist).Updates(map[string]interface{}{
+			"last_login_at": now,
+			"last_login_ip": clientIP,
+		})
+		exist.LastLoginAt = &now
+		exist.LastLoginIP = clientIP
+		access, refresh, err := issueTokens(ctx, cfg, &exist, req.DeviceID, req.DeviceType)
+		return &exist, access, refresh, false, err
+	}
+
+	// 2. 新建游客账号
+	account := genGuestAccount(ctx)
+	hash, err := bcrypt.GenerateFromPassword([]byte(randToken(16)), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	regDev := deviceName(req.DeviceType)
+	if req.DeviceID != "" {
+		regDev += " / " + req.DeviceID
+	}
+	u := model.User{
+		ID:            id.Next(),
+		Account:       account,
+		PasswordHash:  string(hash),
+		Nickname:      randomChineseNickname(),
+		CountryCode:   "+86",
+		Status:        model.StatusNormal,
+		Role:          model.RoleUser,
+		IsGuest:       1,
+		GuestDeviceID: req.DeviceID,
+		ShortID:       model.StrPtr(genShortID(ctx)),
+		RegisterIP:    clientIP,
+		RegisterDevice: regDev,
+	}
+	if av, ok := SysConfigGet(ctx, "default_avatar", "").(string); ok && av != "" {
+		u.Avatar = av
+	}
+	if err := store.DB.Create(&u).Error; err != nil {
+		return nil, "", "", false, err
+	}
+
+	// 3. 自动添加小助手 + 客服好友
+	AssistantAddForUser(ctx, cfg, u.ID)
+	if err := KefuAddForUser(ctx, u.ID); err != nil {
+		log.Printf("[kefu] auto add kefu for guest %d failed: %v", u.ID, err)
+	}
+
+	// 4. 签发 token
+	access, refresh, err := issueTokens(ctx, cfg, &u, req.DeviceID, req.DeviceType)
+	return &u, access, refresh, true, err
+}
+
+// genGuestAccount 生成游客短账号：前缀 g + 8 位 hex = 9 字符（≤10 位，且不与邮箱/手机号冲突）
+func genGuestAccount(ctx context.Context) string {
+	for i := 0; i < 5; i++ {
+		acc := "g" + randToken(4) // 1 + 8 = 9 字符
+		var cnt int64
+		store.DB.Model(&model.User{}).Where("account = ?", acc).Count(&cnt)
+		if cnt == 0 {
+			return acc
+		}
+	}
+	return "g" + randToken(4)
+}
+
+// BindInviteCode 登录后补填邀请码（游客/普通用户通用）。
+// 完全复用注册流程的邀请码处理：先尝试验证一次性邀请码(consume)，
+// 失败再回退自定义好友邀请码；最终调用 InviteFriendBindForRegister 自动加好友。
+func BindInviteCode(ctx context.Context, code string, userID int64) error {
+	code = strings.TrimSpace(code)
+	if code == "" || userID <= 0 {
+		return errs.ParamError
+	}
+	var u model.User
+	if err := store.DB.First(&u, userID).Error; err != nil {
+		return errs.Unauthorized
+	}
+	// 与 Register 一致的回退逻辑
+	if err := consumeInviteCode(ctx, code, u.Account); err != nil {
+		if !InviteFriendCodeValid(ctx, code) {
+			return err
+		}
+	}
+	if err := InviteFriendBindForRegister(ctx, code, userID); err != nil {
+		log.Printf("[invite] bind invite friends for user %d failed: %v", userID, err)
+	}
+	return nil
+}
+
 // Refresh 刷新 access token
 func Refresh(ctx context.Context, cfg *config.Config, refreshToken string) (string, error) {
 	claims, err := jwtx.Parse(cfg.JWTSecret, refreshToken)
@@ -651,6 +763,36 @@ func deviceName(t int) string {
 		return "macOS"
 	}
 	return "Unknown"
+}
+
+// ============ 游客随机昵称 / 随机串 ============
+
+var (
+	surnameList = []string{"李", "王", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡", "林", "郭", "何", "高", "罗", "郑", "梁", "谢", "宋", "唐", "许", "韩", "冯", "邓", "曹"}
+	givenNameList = []string{"晓明", "小红", "子轩", "一诺", "梓涵", "浩然", "欣怡", "宇航", "思源", "雨桐", "俊杰", "佳怡", "梓萱", "晨曦", "若曦", "天磊", "梦琪", "志强", "雅静", "文博", "可馨", "嘉豪", "诗涵", "博文", "婉清", "立诚", "乐瑶", "修远", "清扬", "知微"}
+)
+
+// pick 从列表中按 crypto/rand 取一个元素（无外部依赖）
+func pick(list []string) string {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(list))))
+	if err != nil {
+		return list[0]
+	}
+	return list[n.Int64()]
+}
+
+// randomChineseNickname 生成随机中文昵称（姓 + 名）
+func randomChineseNickname() string {
+	return pick(surnameList) + pick(givenNameList)
+}
+
+// randToken 生成 n 字节的十六进制随机串（2n 字符）
+func randToken(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 var _ = errors.New

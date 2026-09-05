@@ -33,6 +33,35 @@
       </transition>
     </Teleport>
 
+    <!-- iOS 下载说明弹窗 -->
+    <Teleport to="body">
+      <transition name="modal-fade">
+        <div v-if="showIosTipModal" class="demo-modal-mask" @click.self="showIosTipModal = false">
+          <div class="demo-modal">
+            <button class="demo-close" @click="showIosTipModal = false" aria-label="关闭">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+            <div class="demo-badge" style="background:linear-gradient(135deg,#fff7e6,#fff2b8);color:#d48806">iOS 下载说明</div>
+            <h2 class="demo-title">关于 iOS 下载</h2>
+            <p class="demo-desc">
+              由于苹果系统限制，IPA 安装包无法像 Android APK 一样直接安装到手机上。<br/>
+              {{ iosSelfSignGuide || '下载的 IPA 文件需要自行签名测试' }}。
+            </p>
+            <div class="demo-actions" style="flex-direction:column;gap:10px">
+                <a v-if="iosDownloadUrl" :href="iosDownloadUrl" target="_blank" class="btn btn-primary" style="justify-content:center">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 4v12M6 10l6 6 6-6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  下载 IPA 文件
+                </a>
+                <a :href="`https://t.me/${(contactTelegram || '@ChatPulse_BD').replace(/^@/, '')}`" target="_blank" class="btn btn-outline" style="justify-content:center">
+                  <svg width="16" height="16" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="24" fill="#165dff"/><path d="M20 34c-1.2 0-1.1-.5-1.6-1.8l-3.7-12.3c-.4-1.3.5-2 1.6-2.3l26.4-10.2c1.4-.5 2.9 0 2.9 1.9 0 .3-.1.6-.2.9L38.5 27c-.2 1-.9 1.3-1.9 1l-7.6-2.6-3.7 7.6c-.6 1-1.1 1.3-2.3 1.3z" fill="#fff"/></svg>
+                  联系客服
+                </a>
+              </div>
+          </div>
+        </div>
+      </transition>
+    </Teleport>
+
     <!-- ============ HERO ============ -->
     <section class="hero">
       <div class="hero-bg-deco" aria-hidden="true">
@@ -82,11 +111,11 @@
                 Android
               </span>
               <span class="platform-tag ios">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17 4c-1.2 0-2.4.6-3.1 1.4-.7.8-1.3 1.8-1.1 2.9 1.2 0 2.3-.7 3-1.5.7-.9 1.1-1.8 1.2-2.8z" fill="#86909c"/></svg>
-                iOS 敬请期待
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17 4c-1.2 0-2.4.6-3.1 1.4-.7.8-1.3 1.8-1.1 2.9 1.2 0 2.3-.7 3-1.5.7-.9 1.1-1.8 1.2-2.8z" fill="#00b42a"/></svg>
+                iOS 支持（自签名）
               </span>
             </div>
-            <p class="qr-support">扫码进入下载页 · Android 下载 / iOS 联系客服</p>
+            <p class="qr-support">扫码进入下载页 · Android 下载 / iOS 自签名安装指南</p>
           </div>
 
           <!-- RIGHT: WEB DEMO -->
@@ -137,18 +166,28 @@
             <div class="app-download">
               <h4 class="app-download-title">APP 下载</h4>
               <p class="app-download-sub">直接下载 Android 安装包体验完整移动端</p>
-              <a v-if="androidDownloadUrl" :href="androidDownloadUrl" class="btn btn-outline android-btn">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M17 8h2a3 3 0 0 1 0 6h-2V8zM5 7h9v10H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM2 12h1M14 8l3-2M14 16l3 2" stroke="#165dff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Android APK 下载
-              </a>
-              <a v-else href="#" class="btn btn-outline android-btn" @click.prevent="showContactTip">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M17 8h2a3 3 0 0 1 0 6h-2V8zM5 7h9v10H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM2 12h1M14 8l3-2M14 16l3 2" stroke="#165dff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Android APK 下载
-              </a>
-              <a v-if="pcClientUrl" :href="pcClientUrl" class="btn btn-outline pc-btn" style="margin-top: 8px;">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="12" rx="2" stroke="#165dff" stroke-width="1.5"/><path d="M8 20h8M12 16v4" stroke="#165dff" stroke-width="1.5" stroke-linecap="round"/></svg>
-                PC 客户端下载
-              </a>
+              <div class="app-download-btns">
+                <a v-if="androidDownloadUrl" :href="androidDownloadUrl" target="_blank" class="btn btn-outline android-btn">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17 8h2a3 3 0 0 1 0 6h-2V8zM5 7h9v10H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM2 12h1" stroke="#165dff" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8l3-2M14 16l3 2" stroke="#165dff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Android APK
+                </a>
+                <a v-else href="#" class="btn btn-outline android-btn" @click.prevent="showContactTip">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17 8h2a3 3 0 0 1 0 6h-2V8zM5 7h9v10H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM2 12h1" stroke="#165dff" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8l3-2M14 16l3 2" stroke="#165dff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Android APK
+                </a>
+                <a href="#" class="btn btn-outline ios-btn" @click.prevent="showIosTipModal = true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17 4c-1.2 0-2.4.6-3.1 1.4-.7.8-1.3 1.8-1.1 2.9 1.2 0 2.3-.7 3-1.5.7-.9 1.1-1.8 1.2-2.8z" fill="#165dff"/><path d="M18 17.5c-.5 1.1-.8 1.6-1.5 2.6-1 1.4-2.4 3.1-4.1 3.1-1.5 0-1.9-1-3.9-1-2 0-2.5 1-4 1-1.7 0-3-1.6-4-3C-1 16.3.4 11 3.5 11c1.6 0 2.8 1 4.3 1 1.5 0 2.3-1 4-1 1 0 2.1.5 3 1.4" stroke="#165dff" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  iOS
+                </a>
+                <a v-if="pcClientUrl" :href="pcClientUrl" target="_blank" class="btn btn-outline pc-btn">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="12" rx="2" stroke="#165dff" stroke-width="1.6"/><path d="M8 20h8M12 16v4" stroke="#165dff" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  PC 客户端
+                </a>
+              </div>
+              <div class="ios-tip">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#86909c" stroke-width="1.6"/><path d="M12 7v5l3 2" stroke="#86909c" stroke-width="1.6" stroke-linecap="round"/></svg>
+                {{ iosSelfSignGuide || 'iOS · 请自行签名安装测试' }}
+              </div>
             </div>
           </div>
         </div>
@@ -170,11 +209,15 @@
             <div class="accounts-list">
               <div class="account-item">
                 <span class="account-label">后台</span>
-                <code class="account-code">admin / 123456</code>
+                <code class="account-code">admin / <span style="opacity:.85">联系客服获取</span></code>
               </div>
               <div class="account-item">
-                <span class="account-label">APP 端</span>
-                <code class="account-code">test001 / 123456</code>
+                <span class="account-label">APP 1</span>
+                <code class="account-code">223344 / qq123123</code>
+              </div>
+              <div class="account-item">
+                <span class="account-label">APP 2</span>
+                <code class="account-code">112233 / 123123</code>
               </div>
             </div>
           </div>
@@ -232,8 +275,11 @@
 <script setup lang="ts">
 import { onMounted, ref, nextTick } from 'vue'
 const showModal = ref(false)
+const showIosTipModal = ref(false)
 const contactTelegram = ref('')
 const androidDownloadUrl = ref('')
+const iosDownloadUrl = ref('')
+const iosSelfSignGuide = ref('请自行签名安装测试')
 const adminPanelUrl = ref('')
 const pcClientUrl = ref('')
 const demoQrCanvas = ref<HTMLCanvasElement | null>(null)
@@ -248,6 +294,8 @@ onMounted(async () => {
     const res: any = await $fetch('/api/site-config')
     contactTelegram.value = res?.data?.contactTelegram || ''
     androidDownloadUrl.value = res?.data?.androidDownloadUrl || ''
+    iosDownloadUrl.value = res?.data?.iosDownloadUrl || ''
+    iosSelfSignGuide.value = res?.data?.iosSelfSignGuide || '请自行签名安装测试'
     adminPanelUrl.value = res?.data?.adminPanelUrl || ''
     pcClientUrl.value = res?.data?.pcClientUrl || ''
   } catch {}
@@ -693,7 +741,24 @@ const checklist = [
   margin-bottom: 14px;
 }
 
-.android-btn {
+.app-download-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.app-download-btns .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.android-btn,
+.pc-btn {
   align-self: flex-start;
 }
 

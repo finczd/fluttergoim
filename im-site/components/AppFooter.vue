@@ -56,6 +56,9 @@
             <li>
               <NuxtLink to="/privacy" class="footer-link">隐私协议</NuxtLink>
             </li>
+            <li>
+              <NuxtLink to="/stress-test" class="footer-link">压力测试报告</NuxtLink>
+            </li>
           </ul>
         </div>
 
@@ -89,6 +92,7 @@
         <div class="bottom-left">
           <p class="copyright">© 2026 ChatPulse. All rights reserved.</p>
           <NuxtLink to="/quote" class="footer-link-sm">获取报价单</NuxtLink>
+          <NuxtLink to="/stress-test" class="footer-link-sm">压力测试报告</NuxtLink>
           <NuxtLink to="/privacy" class="footer-link-sm">隐私协议</NuxtLink>
         </div>
         <div class="social-icons" aria-label="Social links">

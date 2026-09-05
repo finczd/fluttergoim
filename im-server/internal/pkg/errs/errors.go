@@ -13,6 +13,7 @@ var (
 	InviteInvalid = &Err{Code: 2003, Msg: "邀请码无效"}
 	RegisterOff   = &Err{Code: 2004, Msg: "注册已关闭"}
 	LoginFailed   = &Err{Code: 2005, Msg: "账号或密码错误"}
+	GuestOff      = &Err{Code: 2007, Msg: "游客注册未开启"}
 
 	FriendReqNotFound = &Err{Code: 3001, Msg: "好友申请不存在"}
 

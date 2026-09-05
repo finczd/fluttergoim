@@ -87,8 +87,14 @@
     <section class="stats-bar" ref="statsBarRef">
       <div class="container">
         <div class="stats-grid">
-          <div class="stat-item" v-for="(st, i) in statsData" :key="i" :style="{ animationDelay: (i * .1) + 's' }">
-            <span class="stat-num" ref="statNumRefs">{{ st.display }}</span>
+          <div
+            v-for="(st, i) in statsData"
+            :key="i"
+            class="stat-item"
+            :class="{ 'stat-item--in': statsVisible }"
+            :style="{ transitionDelay: (i * .12) + 's' }"
+          >
+            <span class="stat-num" :data-text="st.display">{{ st.display }}</span>
             <span class="stat-label">{{ st.label }}</span>
           </div>
         </div>
@@ -407,39 +413,52 @@ function onScroll() {
 
 // ===== 数字 count-up 动画 =====
 const statsBarRef = ref<HTMLElement | null>(null)
-const statNumRefs = ref<HTMLElement[]>([])
+const statsVisible = ref(false)
 const statsData = ref([
-  { target: 500, suffix: '+', display: '0+', label: '企业客户' },
-  { target: 99.9, suffix: '%', display: '0%', label: '可用性' },
-  { target: 50, suffix: '万+', display: '0万+', label: '日均消息' },
-  { target: 7, suffix: '×24', display: '7×24', label: '技术支持' },
+  { target: 500, suffix: '+',   display: '0+',    label: '企业客户' },
+  { target: 99.9, suffix: '%',  display: '0.0%',  label: '可用性' },
+  { target: 50,  suffix: '万+', display: '0万+',  label: '日均消息' },
+  { target: 7,   suffix: '×24', display: '0×24',  label: '技术支持' },
 ])
 let statsAnimated = false
 function initCountUp() {
-  if (!statsBarRef.value) return
-  const io = new IntersectionObserver((entries) => {
-    entries.forEach(e => {
-      if (e.isIntersecting && !statsAnimated) {
-        statsAnimated = true
-        statsData.value.forEach((s, i) => {
-          const duration = 1400
-          const start = performance.now()
-          const isFloat = s.target % 1 !== 0
-          function tick(now: number) {
-            const t = Math.min(1, (now - start) / duration)
-            const eased = 1 - Math.pow(1 - t, 3)
-            const val = s.target * eased
-            s.display = (isFloat ? val.toFixed(1) : Math.floor(val)) + s.suffix
-            if (t < 1) requestAnimationFrame(tick)
-            else s.display = (isFloat ? s.target.toFixed(1) : s.target) + s.suffix
-          }
-          requestAnimationFrame(tick)
-        })
-        io.disconnect()
-      }
-    })
-  }, { threshold: 0.3 })
-  io.observe(statsBarRef.value)
+  // DOM 可能还没 ready，等一帧
+  requestAnimationFrame(() => {
+    if (!statsBarRef.value) return
+    const rect = statsBarRef.value.getBoundingClientRect()
+    // 如果已经在视口内（SSR 首屏可能直接命中），直接跑不依赖 IO
+    if (rect.top < window.innerHeight && rect.bottom > 0) {
+      runCountUp()
+      return
+    }
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting && !statsAnimated) {
+          runCountUp()
+          io.disconnect()
+        }
+      })
+    }, { threshold: 0.2 })
+    io.observe(statsBarRef.value)
+  })
+}
+function runCountUp() {
+  statsAnimated = true
+  statsVisible.value = true   // 触发 stat-item 入场动画
+  statsData.value.forEach((s, idx) => {
+    const duration = 1500 + idx * 120
+    const start = performance.now()
+    const isFloat = s.target % 1 !== 0
+    function tick(now: number) {
+      const t = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - t, 3)
+      const val = s.target * eased
+      s.display = (isFloat ? val.toFixed(1) : Math.floor(val)) + s.suffix
+      if (t < 1) requestAnimationFrame(tick)
+      else s.display = (isFloat ? s.target.toFixed(1) : s.target) + s.suffix
+    }
+    requestAnimationFrame(tick)
+  })
 }
 
 // ===== 3D 卡片倾斜效果 =====
@@ -1541,39 +1560,126 @@ const whyUs = [
   transform: translateY(20px) scale(.96);
 }
 
-/* ============ STATS BAR ============ */
+/* ============ STATS BAR（白底 + 酷炫动画） ============ */
 .stats-bar {
+  position: relative;
   background: #fff;
-  border-bottom: 1px solid var(--c-border);
-  padding: 36px 0;
+  border-top: 1px solid rgba(31,35,41,.06);
+  border-bottom: 1px solid rgba(31,35,41,.08);
+  padding: 44px 0;
+  overflow: hidden;
 }
-
+/* 顶部扫光条：蓝紫渐变 3.2s 从左扫到右循环 */
+.stats-bar::before {
+  content: '';
+  position: absolute;
+  left: -60%; top: 0;
+  width: 40%; height: 3px;
+  background: linear-gradient(90deg, transparent, #165dff 30%, #7843ff 70%, transparent);
+  filter: blur(.5px);
+  animation: stats-scan 3.2s linear infinite;
+  pointer-events: none;
+}
+@keyframes stats-scan {
+  0%   { left: -60%; opacity: .4; }
+  50%  { opacity: 1; }
+  100% { left: 120%; opacity: .4; }
+}
+/* 上下边缘的渐变光带（柔和） */
+.stats-bar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(22,93,255,.35), rgba(120,67,255,.35), transparent);
+  animation: edge-pulse 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes edge-pulse {
+  0%, 100% { opacity: .5; }
+  50%      { opacity: 1; }
+}
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 24px;
   text-align: center;
+  position: relative;
+  z-index: 1;
 }
-
 .stat-item {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  padding: 14px 8px;
+  border-radius: 14px;
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity .65s cubic-bezier(.22,.61,.36,1),
+    transform .65s cubic-bezier(.22,.61,.36,1),
+    box-shadow .28s ease,
+    background .28s ease;
 }
-
+/* 滚进视口时触发：由 statsVisible + transitionDelay stagger */
+.stat-item--in { opacity: 1; transform: translateY(0); }
+.stat-item:hover {
+  transform: translateY(-4px);
+  background: linear-gradient(135deg, rgba(22,93,255,.04), rgba(120,67,255,.04));
+  box-shadow: 0 10px 30px rgba(22,93,255,.10);
+}
+/* hover 时 item 顶部出现 3px 渐变条 */
+.stat-item:hover::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 50%;
+  transform: translateX(-50%);
+  width: 44%; height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(90deg, #165dff, #7843ff);
+}
 .stat-num {
-  font-size: 38px;
+  position: relative;
+  font-size: 42px;
   font-weight: 900;
-  background: var(--c-gradient);
+  background: linear-gradient(135deg, #165dff 0%, #7843ff 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  letter-spacing: -1px;
+  letter-spacing: -1.5px;
+  line-height: 1.1;
+  transition: transform .28s ease;
+  white-space: nowrap;
 }
-
+/* hover 时数字放大 + 扫光 */
+.stat-item:hover .stat-num {
+  transform: scale(1.06);
+}
+.stat-item:hover .stat-num::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,.65) 50%, transparent 70%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  pointer-events: none;
+  animation: num-shine 1.2s ease;
+}
+@keyframes num-shine {
+  0%   { background-position: 200% center; }
+  100% { background-position: -100% center; }
+}
 .stat-label {
-  font-size: 15px;
-  color: var(--c-text-3);
+  font-size: 14px;
+  color: #86909c;
+  font-weight: 500;
+  letter-spacing: .3px;
+  transition: color .28s ease;
+}
+.stat-item:hover .stat-label {
+  color: #4e5969;
 }
 
 /* ============ FEATURES ============ */

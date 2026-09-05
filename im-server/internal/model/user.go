@@ -42,6 +42,8 @@ type User struct {
 	MyInviteCode   string     `gorm:"size:32" json:"myInviteCode"`    // 我的邀请码（后台关联：用户中心展示 + 点击复制）
 	RegisterIP     string     `gorm:"size:64" json:"registerIP"`      // 注册 IP（注册时捕获，AutoMigrate 自动加列）
 	RegisterDevice string     `gorm:"size:255" json:"registerDevice"` // 注册设备（Android/iOS/Web/... + 设备号）
+	IsGuest        int        `gorm:"default:0" json:"isGuest"`       // 是否游客账号（1=游客，按设备号登录，无需密码）
+	GuestDeviceID  string     `gorm:"size:255;index" json:"guestDeviceId"` // 游客绑定设备号（幂等复用，避免重复建号）
 	LastLoginIP    string     `gorm:"size:64" json:"lastLoginIP"`     // 最后登录 IP（登录成功时更新）
 	LastLoginAt    *time.Time `json:"lastLoginAt"`
 	CreatedAt      time.Time  `json:"createdAt"`

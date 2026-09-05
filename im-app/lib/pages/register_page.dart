@@ -242,14 +242,13 @@ class _RegisterPageState extends State<RegisterPage> {
               isDark ? null : const BoxDecoration(gradient: lightGradient),
           child: SafeArea(
             top: true,
-            child: Stack(
-              children: [
-                // 单屏展示：去掉滚动，所有信息压缩在一屏内（Issue 2）
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(28, 0, 28, 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
+            child: SingleChildScrollView(
+              // 字段全开（账号/密码/确认/图形验证码/短信验证码/邀请码）时表单可能超过一屏，
+              // 用滚动保证底部「注册」按钮始终可达（含错误提示出现时也不会被顶掉）。
+              padding: const EdgeInsets.fromLTRB(28, 0, 28, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
                       const SizedBox(height: 8),
                       // 返回 + 语言胶囊
                       Row(
@@ -345,8 +344,6 @@ class _RegisterPageState extends State<RegisterPage> {
                     ],
                   ),
                 ),
-              ],
-            ),
           ),
         ),
       ),
@@ -707,7 +704,7 @@ class _RegisterPageState extends State<RegisterPage> {
         fillColor:
             isDark ? scheme.surfaceContainerHighest : const Color(0xFFF7F8FA),
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,

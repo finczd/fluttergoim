@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -93,6 +94,24 @@ class ApiClient {
   Future<void> saveRefresh(String t) =>
       _storage.write(key: _refreshKey, value: t);
   Future<String?> readRefresh() => _storage.read(key: _refreshKey);
+
+  /// 持久化设备号：首次生成 UUID(v4) 存入安全存储，之后复用。
+  /// 游客注册以设备号为幂等键，保证同一设备只对应一个游客账号。
+  static const _deviceIdKey = 'device_id';
+  Future<String> getDeviceId() async {
+    final existing = await readPref(_deviceIdKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final rnd = Random.secure();
+    final b = List<int>.generate(16, (_) => rnd.nextInt(256));
+    b[6] = (b[6] & 0x0f) | 0x40; // version 4
+    b[8] = (b[8] & 0x3f) | 0x80; // variant 10xx
+    final hex = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+    final uuid =
+        '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-'
+        '${hex.substring(16, 20)}-${hex.substring(20, 32)}';
+    await writePref(_deviceIdKey, uuid);
+    return uuid;
+  }
 
   /// 轻量本地偏好（非敏感 UI 状态，如公告关闭记录）
   Future<String?> readPref(String key) => _storage.read(key: 'pref_$key');

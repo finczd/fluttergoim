@@ -87,6 +87,7 @@ type AuthFlags struct {
 	WalletOn bool `json:"walletOn"`
 	// 功能开关：是否开启邀请码（关闭 → 用户中心不显示我的邀请码；与「邀请码注册」开关相互独立）
 	InviteFeatureOn bool `json:"inviteFeatureOn"`
+	GuestOn bool `json:"guestOn"`
 }
 
 func GetAuthFlags(ctx context.Context, cfg *config.Config) AuthFlags {
@@ -110,6 +111,7 @@ func GetAuthFlags(ctx context.Context, cfg *config.Config) AuthFlags {
 		AssistantAvatar: GetAssistantConfig(ctx, cfg).Avatar,
 		WalletOn:        boolVal(SysConfigGet(ctx, "wallet_enabled", true)),
 		InviteFeatureOn: boolVal(SysConfigGet(ctx, "invite_feature_enabled", true)),
+		GuestOn:         boolVal(SysConfigGet(ctx, "guest_register_enabled", false)),
 	}
 }
 

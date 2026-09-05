@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs'
 
 const DATA_DIR = join(process.cwd(), 'data')
 const DB_PATH = join(DATA_DIR, 'chatpulse.db')
-const DB_SCHEMA_VERSION = 4 // 每次表结构变更需要补齐就 +1
+const DB_SCHEMA_VERSION = 5 // 每次表结构变更需要补齐就 +1
 
 let db: Database.Database | null = null
 
@@ -64,6 +64,8 @@ function initTables(d: Database.Database) {
       price_enterprise_note TEXT NOT NULL DEFAULT '独占授权，SLA保障，专属团队',
       -- Demo 下载地址（后台可配）
       android_download_url TEXT NOT NULL DEFAULT '',
+      ios_download_url TEXT NOT NULL DEFAULT '',
+      ios_self_sign_guide TEXT NOT NULL DEFAULT '请自行签名安装测试',
       admin_panel_url TEXT NOT NULL DEFAULT '',
       pc_client_url TEXT NOT NULL DEFAULT ''
     );
@@ -164,6 +166,21 @@ function initTables(d: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_ai_job_runs_started ON ai_job_runs(started_at);
     CREATE INDEX IF NOT EXISTS idx_ai_job_runs_status ON ai_job_runs(status);
+
+    /* ======= 新增：文档管理 docs（不再读磁盘 md） ======= */
+    CREATE TABLE IF NOT EXISTS docs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'arch',
+      category_label TEXT NOT NULL DEFAULT '架构与设计',
+      content TEXT NOT NULL DEFAULT '',
+      order_num INTEGER NOT NULL DEFAULT 99,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_docs_slug ON docs(slug);
+    CREATE INDEX IF NOT EXISTS idx_docs_cat ON docs(category);
   `)
 
   // ---------- site_config 单例行 ----------
@@ -202,6 +219,11 @@ function initTables(d: Database.Database) {
   safeAddColumn('site_config', 'contact_email', "TEXT NOT NULL DEFAULT ''")
   safeAddColumn('site_config', 'contact_wechat', "TEXT NOT NULL DEFAULT ''")
   safeAddColumn('site_config', 'contact_qq', "TEXT NOT NULL DEFAULT ''")
+  safeAddColumn('site_config', 'android_download_url', "TEXT NOT NULL DEFAULT ''")
+  safeAddColumn('site_config', 'ios_download_url', "TEXT NOT NULL DEFAULT ''")
+  safeAddColumn('site_config', 'ios_self_sign_guide', "TEXT NOT NULL DEFAULT '请自行签名安装测试'")
+  safeAddColumn('site_config', 'admin_panel_url', "TEXT NOT NULL DEFAULT ''")
+  safeAddColumn('site_config', 'pc_client_url', "TEXT NOT NULL DEFAULT ''")
   safeAddColumn('site_config', 'price_standard_usdt',    'REAL NOT NULL DEFAULT 699')
   safeAddColumn('site_config', 'price_professional_usdt','REAL NOT NULL DEFAULT 1399')
   safeAddColumn('site_config', 'price_enterprise_text',  "TEXT NOT NULL DEFAULT '面议'")

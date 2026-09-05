@@ -7,6 +7,7 @@ class AuthConfig {
   final String authMode; // none / sms / email
   final bool inviteCodeOn;
   final bool registerOn;
+  final bool guestOn;
   // 品牌信息（后端 /auth/config 提供，前端用于登录/注册页 logo + 名称展示）
   final String appName;
   final String appLogo;
@@ -17,6 +18,7 @@ class AuthConfig {
       : authMode = j['authMode'] ?? 'none',
         inviteCodeOn = j['inviteCodeOn'] ?? false,
         registerOn = j['registerOn'] ?? true,
+        guestOn = j['guestOn'] ?? false,
         appName = (j['appName'] ?? j['app_name'] ?? 'ChatPulse').toString(),
         appLogo = (j['appLogo'] ?? j['app_logo'] ?? '').toString(),
         brandName =
@@ -39,11 +41,13 @@ class AuthResult {
   final String accessToken;
   final String refreshToken;
   final Map<String, dynamic> user;
+  final bool isNewGuest;
 
   AuthResult.fromJson(Map<String, dynamic> j)
       : accessToken = j['accessToken'],
         refreshToken = j['refreshToken'],
-        user = j['user'] ?? {};
+        user = j['user'] ?? {},
+        isNewGuest = j['isNewGuest'] ?? false;
 }
 
 class AuthService {
@@ -140,6 +144,25 @@ class AuthService {
     final r = await _dio.post('/api/v1/user/bind-phone', data: {
       'phone': phone,
       'countryCode': countryCode,
+      'code': code,
+    });
+    _check(r);
+  }
+
+  /// 游客注册/登录：按设备号幂等（后端处理）。返回登录态，用法同 login。
+  Future<AuthResult> guestRegister(
+      {required String deviceId, int deviceType = 1}) async {
+    final r = await _dio.post('/api/v1/auth/guest', data: {
+      'deviceId': deviceId,
+      'deviceType': deviceType,
+    });
+    _check(r);
+    return AuthResult.fromJson(r.data['data']);
+  }
+
+  /// 登录后补填邀请码（游客/普通用户通用），复用后端现有邀请码逻辑自动加好友。
+  Future<void> bindInviteCode(String code) async {
+    final r = await _api.post('/api/v1/invite/bind', data: {
       'code': code,
     });
     _check(r);

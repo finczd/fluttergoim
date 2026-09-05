@@ -1,7 +1,7 @@
 <template>
   <div class="download-page">
     <div class="dl-container">
-      <!-- iOS 提示弹窗 -->
+      <!-- iOS 提示弹窗（统一：苹果系统限制说明 + 下载链接 + 联系客服） -->
       <Teleport to="body">
         <transition name="modal-fade">
           <div v-if="showIosTip" class="dl-modal-mask" @click.self="dismissIos">
@@ -12,14 +12,20 @@
                   <path d="M18 17.5c-.5 1.1-.8 1.6-1.5 2.6-1 1.4-2.4 3.1-4.1 3.1-1.5 0-1.9-1-3.9-1-2 0-2.5 1-4 1-1.7 0-3-1.6-4-3C-1 16.3.4 11 3.5 11c1.6 0 2.8 1 4.3 1 1.5 0 2.3-1 4-1 1 0 2.1.5 3 1.4" stroke="#165dff" stroke-width="1.5"/>
                 </svg>
               </div>
-              <h2 class="dl-modal-title">当前暂时不支持 iOS</h2>
-              <p class="dl-modal-desc">正在为您联系客服，获取更多帮助...</p>
+              <h2 class="dl-modal-title">关于 iOS 下载</h2>
+              <p class="dl-modal-desc">
+                由于苹果系统限制，IPA 安装包无法像 Android APK 一样直接安装。<br/>
+                {{ iosGuide || '下载的 IPA 文件需要自行签名测试' }}。
+              </p>
               <div class="dl-modal-actions">
-                <a :href="telegramUrl" target="_blank" class="btn btn-primary btn-lg dl-modal-btn">
-                  <svg width="18" height="18" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="24" fill="#fff"/><path d="M20 34c-1.2 0-1.1-.5-1.6-1.8l-3.7-12.3c-.4-1.3.5-2 1.6-2.3l26.4-10.2c1.4-.5 2.9 0 2.9 1.9 0 .3-.1.6-.2.9L38.5 27c-.2 1-.9 1.3-1.9 1l-7.6-2.6-3.7 7.6c-.6 1-1.1 1.3-2.3 1.3z" fill="#165dff"/></svg>
-                  联系 Telegram 客服
+                <a v-if="iosUrl" :href="iosUrl" target="_blank" class="btn btn-primary btn-lg dl-modal-btn">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 4v12M6 10l6 6 6-6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  下载 IPA 文件
                 </a>
-                <button class="btn btn-outline" @click="dismissIos">关闭</button>
+                <a :href="telegramUrl" target="_blank" class="btn btn-outline btn-lg dl-modal-btn">
+                  <svg width="18" height="18" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="24" fill="#165dff"/><path d="M20 34c-1.2 0-1.1-.5-1.6-1.8l-3.7-12.3c-.4-1.3.5-2 1.6-2.3l26.4-10.2c1.4-.5 2.9 0 2.9 1.9 0 .3-.1.6-.2.9L38.5 27c-.2 1-.9 1.3-1.9 1l-7.6-2.6-3.7 7.6c-.6 1-1.1 1.3-2.3 1.3z" fill="#fff"/></svg>
+                  联系客服
+                </a>
               </div>
             </div>
           </div>
@@ -51,14 +57,14 @@
           <p v-if="androidUrl" class="dl-hint">点击下载安装包，安装时请允许"未知来源"</p>
         </div>
 
-        <!-- iOS 提示 -->
+        <!-- iOS 用户：显示可点击的提示卡片 -->
         <div v-else-if="isIOS" class="dl-ios-section">
-          <div class="dl-ios-tip" @click="showIosTip = true">
+          <div class="dl-ios-tip dl-ios-tip-clickable" @click="showIosTip = true">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
               <path d="M17 4c-1.2 0-2.4.6-3.1 1.4-.7.8-1.3 1.8-1.1 2.9 1.2 0 2.3-.7 3-1.5.7-.9 1.1-1.8 1.2-2.8z" fill="#165dff"/>
               <path d="M18 17.5c-.5 1.1-.8 1.6-1.5 2.6-1 1.4-2.4 3.1-4.1 3.1-1.5 0-1.9-1-3.9-1-2 0-2.5 1-4 1-1.7 0-3-1.6-4-3C-1 16.3.4 11 3.5 11c1.6 0 2.8 1 4.3 1 1.5 0 2.3-1 4-1 1 0 2.1.5 3 1.4" stroke="#165dff" stroke-width="1.5"/>
             </svg>
-            <span>iOS 版本正在开发中</span>
+            <span>iOS 下载 · 点击查看说明</span>
           </div>
         </div>
 
@@ -74,9 +80,9 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17 8h2a3 3 0 0 1 0 6h-2V8zM5 7h9v10H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM2 12h1M14 8l3-2M14 16l3 2" stroke="#00b42a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
               Android
             </span>
-            <span class="dl-platform ios disabled">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17 4c-1.2 0-2.4.6-3.1 1.4-.7.8-1.3 1.8-1.1 2.9 1.2 0 2.3-.7 3-1.5.7-.9 1.1-1.8 1.2-2.8z" fill="#86909c"/></svg>
-              iOS（敬请期待）
+            <span class="dl-platform ios" @click="showIosTip = true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17 4c-1.2 0-2.4.6-3.1 1.4-.7.8-1.3 1.8-1.1 2.9 1.2 0 2.3-.7 3-1.5.7-.9 1.1-1.8 1.2-2.8z" fill="#165dff"/></svg>
+              iOS
             </span>
           </div>
         </div>
@@ -119,6 +125,8 @@ useHead({
 })
 
 const androidUrl = ref('')
+const iosUrl = ref('')
+const iosGuide = ref('请自行签名安装测试')
 const adminPanelUrl = ref('')
 const pcClientUrl = ref('')
 const contactTelegram = ref('')
@@ -150,20 +158,13 @@ onMounted(async () => {
   try {
     const res: any = await $fetch('/api/site-config')
     androidUrl.value = res?.data?.androidDownloadUrl || ''
+    iosUrl.value = res?.data?.iosDownloadUrl || ''
+    iosGuide.value = res?.data?.iosSelfSignGuide || '下载的 IPA 文件需要自行签名测试'
     adminPanelUrl.value = res?.data?.adminPanelUrl || ''
     pcClientUrl.value = res?.data?.pcClientUrl || ''
     contactTelegram.value = res?.data?.contactTelegram || ''
     telegramUrl.value = `https://t.me/${(contactTelegram.value || '@ChatPulse_BD').replace(/^@/, '')}`
   } catch {}
-
-  // iOS 自动弹窗 + 3 秒后跳转客服
-  if (isIOS.value) {
-    showIosTip.value = true
-    setTimeout(() => {
-      window.location.href = telegramUrl.value
-    }, 3000)
-    return
-  }
 
   // 桌面端生成二维码（指向当前 /download 页面）
   if (!isAndroid.value && !isIOS.value) {
@@ -270,12 +271,19 @@ onMounted(async () => {
   color: #86909c;
   font-size: 15px;
   font-weight: 600;
-  cursor: pointer;
   transition: all .2s;
 }
 
-.dl-ios-tip:hover {
-  background: #e5e6eb;
+.dl-ios-tip-clickable {
+  background: #f5f8ff;
+  border: 1px solid #dbeafe;
+  color: #165dff;
+  cursor: pointer;
+}
+
+.dl-ios-tip-clickable:hover {
+  background: #e8f3ff;
+  border-color: #165dff;
 }
 
 /* Desktop QR */
@@ -336,7 +344,8 @@ onMounted(async () => {
 }
 
 .dl-platform.android { color: #00b42a; }
-.dl-platform.ios.disabled { color: #86909c; }
+.dl-platform.ios { color: #165dff; cursor: pointer; transition: all .2s; }
+.dl-platform.ios:hover { background: #e8f3ff; }
 
 /* Extra links */
 .dl-extra {

@@ -14,6 +14,8 @@ export default defineEventHandler(async (event) => {
   if (body.contactEmail !== undefined) patch.contact_email = String(body.contactEmail)
   if (body.h5DemoUrl !== undefined) patch.h5_demo_url = body.h5DemoUrl
   if (body.androidDownloadUrl !== undefined) patch.android_download_url = String(body.androidDownloadUrl)
+  if (body.iosDownloadUrl !== undefined) patch.ios_download_url = String(body.iosDownloadUrl)
+  if (body.iosSelfSignGuide !== undefined) patch.ios_self_sign_guide = String(body.iosSelfSignGuide)
   if (body.adminPanelUrl !== undefined) patch.admin_panel_url = String(body.adminPanelUrl)
   if (body.pcClientUrl !== undefined) patch.pc_client_url = String(body.pcClientUrl)
 
@@ -39,7 +41,7 @@ export default defineEventHandler(async (event) => {
   const u = d.prepare(`SELECT site_title,site_description,site_keywords,logo,contact_telegram,contact_wechat,contact_qq,contact_phone,contact_email,h5_demo_url,
     price_standard_usdt,price_professional_usdt,price_enterprise_text,price_period,
     price_standard_note,price_professional_note,price_enterprise_note,
-    android_download_url,admin_panel_url,pc_client_url
+    android_download_url,ios_download_url,ios_self_sign_guide,admin_panel_url,pc_client_url
     FROM site_config WHERE id=1`).get() as any
   return {
     code: 0, message: '保存成功',
@@ -50,6 +52,8 @@ export default defineEventHandler(async (event) => {
       contactPhone: u.contact_phone || '', contactEmail: u.contact_email || '',
       h5DemoUrl: u.h5_demo_url,
       androidDownloadUrl: u.android_download_url || '',
+      iosDownloadUrl: u.ios_download_url || '',
+      iosSelfSignGuide: u.ios_self_sign_guide || '请自行签名安装测试',
       adminPanelUrl: u.admin_panel_url || '',
       pcClientUrl: u.pc_client_url || '',
       pricing: {

@@ -11,6 +11,7 @@ export interface AuthConfig {
   authMode: 'none' | 'sms' | 'email'
   inviteCodeOn: boolean
   registerOn: boolean
+  guestOn: boolean
   e2eOn: boolean
 }
 
