@@ -31,12 +31,9 @@ workflows:
       - name: 挂载证书并打包 IPA
         script: |
           xcode-project use-profiles
-          if [ -n "$CM_EXPORT_OPTIONS" ]; then
-            flutter build ipa --release --export-options-plist="$CM_EXPORT_OPTIONS"
-          else
-            echo "CM_EXPORT_OPTIONS 为空，改用 Flutter 自动导出配置（工程已由 use-profiles 挂好签名）"
-            flutter build ipa --release
-          fi
+          # use-profiles 把导出配置写到文件（本环境路径固定），而非 CM_EXPORT_OPTIONS 变量
+          EXPORT_OPTS="${CM_EXPORT_OPTIONS:-/Users/builder/export_options.plist}"
+          flutter build ipa --release --export-options-plist="$EXPORT_OPTS"
     artifacts:
       - build/ios/ipa/*.ipa               # 相对 working_directory(im-app)，即 im-app/build/ios/ipa/*.ipa
     publishing:
