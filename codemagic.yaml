@@ -30,23 +30,9 @@ workflows:
         script: flutter packages pub get
       - name: 挂载证书与描述文件
         script: xcode-project use-profiles
-      - name: 生成导出配置并打包 IPA
+      - name: 打包 IPA（导出配置用 use-profiles 生成的 $CM_EXPORT_OPTIONS，含 ad-hoc/teamID/描述文件映射）
         script: |
-          cat > /tmp/exportOptions.plist <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>ad-hoc</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>stripSwiftSymbols</key>
-            <true/>
-          </dict>
-          </plist>
-          EOF
-          flutter build ipa --release --export-options-plist=/tmp/exportOptions.plist
+          flutter build ipa --release --export-options-plist=$CM_EXPORT_OPTIONS
     artifacts:
       - build/ios/ipa/*.ipa               # 相对 working_directory(im-app)，即 im-app/build/ios/ipa/*.ipa
     publishing:
