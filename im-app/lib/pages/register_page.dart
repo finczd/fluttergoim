@@ -51,10 +51,17 @@ class _RegisterPageState extends State<RegisterPage> {
     _load();
   }
 
-  /// 后台开启短信/邮箱认证（authMode != none）时，需要图形验证码（发码前置）+ 短信验证码
+  /// 后台开启短信/邮箱认证（authMode != none）时，需要短信/邮箱验证码
   bool get _needAuth {
     final m = _config?.authMode ?? 'none';
     return m.isNotEmpty && m != 'none';
+  }
+
+  /// 是否需要图形验证码：仅在「开启了手机/邮箱认证」且后台打开了图形验证码时才需要。
+  /// 图文码是发送手机/邮箱验证码的前置门槛，认证模式为 none 时根本不发码，
+  /// 自然也不该要图形验证码。
+  bool get _needCaptcha {
+    return _needAuth && (_config?.captchaOn ?? false);
   }
 
   Future<void> _load() async {
@@ -64,7 +71,7 @@ class _RegisterPageState extends State<RegisterPage> {
       _config = cfg;
       _logoUrl = cfg.appLogo.isNotEmpty ? cfg.appLogo : cfg.brandLogo;
     });
-    if (_needAuth) {
+    if (_needCaptcha) {
       await _loadCaptcha();
     }
   }
@@ -106,18 +113,25 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   Future<void> _sendCode() async {
+    // 防御：只在开启手机/邮箱认证时发码。按钮本来就在 needAuth 块内，
+    // 加这一条防止以后 UI 调整后误触，把空 code 请求打到后端。
+    if (!_needAuth) return;
     final acc = _account.text.trim();
     if (acc.isEmpty) {
       setState(() => _error = '请先填写手机号 / 账号');
       return;
     }
-    if (_captcha == null) {
-      setState(() => _error = '图形验证码加载中，请稍候');
-      return;
-    }
-    if (_captchaCode.text.trim().isEmpty) {
-      setState(() => _error = '请先填写图形验证码');
-      return;
+    // 图形验证码只在后台开启时才校验：关闭时 _loadCaptcha 不会被调用，
+    // _captcha 恒为 null，若在这里无条件拦会把「获取验证码」永久卡死。
+    if (_needCaptcha) {
+      if (_captcha == null) {
+        setState(() => _error = '图形验证码加载中，请稍候');
+        return;
+      }
+      if (_captchaCode.text.trim().isEmpty) {
+        setState(() => _error = '请先填写图形验证码');
+        return;
+      }
     }
     // 账号含 @ 视为邮箱，走邮箱渠道；否则走短信渠道
     final channel = acc.contains('@') ? 'email' : 'sms';
@@ -126,9 +140,12 @@ class _RegisterPageState extends State<RegisterPage> {
       _error = '';
     });
     try {
-      final ch = await _svc.sendCode(acc, _captcha!.captchaId,
-          _captchaCode.text.trim(),
-          channel: channel);
+      final ch = await _svc.sendCode(
+        acc,
+        _captcha?.captchaId ?? '', // 图形验证码关闭时传空，由后端按 AUTH_MODE 决定
+        _captchaCode.text.trim(),
+        channel: channel,
+      );
       if (!mounted) return;
       setState(() => _smsLeft = 60);
       _startSmsCountdown();
@@ -160,7 +177,8 @@ class _RegisterPageState extends State<RegisterPage> {
       return;
     }
     // 后台开启认证模式时的前置校验
-    if (_needAuth) {
+    // 图形验证码只在「开启认证 + 后台打开图形验证码」时才校验
+    if (_needCaptcha) {
       if (_captcha == null) {
         setState(() => _error = '图形验证码加载中，请稍候');
         return;
@@ -169,6 +187,8 @@ class _RegisterPageState extends State<RegisterPage> {
         setState(() => _error = '请填写图形验证码');
         return;
       }
+    }
+    if (_needAuth) {
       if (_smsCode.text.trim().isEmpty) {
         setState(() => _error = '请填写短信验证码');
         return;
@@ -186,9 +206,15 @@ class _RegisterPageState extends State<RegisterPage> {
         inviteCode:
             (_config?.inviteCodeOn ?? false) ? _inviteCode.text.trim() : null,
         code: _needAuth ? _smsCode.text.trim() : null,
-        captchaId: _needAuth && _captcha != null ? _captcha!.captchaId : null,
-        captchaCode: _needAuth ? _captchaCode.text.trim() : null,
-        channel: _account.text.trim().contains('@') ? 'email' : 'sms',
+        captchaId:
+            _needCaptcha && _captcha != null ? _captcha!.captchaId : null,
+        captchaCode: _needCaptcha ? _captchaCode.text.trim() : null,
+        // 关键：channel 必须跟着认证模式走。以前这里无条件传 'sms'/'email'，
+        // authMode=none 时后端收到非空 channel 就进短信分支，拿空 code 去 Redis
+        // 比对 → 报 2002「验证码错误或过期」（与图形验证码开关无关）。
+        channel: _needAuth
+            ? (_account.text.trim().contains('@') ? 'email' : 'sms')
+            : null,
       );
       await _api.saveToken(r.accessToken);
       await _api.saveRefresh(r.refreshToken);
@@ -449,6 +475,7 @@ class _RegisterPageState extends State<RegisterPage> {
     AuthConfig? cfg,
   ) {
     final needAuth = _needAuth;
+    final needCaptcha = _needCaptcha;
     return Container(
       decoration: BoxDecoration(
         color: scheme.surface,
@@ -526,8 +553,8 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
             ),
           ),
-          // ===== 图形验证码 + 短信验证码（后台开启认证模式时显示）=====
-          if (needAuth) ...[
+          // ===== 图形验证码（开启手机/邮箱认证 且 后台打开图形验证码时显示）=====
+          if (needCaptcha) ...[
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -579,7 +606,9 @@ class _RegisterPageState extends State<RegisterPage> {
                 ),
               ],
             ),
-            const SizedBox.shrink(),
+          ],
+          // ===== 短信/邮箱验证码（后台开启认证模式时显示）=====
+          if (needAuth) ...[
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,

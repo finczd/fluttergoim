@@ -79,12 +79,12 @@ type RegisterReq struct {
 // Register 注册（按认证模式校验验证码 / 邀请码 / 注册开关）
 // clientIP：注册请求来源 IP（handler 传 c.ClientIP()），落 user.register_ip 供后台审计
 func Register(ctx context.Context, cfg *config.Config, req *RegisterReq, clientIP string) (*model.User, string, string, error) {
-	// 1. 注册开关
-	if !cfg.RegisterOn {
+	// 1. 注册开关（后台 sys_config.register_enabled 优先，环境变量 REGISTER_ON 仅回落）
+	if !boolVal(SysConfigGet(ctx, "register_enabled", cfg.RegisterOn)) {
 		return nil, "", "", errs.RegisterOff
 	}
 	// 2. 图形验证码（后台配置 captcha_enabled=true 才校验；默认关闭——前端已不再收集）
-	if boolVal(SysConfigGet(ctx, "captcha_enabled", false)) {
+	if needCaptcha(ctx, cfg) {
 		if err := verifyCaptcha(ctx, req.CaptchaID, req.CaptchaCode); err != nil {
 			return nil, "", "", err
 		}
@@ -111,10 +111,17 @@ func Register(ctx context.Context, cfg *config.Config, req *RegisterReq, clientI
 			}
 		}
 	}
-	// 6. 按认证模式校验验证码（channel 显式指定时优先，否则用 AUTH_MODE）
-	channel := req.Channel
-	if channel == "" {
-		channel = cfg.AuthMode
+	// 6. 按认证模式校验验证码（认证模式以数据库为准，客户端 channel 仅在已开启认证时采纳）
+	// 认证模式以数据库为准（后台 sys_config.auth_mode 优先，环境变量仅回落）
+	mode := strVal(SysConfigGet(ctx, "auth_mode", cfg.AuthMode))
+	if mode == "" {
+		mode = authModeNone
+	}
+	// 客户端显式 channel 仅在「已开启手机/邮箱认证」时采纳：
+	// auth_mode=none 时若仍照用客户端 channel，会拿空 code 去比对 Redis → 误报 2002
+	channel := mode
+	if mode != authModeNone && req.Channel != "" {
+		channel = req.Channel
 	}
 	switch channel {
 	case authModeSMS:
@@ -189,7 +196,9 @@ func Register(ctx context.Context, cfg *config.Config, req *RegisterReq, clientI
 	}
 
 	// 9. 注册成功自动添加小助手（后台开启时）
-	AssistantAddForUser(ctx, cfg, u.ID)
+	if err := AssistantAddForUser(ctx, cfg, u.ID); err != nil {
+		log.Printf("[assistant] auto add assistant for user %d failed: %v", u.ID, err)
+	}
 
 	// 9.1 注册成功按配置自动添加客服好友（失败不阻断注册）
 	if err := KefuAddForUser(ctx, u.ID); err != nil {
@@ -279,6 +288,11 @@ func GuestRegister(ctx context.Context, cfg *config.Config, req *GuestRegisterRe
 		})
 		exist.LastLoginAt = &now
 		exist.LastLoginIP = clientIP
+
+		// 幂等补齐：首次绑定若失败过（客服当时不在 / DB 抖动），此后每次登录都命中本分支短路，
+		// 会永远补不回来。这里补一次（内部会判断是否已存在关系，已存在则跳过，见函数注释）。
+		guestEnsureAutoFriends(ctx, cfg, exist.ID)
+
 		access, refresh, err := issueTokens(ctx, cfg, &exist, req.DeviceID, req.DeviceType)
 		return &exist, access, refresh, false, err
 	}
@@ -294,17 +308,17 @@ func GuestRegister(ctx context.Context, cfg *config.Config, req *GuestRegisterRe
 		regDev += " / " + req.DeviceID
 	}
 	u := model.User{
-		ID:            id.Next(),
-		Account:       account,
-		PasswordHash:  string(hash),
-		Nickname:      randomChineseNickname(),
-		CountryCode:   "+86",
-		Status:        model.StatusNormal,
-		Role:          model.RoleUser,
-		IsGuest:       1,
-		GuestDeviceID: req.DeviceID,
-		ShortID:       model.StrPtr(genShortID(ctx)),
-		RegisterIP:    clientIP,
+		ID:             id.Next(),
+		Account:        account,
+		PasswordHash:   string(hash),
+		Nickname:       randomChineseNickname(),
+		CountryCode:    "+86",
+		Status:         model.StatusNormal,
+		Role:           model.RoleUser,
+		IsGuest:        1,
+		GuestDeviceID:  req.DeviceID,
+		ShortID:        model.StrPtr(genShortID(ctx)),
+		RegisterIP:     clientIP,
 		RegisterDevice: regDev,
 	}
 	if av, ok := SysConfigGet(ctx, "default_avatar", "").(string); ok && av != "" {
@@ -315,7 +329,9 @@ func GuestRegister(ctx context.Context, cfg *config.Config, req *GuestRegisterRe
 	}
 
 	// 3. 自动添加小助手 + 客服好友
-	AssistantAddForUser(ctx, cfg, u.ID)
+	if err := AssistantAddForUser(ctx, cfg, u.ID); err != nil {
+		log.Printf("[assistant] auto add assistant for guest %d failed: %v", u.ID, err)
+	}
 	if err := KefuAddForUser(ctx, u.ID); err != nil {
 		log.Printf("[kefu] auto add kefu for guest %d failed: %v", u.ID, err)
 	}
@@ -323,6 +339,65 @@ func GuestRegister(ctx context.Context, cfg *config.Config, req *GuestRegisterRe
 	// 4. 签发 token
 	access, refresh, err := issueTokens(ctx, cfg, &u, req.DeviceID, req.DeviceType)
 	return &u, access, refresh, true, err
+}
+
+// guestEnsureAutoFriends 幂等补齐「复用已有游客账号」场景下缺失的小助手 / 客服关系。
+//
+// 背景：GuestRegister 命中「同一设备号已存在游客」时会直接 return，只有「新建游客」才会走
+// 自动添加流程（本文件步骤 3）。因此首次绑定若因任何原因失败（客服当时不在、DB 抖动等），
+// 该账号此后永远补不回来——因为后续每次登录都会走这条短路分支。
+//
+// 为什么不能无条件调用 AssistantAddForUser / KefuAddForUser：
+// 两者的「建关系」部分确实是幂等的（kefuBind 用 FirstOrCreate、CreateDirect 先查后建），
+// 但它们成功建完关系后都会各发一条消息（小助手欢迎语、客服招呼），而 SendMessage 在
+// ClientMsgID 为空时会由服务端生成新的 UUID（message.go:61-64），幂等去重判断不会命中，
+// 即每次调用都会落一条新消息。本分支是登录热路径（游客每次打开 App 都会走到），
+// 无条件调用会导致游客每次重新登录都收到重复的欢迎语与客服招呼。
+//
+// 因此先判断关系/会话是否已存在，仅缺失时才执行完整流程：
+//   - 缺失 → 执行一次（发一条消息）；下次登录已存在则跳过，效果与「新建游客」路径一致；
+//   - 已存在 → 直接跳过，不产生任何重复消息。
+func guestEnsureAutoFriends(ctx context.Context, cfg *config.Config, userID int64) {
+	if userID <= 0 {
+		return
+	}
+	// 小助手（assistant 虚拟 uid = -1）：会话不存在才建会话 + 发欢迎语
+	if !hasDirectConvWith(ctx, userID, -1) {
+		if err := AssistantAddForUser(ctx, cfg, userID); err != nil {
+			log.Printf("[assistant] auto add assistant for existing guest %d failed: %v", userID, err)
+		}
+	}
+	// 客服：尚未与任何在职客服建立好友关系才执行绑定 + 打招呼
+	if !hasKefuFriend(ctx, userID) {
+		if err := KefuAddForUser(ctx, userID); err != nil {
+			log.Printf("[kefu] auto add kefu for existing guest %d failed: %v", userID, err)
+		}
+	}
+}
+
+// hasKefuFriend 判断 userID 是否已与任一在职客服（role=RoleKefu 且 status=StatusNormal）建立好友关系。
+// kefuBind 是双向写入，因此只需查 user_id = userID 这一侧即可。
+func hasKefuFriend(ctx context.Context, userID int64) bool {
+	var cnt int64
+	store.DB.WithContext(ctx).Model(&model.FriendRelation{}).
+		Where("user_id = ? AND friend_id IN (?)", userID,
+			store.DB.WithContext(ctx).Model(&model.User{}).Select("id").
+				Where("role = ? AND status = ?", model.RoleKefu, model.StatusNormal)).
+		Count(&cnt)
+	return cnt > 0
+}
+
+// hasDirectConvWith 判断 userID 与 otherID 之间是否已存在单聊会话（只查询，不创建）。
+// 查询条件与 CreateDirect 内部的查重逻辑保持一致（conversation.go:30-34）。
+func hasDirectConvWith(ctx context.Context, userID, otherID int64) bool {
+	var cid int64
+	store.DB.WithContext(ctx).Raw(`
+		SELECT c.id FROM conversation c
+		JOIN conversation_member m1 ON m1.conversation_id = c.id AND m1.user_id = ?
+		JOIN conversation_member m2 ON m2.conversation_id = c.id AND m2.user_id = ?
+		WHERE c.type = ? AND c.status = ? LIMIT 1`,
+		userID, otherID, model.ConvDirect, model.ConvNormal).Scan(&cid)
+	return cid > 0
 }
 
 // genGuestAccount 生成游客短账号：前缀 g + 8 位 hex = 9 字符（≤10 位，且不与邮箱/手机号冲突）
@@ -424,16 +499,22 @@ func DeleteAccount(ctx context.Context, userID int64) error {
 type SendCodeReq struct {
 	Account     string `json:"account" binding:"required"` // 手机号（短信模式）或邮箱（邮箱模式）
 	CountryCode string `json:"countryCode"`                // 国际区号，默认 +86
-	CaptchaID   string `json:"captchaId" binding:"required"`
-	CaptchaCode string `json:"captchaCode" binding:"required"`
+	// 是否必填交给业务层 needCaptcha 判断：关掉图形验证码开关后前端不传这两个字段，
+	// 若仍标 required 会让 Gin 直接返回 1001 参数错误，导致开关形同虚设。
+	CaptchaID   string `json:"captchaId"`
+	CaptchaCode string `json:"captchaCode"`
 	Channel     string `json:"channel"` // sms / email / ""（为空时按 AUTH_MODE 决定）
 }
 
 // SendCode 发送注册/找回验证码（按认证模式或客户端显式指定的渠道）
 // 返回实际使用的发送渠道（sms / email），供前端提示"已发送至短信/邮箱"
 func SendCode(ctx context.Context, cfg *config.Config, req *SendCodeReq) (string, error) {
-	if err := verifyCaptcha(ctx, req.CaptchaID, req.CaptchaCode); err != nil {
-		return "", err
+	// 图形验证码是「发送手机/邮箱验证码」的前置门槛：仅 captcha_enabled 开启
+	// 且认证模式为 sms/email 时才校验（auth_mode=none 时既不发码也不校验图形码）
+	if needCaptcha(ctx, cfg) {
+		if err := verifyCaptcha(ctx, req.CaptchaID, req.CaptchaCode); err != nil {
+			return "", err
+		}
 	}
 	// 限流：每账号 1 次/60s
 	if err := rateLimit(ctx, "sendcode:"+req.Account, 1, 60*time.Second); err != nil {
@@ -445,9 +526,16 @@ func SendCode(ctx context.Context, cfg *config.Config, req *SendCodeReq) (string
 		return "", err
 	}
 
-	channel := req.Channel
-	if channel == "" {
-		channel = cfg.AuthMode
+	// 认证模式以数据库为准（后台 sys_config.auth_mode 优先，环境变量仅回落）
+	mode := strVal(SysConfigGet(ctx, "auth_mode", cfg.AuthMode))
+	if mode == "" {
+		mode = authModeNone
+	}
+	// 客户端显式 channel 仅在「已开启手机/邮箱认证」时采纳；
+	// auth_mode=none 时保持 none，落到下面 default 分支返回 1001「当前未开启验证码服务」
+	channel := mode
+	if mode != authModeNone && req.Channel != "" {
+		channel = req.Channel
 	}
 
 	// 短信/邮件配置：优先读取后台 sys_config（管理后台「系统设置-短信/邮件」），回退到环境变量。
@@ -460,6 +548,8 @@ func SendCode(ctx context.Context, cfg *config.Config, req *SendCodeReq) (string
 	smtpUser := strVal(SysConfigGet(ctx, "smtp_user", cfg.SMTPUser))
 	smtpPass := strVal(SysConfigGet(ctx, "smtp_password", cfg.SMTPPassword))
 	smtpFrom := strVal(SysConfigGet(ctx, "smtp_from", cfg.SMTPFrom))
+	// 端口是数字：SysConfigGet 解出来可能是 float64 / 字符串，统一用 intVal 收敛
+	smtpPort := intVal(SysConfigGet(ctx, "smtp_port", cfg.SMTPPort), cfg.SMTPPort)
 
 	switch channel {
 	case authModeSMS:
@@ -483,7 +573,7 @@ func SendCode(ctx context.Context, cfg *config.Config, req *SendCodeReq) (string
 		if smtpHost == "" || smtpUser == "" {
 			return "", &errs.Err{Code: 2002, Msg: "邮件服务未配置（请在后台系统设置中配置 SMTP，或设置环境变量 SMTP_*）"}
 		}
-		if err := sendEmailCode(smtpHost, cfg.SMTPPort, smtpUser, smtpPass, smtpFrom, req.Account, code); err != nil {
+		if err := sendEmailCode(smtpHost, smtpPort, smtpUser, smtpPass, smtpFrom, req.Account, code); err != nil {
 			log.Printf("send email failed: %v", err)
 			return "", &errs.Err{Code: 2002, Msg: "邮件发送失败：" + err.Error()}
 		}
@@ -500,8 +590,11 @@ func SendCode(ctx context.Context, cfg *config.Config, req *SendCodeReq) (string
 
 // SendBindPhoneCode 绑定手机号：校验图形验证码后，向该手机号发送短信验证码（走已配置的短信服务）
 func SendBindPhoneCode(ctx context.Context, cfg *config.Config, uid int64, phone, countryCode, captchaID, captchaCode string) error {
-	if err := verifyCaptcha(ctx, captchaID, captchaCode); err != nil {
-		return err
+	// 与 SendCode 保持一致：图形验证码仅在 needCaptcha 为真时才校验
+	if needCaptcha(ctx, cfg) {
+		if err := verifyCaptcha(ctx, captchaID, captchaCode); err != nil {
+			return err
+		}
 	}
 	if !isPhone(phone) {
 		return &errs.Err{Code: 1001, Msg: "请输入正确的手机号"}
@@ -588,6 +681,17 @@ func issueTokens(ctx context.Context, cfg *config.Config, u *model.User, deviceI
 		}).FirstOrCreate(&model.Device{UserID: u.ID, DeviceID: deviceID})
 	}
 	return access, refresh, nil
+}
+
+// needCaptcha 是否需要校验图文验证码。
+// 语义：图文验证码是「发送手机/邮箱验证码」的前置门槛，只有开启了手机或邮箱认证
+// （auth_mode = sms / email）时才存在这个门槛；认证模式为 none 时既不发码也不校验图形码。
+func needCaptcha(ctx context.Context, cfg *config.Config) bool {
+	if !boolVal(SysConfigGet(ctx, "captcha_enabled", false)) {
+		return false
+	}
+	mode := strVal(SysConfigGet(ctx, "auth_mode", cfg.AuthMode))
+	return mode == authModeSMS || mode == authModeEmail
 }
 
 func verifyCaptcha(ctx context.Context, cid, code string) error {
@@ -768,7 +872,7 @@ func deviceName(t int) string {
 // ============ 游客随机昵称 / 随机串 ============
 
 var (
-	surnameList = []string{"李", "王", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡", "林", "郭", "何", "高", "罗", "郑", "梁", "谢", "宋", "唐", "许", "韩", "冯", "邓", "曹"}
+	surnameList   = []string{"李", "王", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡", "林", "郭", "何", "高", "罗", "郑", "梁", "谢", "宋", "唐", "许", "韩", "冯", "邓", "曹"}
 	givenNameList = []string{"晓明", "小红", "子轩", "一诺", "梓涵", "浩然", "欣怡", "宇航", "思源", "雨桐", "俊杰", "佳怡", "梓萱", "晨曦", "若曦", "天磊", "梦琪", "志强", "雅静", "文博", "可馨", "嘉豪", "诗涵", "博文", "婉清", "立诚", "乐瑶", "修远", "清扬", "知微"}
 )
 

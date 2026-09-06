@@ -1356,7 +1356,7 @@ class AppLocalizations {
       'guestInviteSkip': 'Skip',
       'guestInviteConfirm': 'Confirm',
       'guestInviteInvalid': 'Invalid invite code',
-      'autoGuestHint': 'Auto guest login in 2s',
+      'autoGuestHint': 'Auto guest login in 5s',
       'guestInviteInputHint': 'Enter invite code',
       'dialogsCancel': 'Cancel',
       'dialogsConfirm': 'OK',

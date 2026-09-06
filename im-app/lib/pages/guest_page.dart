@@ -6,12 +6,13 @@ import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/brand_loading.dart';
 import 'home_shell.dart';
 import 'login_page.dart';
 
 /// 引导页：后台开启游客注册时，未登录用户首屏进入。
 /// 两个入口：游客登录（按设备号自动注册并登录）、登录/注册（走原有流程）。
-/// 默认不自动进入游客登录，需用户主动点击。
+/// 进入后 5 秒倒计时自动游客登录；期间点任一按钮即取消倒计时，改为手动操作。
 class GuestPage extends StatefulWidget {
   const GuestPage({super.key});
 
@@ -33,9 +34,9 @@ class _GuestPageState extends State<GuestPage>
   @override
   void initState() {
     super.initState();
-    _autoCtl = AnimationController(
-        vsync: this, duration: const Duration(seconds: 2))
-      ..addStatusListener(_onAutoStatus);
+    _autoCtl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2))
+          ..addStatusListener(_onAutoStatus);
     _load();
   }
 
@@ -93,8 +94,8 @@ class _GuestPageState extends State<GuestPage>
     });
     try {
       final deviceId = await _api.getDeviceId();
-      final r = await _svc.guestRegister(
-          deviceId: deviceId, deviceType: _deviceType);
+      final r =
+          await _svc.guestRegister(deviceId: deviceId, deviceType: _deviceType);
       await _api.saveToken(r.accessToken);
       await _api.saveRefresh(r.refreshToken);
       if (!mounted) return;
@@ -133,8 +134,8 @@ class _GuestPageState extends State<GuestPage>
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(t('guestInviteDesc'),
-                  style: TextStyle(
-                      fontSize: 13, color: scheme.onSurfaceVariant)),
+                  style:
+                      TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
               const SizedBox(height: 12),
               TextField(
                 controller: codeCtrl,
@@ -184,9 +185,8 @@ class _GuestPageState extends State<GuestPage>
           ),
           actions: [
             TextButton(
-              onPressed: loading
-                  ? null
-                  : () => Navigator.of(ctx).pop(true), // 跳过
+              onPressed:
+                  loading ? null : () => Navigator.of(ctx).pop(true), // 跳过
               child: Text(t('guestInviteSkip')),
             ),
             ElevatedButton(
@@ -228,10 +228,9 @@ class _GuestPageState extends State<GuestPage>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = AppTheme.primary;
 
-    // 配置加载中（含可能重定向到登录页）
+    // 配置加载中（含可能重定向到登录页）：品牌 Logo 呼吸脉冲
     if (_config == null) {
-      return const Scaffold(
-          body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: Center(child: BrandRingLoader()));
     }
 
     return AnnotatedRegion<SystemUiOverlayStyle>(

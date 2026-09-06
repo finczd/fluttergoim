@@ -8,6 +8,9 @@ class AuthConfig {
   final bool inviteCodeOn;
   final bool registerOn;
   final bool guestOn;
+
+  /// 图形验证码开关（后端未部署该字段时缺失 → 兜底 false，不会崩）
+  final bool captchaOn;
   // 品牌信息（后端 /auth/config 提供，前端用于登录/注册页 logo + 名称展示）
   final String appName;
   final String appLogo;
@@ -19,6 +22,7 @@ class AuthConfig {
         inviteCodeOn = j['inviteCodeOn'] ?? false,
         registerOn = j['registerOn'] ?? true,
         guestOn = j['guestOn'] ?? false,
+        captchaOn = j['captchaOn'] ?? false,
         appName = (j['appName'] ?? j['app_name'] ?? 'ChatPulse').toString(),
         appLogo = (j['appLogo'] ?? j['app_logo'] ?? '').toString(),
         brandName =
@@ -105,18 +109,25 @@ class AuthService {
     String? inviteCode,
     String? captchaId,
     String? captchaCode,
-    String channel = 'sms',
+    String? channel,
   }) async {
     final data = <String, dynamic>{
       'account': account,
       'password': password,
       'nickname': nickname,
-      'code': code,
       'inviteCode': inviteCode,
       'deviceType': 1,
-      'channel': channel,
     };
-    // 图形验证码（后端若启用则传，UI 已不再收集）
+    // 认证模式为 none 时不要带 channel/code：
+    // 后端 `req.Channel != ""` 会强制走短信分支，拿空 code 去 Redis 比对必然报 2002
+    // 「验证码错误或过期」，而这个报错与图形验证码开关无关。
+    if (channel != null && channel.isNotEmpty) {
+      data['channel'] = channel;
+    }
+    if (code != null && code.isNotEmpty) {
+      data['code'] = code;
+    }
+    // 图形验证码（需要时才传）
     if (captchaId != null && captchaId.isNotEmpty) {
       data['captchaId'] = captchaId;
       data['captchaCode'] = captchaCode ?? '';

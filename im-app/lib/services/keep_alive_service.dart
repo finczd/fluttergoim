@@ -7,7 +7,8 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 ///   - 仅 Android 启动：iOS 没有前台服务概念，强杀即销毁（离线推送兜底）。
 ///   - 目的：让 App 进程退到后台/划掉任务后仍存活，WS 长连接不断，
 ///     在线消息继续实时收；进程真被杀时走极光离线推送兜底。
-///   - 通知权限在启动时通过插件 API 申请（覆盖 Android 13+ POST_NOTIFICATIONS），
+///   - 通知权限在登录进首页后（HomeShell → start()）通过插件 API 申请
+///     （覆盖 Android 13+ POST_NOTIFICATIONS），不在打开 App 时弹框；
 ///     顺带引导用户加电池优化白名单（国产 ROM 杀后台的主因）。
 ///   - 服务本身是"空任务"：不处理数据，只维持进程与通知栏常驻入口。
 ///

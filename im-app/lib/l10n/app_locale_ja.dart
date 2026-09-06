@@ -338,7 +338,7 @@ const Map<String, String> jaDict = {
   'guestInviteSkip': 'スキップ',
   'guestInviteConfirm': '確定',
   'guestInviteInvalid': '招待コードが無効です',
-  'autoGuestHint': '2秒後に自動でゲストログイン',
+  'autoGuestHint': '5秒後に自動でゲストログイン',
   'guestInviteInputHint': '招待コードを入力',
   'dialogsCancel': 'キャンセル',
   'dialogsConfirm': 'OK',

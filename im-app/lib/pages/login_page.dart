@@ -10,6 +10,7 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/brand_loading.dart';
 import '../widgets/lang_picker.dart';
 import 'home_shell.dart';
 import 'pay_ui.dart';
@@ -178,8 +179,16 @@ class _LoginPageState extends State<LoginPage> {
                         child: _buildLangChip(scheme),
                       ),
                       // 品牌 Logo（接口加载，居中 + 紧凑；不显示软件名）
+                      // 登录请求进行中：品牌渐变圆环绕 Logo 旋转（方案2）
                       const SizedBox(height: 12),
-                      _brandLogo(size: 56),
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          _brandLogo(size: 56),
+                          if (_loading)
+                            const BrandRingLoader(size: 76, strokeWidth: 3.5),
+                        ],
+                      ),
                       const SizedBox(height: 16),
                       // 欢迎语（居中 + 紧凑）
                       Text(
@@ -481,8 +490,7 @@ class _LoginPageState extends State<LoginPage> {
         filled: true,
         fillColor:
             isDark ? scheme.surfaceContainerHighest : const Color(0xFFF7F8FA),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,

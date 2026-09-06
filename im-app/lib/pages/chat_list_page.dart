@@ -15,6 +15,7 @@ import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/app_slidable.dart';
+import '../widgets/brand_loading.dart';
 import '../widgets/official_tag.dart';
 import '../widgets/page_header.dart';
 import 'add_friend_page.dart';
@@ -777,25 +778,8 @@ class _ChatListPageState extends State<ChatListPage> {
 
   /// 首次载入态：主色调线性进度条 + 文案（替代原来的灰色转圈）
   Widget _buildLoadingView() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(
-            width: 140,
-            child: LinearProgressIndicator(
-              minHeight: 4,
-              color: AppTheme.primary,
-              backgroundColor: Color(0x1A007AFF),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(AppLocalizations.of(context).t('chatLoadingMsg'),
-              style: TextStyle(
-                  fontSize: 13, color: context.cs.onSurfaceVariant)),
-        ],
-      ),
-    );
+    // 骨架屏（2026-09-06）：替代线性进度条 + 文案，等待感知更低
+    return const SkeletonList(style: SkeletonStyle.chat);
   }
 
   /// 会话卡背景色。置顶 = surface 向主色调抬 6% 的【不透明】色。

@@ -10,6 +10,7 @@ import '../services/user_cache.dart';
 import '../theme/app_theme.dart';
 import '../utils/image_saver.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/brand_loading.dart';
 import 'image_viewer_page.dart';
 
 /// 朋友圈（微信风格：封面 + 发布 + 时间线 + 点赞）
@@ -264,10 +265,9 @@ class _MomentsPageState extends State<MomentsPage> {
               // 白色签名区：既承接头像下半截（不留灰色缝），又在头像正下方展示个性签名
               SliverToBoxAdapter(child: _signatureBlock()),
               if (_loading)
+                // 骨架屏（2026-09-06）：模拟动态卡布局，替代居中转圈
                 const SliverFillRemaining(
-                  child: Center(
-                      child:
-                          CircularProgressIndicator(color: AppTheme.primary)),
+                  child: SkeletonList(style: SkeletonStyle.moments, rows: 4),
                 )
               else if (_posts.isEmpty)
                 SliverFillRemaining(

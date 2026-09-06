@@ -12,6 +12,7 @@ import 'pages/incoming_call_page.dart';
 import 'pages/login_page.dart';
 import 'pages/guest_page.dart';
 import 'services/api_client.dart';
+import 'services/auth_service.dart';
 import 'services/conversation_service.dart';
 import 'services/keep_alive_service.dart';
 import 'services/local_notify_service.dart';
@@ -21,6 +22,7 @@ import 'services/update_service.dart';
 import 'services/user_cache.dart';
 import 'services/wallet_store.dart';
 import 'theme/app_theme.dart';
+import 'widgets/brand_loading.dart';
 import 'widgets/update_dialog.dart';
 
 Future<void> main() async {
@@ -49,6 +51,8 @@ Future<void> main() async {
     await WalletStore.instance.hydrate();
   } catch (_) {}
   // 需求3：App 后台时 WS 新消息 → 通知栏本地通知（极光只推离线用户）
+  // 注意：init 只做插件初始化，不弹权限框；通知权限在登录后
+  // （HomeShell.initState → requestPermission）统一申请
   unawaited(LocalNotifyService.instance.init());
   runApp(const ImApp());
 }
@@ -110,7 +114,7 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   Widget _body = const Scaffold(
-    body: Center(child: CircularProgressIndicator()),
+    body: Center(child: BrandRingLoader()),
   );
   // 启动网络失败态的自动重试：3 秒倒计时自动再试，不用手动点
   Timer? _autoRetryTimer;
@@ -140,9 +144,9 @@ class _AuthGateState extends State<AuthGate> {
       _retryCountdown--;
       if (_retryCountdown <= 0) {
         timer.cancel();
-        // 自动重试：显示转圈，走完整 _decide 流程
-        setState(() => _body =
-            const Scaffold(body: Center(child: CircularProgressIndicator())));
+        // 自动重试：显示品牌 Logo 脉冲，走完整 _decide 流程
+        setState(() =>
+            _body = const Scaffold(body: Center(child: BrandRingLoader())));
         _decide();
       } else {
         // 刷新倒计时文案（重建失败态 widget 以更新秒数）
@@ -209,11 +213,24 @@ class _AuthGateState extends State<AuthGate> {
         _startAutoRetry();
         return;
       }
-  } else {
-    // 后台开启游客注册 → 进入引导页（游客登录 / 登录注册）；否则直接登录页
-    target = GuestPage();
-  }
-  if (!mounted) return;
+    } else {
+      // 后台「开启游客注册」→ 进游客引导页；关闭 → 直接进登录页。
+      // 判断必须在入口就做完：以前无条件进 GuestPage 再在页内跳走，
+      // 会先渲染一个转圈 Scaffold 再 pushReplacement，用户看到引导页闪一下。
+      var guestOn = false;
+      try {
+        final cfg =
+            await AuthService().getConfig().timeout(const Duration(seconds: 8));
+        guestOn = cfg.guestOn;
+      } catch (_) {
+        // 配置拉取失败：按「未开启」处理，直接进登录页
+        // （与 GuestPage 内的兜底一致，保证网络故障时启动不卡死）
+        guestOn = false;
+      }
+      if (!mounted) return;
+      target = guestOn ? GuestPage() : const LoginPage();
+    }
+    if (!mounted) return;
     setState(() => _body = target);
     // 已登录进入主界面：延迟几秒自动检查一次版本更新（本次启动只查一次）
     if (target is HomeShell && !_updateChecked) {
@@ -263,8 +280,8 @@ class _AuthGateState extends State<AuthGate> {
               onPressed: () {
                 // 手动立即重试：停掉倒计时
                 _autoRetryTimer?.cancel();
-                setState(() => _body = const Scaffold(
-                    body: Center(child: CircularProgressIndicator())));
+                setState(() => _body =
+                    const Scaffold(body: Center(child: BrandRingLoader())));
                 _decide();
               },
               child: Text(t('contactsRetry'),

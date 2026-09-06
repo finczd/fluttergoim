@@ -227,27 +227,27 @@
 - 请求体: 无
 - 成功响应 data: `{"captchaId":"string // 图形验证码 ID","image":"string // 验证码图片 base64"}`
 - 错误码: 500（验证码生成失败）
-- 备注: 后续 `/auth/send-code` 需回传 `captchaId` + `captchaCode`。
+- 备注: 后续 `/auth/send-code` 是否需回传 `captchaId` + `captchaCode`，取决于 `GET /api/v1/auth/config` 的 `captchaOn` 与 `authMode`（两者同时满足才校验）。
 
 
 ### `POST /api/v1/auth/send-code`
 
 - 鉴权: 公开
-- 说明: 发送短信/邮箱验证码（按认证模式或显式指定渠道），发送前校验图形验证码。
+- 说明: 发送短信/邮箱验证码（按认证模式或显式指定渠道）。图形验证码按开关校验：仅 `captcha_enabled=true` 且认证模式为 `sms`/`email` 时才校验（即 `needCaptcha`），其余情况不校验也不需要传。
 - 请求体:
   ```json
   {"account":"string(必填) // 手机号(短信模式)或邮箱(邮箱模式)",
    "countryCode":"string(可选) // 国际区号，默认 +86",
-   "captchaId":"string(必填) // 图形验证码 ID",
-   "captchaCode":"string(必填) // 图形验证码内容",
-   "channel":"string(可选) // sms 或 email；为空时按服务端 AUTH_MODE 决定"}
+   "captchaId":"string(可选) // 图形验证码 ID，needCaptcha 为真时必填",
+   "captchaCode":"string(可选) // 图形验证码内容，needCaptcha 为真时必填",
+   "channel":"string(可选) // sms 或 email；为空时按服务端认证模式决定"}
   ```
 - 成功响应 data: `{"channel":"string // 实际发送渠道：sms / email"}`
 - 错误码: 1001（参数错误）/ 2002（验证码错误或过期 / 短信或邮件服务未配置或发送失败）/ 7001（操作过于频繁，每账号 1 次/60s）
 - 备注: 渠道与服务配置强相关——
   - `sms` 走阿里云短信。配置读取优先级：**后台 `sys_config`（`sms_access_key`/`sms_secret`/`sms_sign_name`/`sms_template_code`，即管理后台「系统设置-短信」）> 环境变量 `ALIYUN_SMS_ACCESS_KEY`/`ALIYUN_SMS_SECRET_KEY`/`ALIYUN_SMS_SIGN_NAME`/`ALIYUN_SMS_TEMPLATE_CODE`**。两者皆为空才返回「短信服务未配置」。**在后台配置短信后即可生效，无需改环境变量重启。**
   - `email` 走 SMTP。配置读取优先级：**后台 `sys_config`（`smtp_host`/`smtp_user`/`smtp_password`/`smtp_from`，可选 `smtp_port`）> 环境变量 `SMTP_HOST`/`SMTP_USER`/`SMTP_PASSWORD`/`SMTP_FROM`/`SMTP_PORT`**。两者皆为空才返回「邮件服务未配置」。
-  - 若 `AUTH_MODE=none` 且未显式指定 `channel`，返回「当前未开启验证码服务」。
+  - 认证模式（后台 `sys_config.auth_mode`，未配置时回退环境变量 `AUTH_MODE`）为 `none` 时返回「当前未开启验证码服务」。**注意：此时即使客户端显式传 `channel=sms` 也会被忽略**（避免 `auth_mode=none` 时拿空验证码去比对而误报 2002），与注册接口 `/auth/register` 的判定逻辑一致。
   - 图形验证码校验失败或限流时返回对应业务码；发送失败会在 message 中带上底层错误，便于排查。
 
 ### `POST /api/v1/auth/register`
@@ -265,13 +265,15 @@
    "inviteCode":"string(可选) // 邀请码（邀请开关开启时必填）",
    "captchaId":"string(可选) // 图形验证码 ID（防刷）",
    "captchaCode":"string(可选) // 图形验证码内容",
-   "channel":"string(可选) // sms 或 email；为空时按 AUTH_MODE 决定，需与发送验证码时所用渠道一致",
+   "channel":"string(可选) // sms 或 email；为空时按服务端认证模式决定，需与发送验证码时所用渠道一致。认证模式为 none 时忽略本字段",
    "deviceId":"string(可选)",
    "deviceType":"int(可选)"}
   ```
 - 成功响应 data: `{"user":"object(User) // 见 model.User","accessToken":"string","refreshToken":"string"}`
 - 错误码: 1001（参数错误）/ 2001（账号已存在）/ 2002（验证码错误或过期）/ 2003（邀请码无效）/ 2004（注册已关闭）
-- 备注: 受 `registerOn` 开关控制；`user` 字段为 `model.User`（注意 `id`/`departmentId` 以**字符串**形式输出，因 json tag `,string`；`shortId` 为可空字符串指针，未分配时为 `null`）。
+- 备注: 受 `registerOn` 开关控制（后台 `sys_config.register_enabled` 优先，回退环境变量 `REGISTER_ON`）；`user` 字段为 `model.User`（注意 `id`/`departmentId` 以**字符串**形式输出，因 json tag `,string`；`shortId` 为可空字符串指针，未分配时为 `null`）。
+  - 认证模式以**数据库为准**（后台 `sys_config.auth_mode`，未配置时回退环境变量 `AUTH_MODE`）。`auth_mode=none` 时：既不校验图形验证码也不校验短信/邮箱验证码，**客户端传的 `channel` 会被忽略**（修复此前客户端硬编码 `channel:'sms'` 导致注册误报 2002「验证码错误或过期」）。
+  - `auth_mode` 为 `sms`/`email` 时，客户端显式 `channel` 才被采纳。
 
 ### `POST /api/v1/auth/login`
 
@@ -318,7 +320,7 @@
 - 鉴权: 公开
 - 说明: 返回注册/登录页所需配置（数据库优先，回退环境变量）。
 - 请求体: 无
-- 成功响应 data: `{"authMode":"string","inviteCodeOn":"bool","registerOn":"bool","e2eOn":"bool","guestOn":"bool // 是否开启游客注册","guestInviteCodeOn":"bool // 游客登录是否需要邀请码","appName":"string","appLogo":"string","brandName":"string","brandLogo":"string","announcement":"string","appVersion":"string","updateLog":"string","androidUrl":"string","iosUrl":"string","hotUpdateUrl":"string"}`
+- 成功响应 data: `{"authMode":"string","inviteCodeOn":"bool // 邀请码注册（注册时是否必须填邀请码）","registerOn":"bool","e2eOn":"bool","guestOn":"bool // 是否开启游客注册","inviteFeatureOn":"bool // 邀请码功能开关（关闭 → 用户中心不显示我的邀请码；与 inviteCodeOn 相互独立）","captchaOn":"bool // 是否开启图形验证码，仅在 authMode 为 sms/email 时才实际校验","walletOn":"bool // 零钱功能开关（关闭 → 聊天窗口不显示红包/转账入口、用户中心不显示我的钱包）","onlineDevice":"string // 当前登录设备标识(web/ios/android/windows/macos)","defaultAvatar":"string // 新注册用户默认头像，后台可配","assistantAvatar":"string // 智能小助手头像","appName":"string","appLogo":"string","brandName":"string","brandLogo":"string","announcement":"string","appVersion":"string","updateLog":"string","androidUrl":"string","iosUrl":"string","hotUpdateUrl":"string"}`
 - 错误码: 无（恒成功）
 - 备注: 客户端据此渲染注册/登录页、品牌与公告跑马灯、版本更新检查。
 
@@ -481,13 +483,13 @@
 ### `POST /api/v1/user/bind-phone/send-code`
 
 - 鉴权: 需要Token
-- 说明: 绑定手机号时发送短信验证码。需先校验图形验证码（防刷），再经已配置的短信服务（阿里云）下发。
+- 说明: 绑定手机号时发送短信验证码。图形验证码按开关校验（与 `/auth/send-code` 一致，即 `needCaptcha`：`captcha_enabled=true` 且认证模式为 `sms`/`email` 时才校验），再经已配置的短信服务（阿里云）下发。
 - 请求体:
   ```json
   {"phone":"string(必填) // 待绑定的手机号",
    "countryCode":"string(可选) // 国际区号，默认 +86",
-   "captchaId":"string(必填) // 图形验证码 ID",
-   "captchaCode":"string(必填) // 图形验证码内容"}
+   "captchaId":"string(可选) // 图形验证码 ID，needCaptcha 为真时必填",
+   "captchaCode":"string(可选) // 图形验证码内容，needCaptcha 为真时必填"}
   ```
 - 成功响应 data: 无（`{"code":0,"message":"ok"}`）
 - 错误码: 1001（参数错误/手机号格式不对）/ 2002（图形验证码错误或过期 / 短信服务未配置或发送失败）/ 7001（操作过于频繁，每手机号 1 次/60s）

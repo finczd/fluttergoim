@@ -12,6 +12,7 @@ import '../services/friend_req_store.dart';
 import '../l10n/app_locale.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/brand_loading.dart';
 import '../widgets/official_tag.dart';
 import '../widgets/page_header.dart';
 import 'add_friend_page.dart';
@@ -362,7 +363,7 @@ class _ContactsPageState extends State<ContactsPage> {
             ),
             Expanded(
               child: _loading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const SkeletonList(style: SkeletonStyle.contacts)
                   : _loadFailed
                       ? _buildLoadFailed()
                       : ListView(

@@ -28,18 +28,29 @@ const DefaultKefuGreeting = "你好，我是 {nickname}，很高兴为您服务~
 // KefuConfigGet 读客服配置（默认关闭 + 轮流 + 默认打招呼）。
 // 注意：SysConfigGet 对 {"value": {...}} 包装会解包返回内层对象（map[string]interface{}），
 // 这里 JSON round-trip 转回结构体；mode 非法时按 round 处理；greeting 为空时填充默认文案。
+//
+// 可观测性约定：三个「回落默认值」分支在返回前必须打一条 [kefu] config ... 日志。
+// 原因：这三种情况最终都表现为 autoAdd=false（下游只打 [kefu] skip: autoAdd disabled），
+// 但修法完全不同——「sys_config 里根本没这行」要补配置，「存的值解析不了」要改存的值格式。
+// 不打日志的话用户看到 autoAdd=false 无法区分该补配置还是该改格式。
 func KefuConfigGet(ctx context.Context) KefuConfig {
 	def := KefuConfig{AutoAdd: false, Mode: "round", Greeting: DefaultKefuGreeting}
 	v := SysConfigGet(ctx, "kefu_config", nil)
 	if v == nil {
+		// (a) sys_config 表里没有 config_key = 'kefu_config' 的行（后台没保存成功 / 从未 seed）
+		log.Printf("[kefu] config missing: sys_config has no row with key=kefu_config, fallback to defaults (autoAdd=false)")
 		return def
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
+		log.Printf("[kefu] config marshal failed: %v, fallback to defaults", err)
 		return def
 	}
 	var kc KefuConfig
-	if json.Unmarshal(b, &kc) != nil {
+	if err := json.Unmarshal(b, &kc); err != nil {
+		// (b) 这行存在但存的不是对象（如裸 true / 字符串 / 数字）→ 解析失败 → 当作关闭。
+		// 用反引号原始字符串，避免文案里的双引号需要转义；同时打印原始存储值便于排查。
+		log.Printf(`[kefu] config parse failed: %v — 请检查 sys_config.kefu_config 存的是否为对象格式，例如 {"autoAdd":true,"mode":"round","greeting":"..."}；存成裸 true 或字符串会导致解析失败并被当作关闭 — raw=%s`, err, string(b))
 		return def
 	}
 	if kc.Mode != "all" {
@@ -48,6 +59,8 @@ func KefuConfigGet(ctx context.Context) KefuConfig {
 	if kc.Greeting == "" {
 		kc.Greeting = DefaultKefuGreeting
 	}
+	// 解析成功：确认配置确实读到了（autoAdd=false 时用来排除"读不到/解析失败"这两种可能）
+	log.Printf("[kefu] config loaded: autoAdd=%v mode=%s", kc.AutoAdd, kc.Mode)
 	return kc
 }
 
@@ -60,12 +73,18 @@ func KefuList(ctx context.Context) ([]model.User, error) {
 }
 
 // KefuAddForUser 新用户注册后按配置自动添加客服好友（失败不阻断注册，调用方记 log）
+//
+// 可观测性约定：所有「跳过」分支在返回前必须打一条 [kefu] skip: ... 日志。
+// 历史上这些分支直接 return nil，调用方只在 err != nil 时打日志，导致
+// 「后台已开启自动加客服，但新用户没加上，且服务端一行日志都没有」无法自证。
 func KefuAddForUser(ctx context.Context, userID int64) error {
 	if userID <= 0 {
+		log.Printf("[kefu] skip: invalid userID=%d", userID)
 		return nil
 	}
 	kc := KefuConfigGet(ctx)
 	if !kc.AutoAdd {
+		log.Printf("[kefu] skip: autoAdd disabled (user=%d, kefu_config missing or autoAdd=false)", userID)
 		return nil
 	}
 	list, err := KefuList(ctx)
@@ -73,17 +92,27 @@ func KefuAddForUser(ctx context.Context, userID int64) error {
 		return err
 	}
 	if len(list) == 0 {
+		// 客服不是配 ID，而是 user 表里 role=3(RoleKefu) 且 status=1(StatusNormal) 的行。
+		// 后台「清空数据→用户数据」会按 role <> 2 删除用户，把 role=3 的客服一起删掉，
+		// 这是「以前可以、现在不行」最常见的成因：去「用户管理」把某个用户设为客服即可恢复。
+		log.Printf("[kefu] skip: no available kefu user (role=3 AND status=1) in user table (user=%d)", userID)
 		return nil
 	}
+
+	// bound 统计本次实际建立好友关系的客服数，用于成功路径的 [kefu] ok 日志
+	bound := 0
 
 	if kc.Mode == "all" {
 		for _, k := range list {
 			if err := kefuBind(ctx, userID, k.ID); err != nil {
+				log.Printf("[kefu] bind failed after %d/%d kefu bound (user=%d, kefu=%d): %v", bound, len(list), userID, k.ID, err)
 				return err
 			}
+			bound++
 			// 加完好友顺手发一条招呼（失败仅 log，不阻断后续客服分配）
 			kefuGreet(ctx, userID, k, kc.Greeting)
 		}
+		log.Printf("[kefu] ok: bound %d kefu to user %d", bound, userID)
 		return nil
 	}
 
@@ -94,12 +123,18 @@ func KefuAddForUser(ctx context.Context, userID int64) error {
 			idx = int(f)
 		}
 	}
-	_ = SysConfigSet(ctx, "kefu_rr_index", idx+1)
+	// 计数器写回失败不阻断：轮流分配会退化成「总是取第 idx 个客服」，但好友关系仍然建立成功
+	if err := SysConfigSet(ctx, "kefu_rr_index", idx+1); err != nil {
+		log.Printf("[kefu] persist kefu_rr_index failed (user=%d, idx=%d): %v", userID, idx+1, err)
+	}
 	k := list[idx%len(list)]
 	if err := kefuBind(ctx, userID, k.ID); err != nil {
+		log.Printf("[kefu] bind failed (user=%d, kefu=%d, mode=round): %v", userID, k.ID, err)
 		return err
 	}
+	bound++
 	kefuGreet(ctx, userID, k, kc.Greeting)
+	log.Printf("[kefu] ok: bound %d kefu to user %d", bound, userID)
 	return nil
 }
 

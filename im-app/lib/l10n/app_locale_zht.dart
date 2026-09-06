@@ -338,7 +338,7 @@ const Map<String, String> zhTDict = {
   'guestInviteSkip': '跳過',
   'guestInviteConfirm': '確認',
   'guestInviteInvalid': '邀請碼無效',
-  'autoGuestHint': '2秒後自動遊客登入',
+  'autoGuestHint': '5秒後自動遊客登入',
   'guestInviteInputHint': '請輸入邀請碼',
   'dialogsCancel': '取消',
   'dialogsConfirm': '確定',

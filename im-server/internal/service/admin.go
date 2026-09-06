@@ -87,7 +87,10 @@ type AuthFlags struct {
 	WalletOn bool `json:"walletOn"`
 	// 功能开关：是否开启邀请码（关闭 → 用户中心不显示我的邀请码；与「邀请码注册」开关相互独立）
 	InviteFeatureOn bool `json:"inviteFeatureOn"`
-	GuestOn bool `json:"guestOn"`
+	GuestOn         bool `json:"guestOn"`
+	// 功能开关：是否开启图形验证码。注意仅为「开关值」，实际是否校验还取决于 authMode：
+	// 只有 authMode 为 sms/email 时图文验证码才会被真正校验（见 needCaptcha）。
+	CaptchaOn bool `json:"captchaOn"`
 }
 
 func GetAuthFlags(ctx context.Context, cfg *config.Config) AuthFlags {
@@ -112,6 +115,7 @@ func GetAuthFlags(ctx context.Context, cfg *config.Config) AuthFlags {
 		WalletOn:        boolVal(SysConfigGet(ctx, "wallet_enabled", true)),
 		InviteFeatureOn: boolVal(SysConfigGet(ctx, "invite_feature_enabled", true)),
 		GuestOn:         boolVal(SysConfigGet(ctx, "guest_register_enabled", false)),
+		CaptchaOn:       boolVal(SysConfigGet(ctx, "captcha_enabled", false)),
 	}
 }
 
@@ -127,6 +131,29 @@ func boolVal(v interface{}) bool {
 		return b
 	}
 	return false
+}
+
+// intVal 把 sys_config 里读到的配置值转成正整数，失败或为非正数时返回 def。
+// 之所以要处理三种类型：SysConfigGet 是 JSON 反序列化后的值，数字会被解成 float64，
+// 而后台表单/旧数据可能存成字符串（如 "465"），直接断言 int 会静默拿到 0。
+func intVal(v interface{}, def int) int {
+	switch n := v.(type) {
+	case int:
+		if n > 0 {
+			return n
+		}
+	case float64:
+		if n > 0 {
+			return int(n)
+		}
+	case string:
+		if s := strings.TrimSpace(n); s != "" {
+			if p, err := strconv.Atoi(s); err == nil && p > 0 {
+				return p
+			}
+		}
+	}
+	return def
 }
 
 // ============ 用户管理 ============
@@ -1446,8 +1473,13 @@ func AdminHealthCheck(ctx context.Context, cfg *config.Config, key string) (map[
 				"MinIO":   cfg.MinIOEndpoint,
 				"JWT访问时长": fmt.Sprintf("%dh", cfg.JWTAccessTTLHours),
 				"JWT刷新时长": fmt.Sprintf("%dd", cfg.JWTRefreshTTLDays),
-				"开放注册":    fmt.Sprintf("%v", cfg.RegisterOn),
-				"邀请码注册":   fmt.Sprintf("%v", cfg.InviteCodeOn),
+				// 本区块展示的是环境变量原值，但 register_enabled / invite_code_enabled
+				// 会被后台 sys_config 覆盖（见 auth.go Register），因此额外展示「生效值」，
+				// 避免排查时把 env 值当成实际行为——正是这轮踩的坑。
+				"开放注册":      fmt.Sprintf("%v", cfg.RegisterOn),
+				"开放注册(生效)":  fmt.Sprintf("%v", boolVal(SysConfigGet(ctx, "register_enabled", cfg.RegisterOn))),
+				"邀请码注册":     fmt.Sprintf("%v", cfg.InviteCodeOn),
+				"邀请码注册(生效)": fmt.Sprintf("%v", boolVal(SysConfigGet(ctx, "invite_code_enabled", cfg.InviteCodeOn))),
 			}, 0}
 		},
 	}
@@ -1477,16 +1509,18 @@ func AdminHealthCheck(ctx context.Context, cfg *config.Config, key string) (map[
 }
 
 // checkMinio 真实连通性检测：GET /minio/health/live（1s 超时）+ 配置完整性。
+// 读生效配置（sys_config 优先，env 兜底），与上传服务保持一致。
 func checkMinio(ctx context.Context, cfg *config.Config) hcCheck {
-	endpoint := cfg.MinIOEndpoint
+	mc := MinioConfigGet(ctx, cfg)
+	endpoint := mc.Endpoint
 	if endpoint == "" {
 		return hcCheck{"warn", "MinIO 未配置", nil, 0}
 	}
 	detail := map[string]string{
 		"Endpoint": endpoint,
-		"Bucket":   cfg.MinIOBucket,
+		"Bucket":   mc.Bucket,
 	}
-	if cfg.MinIOBucket == "" || cfg.MinIOAccessKey == "" || cfg.MinIOSecretKey == "" {
+	if mc.Bucket == "" || mc.AccessKey == "" || mc.SecretKey == "" {
 		return hcCheck{"err", "MinIO 配置不完整（缺少 bucket / accessKey / secretKey 之一）", detail, 0}
 	}
 	base := endpoint

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../l10n/app_locale.dart';
 import '../services/call_service.dart';
 import '../services/keep_alive_service.dart';
+import '../services/local_notify_service.dart';
 import '../services/push_service.dart';
 import '../services/sound_service.dart';
 import '../services/unread_store.dart';
@@ -53,9 +54,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     GlobalWs.instance.ensureConnected();
     // 通话信令：登录后挂上全局监听（来电可在任意页面弹出）
     CallService.instance.attach();
-    // Android 保活前台服务：申请通知权限 + 电池优化白名单并启动服务
-    //（启动 App 时必经页面，所有登录入口都覆盖）
-    unawaited(KeepAliveService.instance.start());
+    // 通知权限：登录后才申请（2026-09-06 需求：不在打开 App 时弹框）。
+    // 【必须串行】等权限弹框答复完成后再启动保活前台服务——
+    // 若并发启动，服务带着"通知权限未授予"状态运行，Android 13+ 会
+    // 隐藏其常驻通知 → 通知栏看不到保活提示（2026-09-06 踩坑）。
+    unawaited(LocalNotifyService.instance
+        .requestPermission()
+        .whenComplete(() => KeepAliveService.instance.start()));
     // 极光推送：绑定 alias = 用户 ID（覆盖启动自动登录/登录/注册/扫码四条入口）
     unawaited(PushService.instance.start());
   }
@@ -91,36 +96,36 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             isDark ? Brightness.light : Brightness.dark, // 图标与底色反色
       ),
       child: Scaffold(
-      // IndexedStack 保活 4 个 tab：切换时不销毁/重建页面，
-      // 修复「快速点'我的'先闪'未登录'再加载头像昵称」「发现页每次切 tab 都重新加载」。
-      // 代价是 4 页 initState 在进入首页时并发执行一次（各自拉一次接口），可接受。
-      body: IndexedStack(index: _index, children: _pages),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          border: Border(
-              top: BorderSide(
-                  color: context.cs.onSurface.withValues(alpha: 0.08),
-                  width: 0.5)),
-        ),
-        child: SafeArea(
-          top: false,
-          child: SizedBox(
-            height: 64,
-            child: Row(
-              children: [
-                _tab(0, Icons.chat_bubble_outline, Icons.chat_bubble_rounded,
-                    t('home')),
-                _tab(1, Icons.contacts_outlined, Icons.contacts_rounded,
-                    t('contacts')),
-                _tab(2, Icons.explore_outlined, Icons.explore_rounded,
-                    t('discover')),
-                _tab(3, Icons.person_outline, Icons.person_rounded, t('me')),
-              ],
+        // IndexedStack 保活 4 个 tab：切换时不销毁/重建页面，
+        // 修复「快速点'我的'先闪'未登录'再加载头像昵称」「发现页每次切 tab 都重新加载」。
+        // 代价是 4 页 initState 在进入首页时并发执行一次（各自拉一次接口），可接受。
+        body: IndexedStack(index: _index, children: _pages),
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            border: Border(
+                top: BorderSide(
+                    color: context.cs.onSurface.withValues(alpha: 0.08),
+                    width: 0.5)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: SizedBox(
+              height: 64,
+              child: Row(
+                children: [
+                  _tab(0, Icons.chat_bubble_outline, Icons.chat_bubble_rounded,
+                      t('home')),
+                  _tab(1, Icons.contacts_outlined, Icons.contacts_rounded,
+                      t('contacts')),
+                  _tab(2, Icons.explore_outlined, Icons.explore_rounded,
+                      t('discover')),
+                  _tab(3, Icons.person_outline, Icons.person_rounded, t('me')),
+                ],
+              ),
             ),
           ),
         ),
-      ),
       ),
     );
   }

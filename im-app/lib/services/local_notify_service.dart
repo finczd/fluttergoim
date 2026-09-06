@@ -21,18 +21,44 @@ class LocalNotifyService {
     if (_inited || kIsWeb) return;
     try {
       const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-      const ios = DarwinInitializationSettings();
+      // iOS：三个 request*Permission 全部置 false——不在启动时弹权限框，
+      // 统一由 requestPermission() 在登录后申请
+      const ios = DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      );
       await _plugin.initialize(const InitializationSettings(
         android: android,
         iOS: ios,
       ));
-      // Android 13+ 通知运行时权限（KeepAliveService 已统一申请过，这里兜底）
-      final impl = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-      await impl?.requestNotificationsPermission();
       _inited = true;
     } catch (e) {
       debugPrint('[LocalNotify] init failed: $e');
+    }
+  }
+
+  /// 通知运行时权限申请（2026-09-06 需求：不在打开 App 时弹，
+  /// 登录进 HomeShell 后由 KeepAliveService.start 之前/一并调用）。
+  /// 幂等：重复调用时系统对已授权状态直接返回，不会重复打扰。
+  Future<void> requestPermission() async {
+    if (!_inited) await init();
+    if (!_inited || kIsWeb) return;
+    try {
+      final impl = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      // Android 13+ POST_NOTIFICATIONS
+      await impl?.requestNotificationsPermission();
+      // iOS：alert/badge/sound
+      final iosImpl = _plugin.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+      await iosImpl?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    } catch (e) {
+      debugPrint('[LocalNotify] requestPermission failed: $e');
     }
   }
 

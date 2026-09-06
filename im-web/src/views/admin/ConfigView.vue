@@ -647,7 +647,7 @@ const sections = [
   { key: 'infra', title: '节点', icon: markRaw(IconSettings) }
 ]
 
-const cfg = ref({ registerOn: true, authMode: 'none' as string, inviteCodeOn: false, captchaOn: false, e2eOn: false })
+const cfg = ref({ registerOn: true, authMode: 'none' as string, inviteCodeOn: false, captchaOn: false, e2eOn: false, guestOn: false })
 // 功能开关（默认开启：后台未配置时 sys_config 返回 null，视为开启）
 const feature = ref({ walletOn: true, inviteOn: true })
 // 客服设置：kefu_config 为整体 JSON 键（{autoAdd, mode, greeting}），读取后解包渲染，保存时整体写回
@@ -735,15 +735,18 @@ async function savePayConfig() {
 }
 
 onMounted(async () => {
-  const flagKeys = ['register_enabled', 'auth_mode', 'invite_code_enabled', 'captcha_enabled', 'e2e_enabled']
-  const [r, a, i, ca, e] = await Promise.all(flagKeys.map((k) => adminApi.configGet(k)))
-  cfg.value = {
+  const flagKeys = ['register_enabled', 'auth_mode', 'invite_code_enabled', 'captcha_enabled', 'e2e_enabled', 'guest_register_enabled']
+  const [r, a, i, ca, e, g] = await Promise.all(flagKeys.map((k) => adminApi.configGet(k)))
+  // 就地合并而非整体替换：以后新增配置字段即使漏写字面量，也不会把已有字段覆盖成 undefined
+  Object.assign(cfg.value, {
     registerOn: !!r.data.data,
     authMode: String(a.data.data || 'none'),
     inviteCodeOn: !!i.data.data,
     captchaOn: !!ca.data.data,
-    e2eOn: !!e.data.data
-  }
+    e2eOn: !!e.data.data,
+    // 后端 SysConfigGet("guest_register_enabled", false)：未配置即视为关闭，与这里默认 false 一致
+    guestOn: !!g.data.data
+  })
   // 功能开关（null = 未配置 = 默认开启）
   const [w, iv] = await Promise.all(['wallet_enabled', 'invite_feature_enabled'].map((k) => adminApi.configGet(k)))
   feature.value = {
